@@ -1,0 +1,31 @@
+Test run for /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/bin/Debug/net10.0/OokiGrader.ProviderContract.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.10)
+[xUnit.net 00:00:00.04]   Discovering: OokiGrader.ProviderContract.Tests
+[xUnit.net 00:00:00.07]   Discovered:  OokiGrader.ProviderContract.Tests
+[xUnit.net 00:00:00.08]   Starting:    OokiGrader.ProviderContract.Tests
+[xUnit.net 00:01:44.84]     OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence [FAIL]
+[xUnit.net 00:01:44.84]       Assert.Equal() Failure: Values differ
+[xUnit.net 00:01:44.84]       Expected: 0
+[xUnit.net 00:01:44.84]       Actual:   300
+[xUnit.net 00:01:44.84]       Stack Trace:
+[xUnit.net 00:01:44.84]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs(302,0): at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ParsePredictions(JsonElement response, String requestKey, IReadOnlyList`1 questions)
+[xUnit.net 00:01:44.84]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs(136,0): at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.GradeAsync(GeminiDirectClient client, AiConnectionSettings connection, AiPromptBundle bundle, Byte[] credential, String thinkingLevel, String studentId, IReadOnlyList`1 questions, IReadOnlyList`1 pages, StudentTruth truth)
+[xUnit.net 00:01:44.84]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs(57,0): at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence()
+[xUnit.net 00:01:44.84]         --- End of stack trace from previous location ---
+[xUnit.net 00:01:44.86]   Finished:    OokiGrader.ProviderContract.Tests
+  Failed OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence [1 m 44 s]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 0
+Actual:   300
+  Stack Trace:
+     at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ParsePredictions(JsonElement response, String requestKey, IReadOnlyList`1 questions) in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs:line 302
+   at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.GradeAsync(GeminiDirectClient client, AiConnectionSettings connection, AiPromptBundle bundle, Byte[] credential, String thinkingLevel, String studentId, IReadOnlyList`1 questions, IReadOnlyList`1 pages, StudentTruth truth) in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs:line 136
+   at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence() in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs:line 57
+--- End of stack trace from previous location ---
+
+Test Run Failed.
+Total tests: 1
+     Failed: 1
+ Total time: 1.7538 Minutes

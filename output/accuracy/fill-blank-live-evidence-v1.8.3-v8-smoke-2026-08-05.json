@@ -1,0 +1,1353 @@
+{
+  "generatedAt": "2026-08-05T15:21:56.021556+00:00",
+  "input": {
+    "name": "codex-clipboard-01f23b28-0ef6-4a27-adb1-064dc8840451.png",
+    "sha256": "ff98af93d6b94156f48d6fcd931610e3ae7d0d731737aeeb44b05df0059d472f",
+    "bytes": 752106,
+    "uploadId": "01KZ988NEMEXCZT93EZPJ8KNZE"
+  },
+  "profile": {
+    "modelId": "gemini-3.5-flash-lite",
+    "promptVersion": "template-extract-v1.8.3",
+    "schemaVersion": "template_extract_v4",
+    "processingStrategy": "expedite_standard",
+    "thinkingLevel": "medium",
+    "mediaResolution": "high"
+  },
+  "expected": {
+    "questionCount": 11,
+    "labels": [
+      "①",
+      "②",
+      "③",
+      "④",
+      "③（2回目）",
+      "⑤",
+      "⑥",
+      "⑦",
+      "⑧",
+      "⑧（2回目）",
+      "⑧（3回目）"
+    ],
+    "modelAnswersExact": [
+      "光",
+      "太陽",
+      "光源",
+      "月",
+      "光源",
+      "かげ",
+      "直進",
+      "上下左右",
+      "反射",
+      "反射",
+      "反射"
+    ],
+    "nonModelCanonicalOptions": [
+      [
+        "光"
+      ],
+      [
+        "太陽"
+      ],
+      [
+        "光源"
+      ],
+      [
+        "月"
+      ],
+      [
+        "光源"
+      ],
+      [
+        "かげ",
+        "影"
+      ],
+      [
+        "直進"
+      ],
+      [
+        "上下左右"
+      ],
+      [
+        "反射"
+      ],
+      [
+        "反射"
+      ],
+      [
+        "反射"
+      ]
+    ],
+    "nonModelRequiredAcceptedForms": [
+      [
+        "光"
+      ],
+      [
+        "太陽"
+      ],
+      [
+        "光源"
+      ],
+      [
+        "月"
+      ],
+      [
+        "光源"
+      ],
+      [
+        "かげ",
+        "影"
+      ],
+      [
+        "直進"
+      ],
+      [
+        "上下左右"
+      ],
+      [
+        "反射"
+      ],
+      [
+        "反射"
+      ],
+      [
+        "反射"
+      ]
+    ]
+  },
+  "runs": [
+    {
+      "mode": "non_model",
+      "runNumber": 1,
+      "templateId": "01KZ988NHXSY5FKKCFXZAPNFE9",
+      "versionId": "01KZ988NKEGR91VAY38BD97R31",
+      "generation": {
+        "state": "completed",
+        "completedQuestions": 11,
+        "estimatedQuestions": 11,
+        "warnings": [],
+        "reviewIssues": [],
+        "inferredMetadata": {
+          "title": "第9回 光 まとめってみよう！",
+          "subject": "理科",
+          "category": "光",
+          "gradeLabel": "小学校",
+          "confidence": 0.95,
+          "warnings": []
+        },
+        "aiRequestId": "01KZ988PPTAZKQMW82EA5JVNX2",
+        "jobId": "01KZ988NQXJ1PHEKS1JVT41NTR"
+      },
+      "questionCount": 11,
+      "orders": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "labels": [
+        "①",
+        "②",
+        "③",
+        "④",
+        "③（2回目）",
+        "⑤",
+        "⑥",
+        "⑦",
+        "⑧",
+        "⑧（2回目）",
+        "⑧（3回目）"
+      ],
+      "answers": [
+        "光",
+        "太陽",
+        "光源",
+        "月",
+        "光源",
+        "かげ",
+        "直進",
+        "上下左右",
+        "反射",
+        "反射",
+        "反射"
+      ],
+      "acceptedAnswerSets": [
+        [
+          "光"
+        ],
+        [
+          "太陽"
+        ],
+        [
+          "光源"
+        ],
+        [
+          "月"
+        ],
+        [
+          "光源"
+        ],
+        [
+          "かげ",
+          "影"
+        ],
+        [
+          "直進"
+        ],
+        [
+          "上下左右"
+        ],
+        [
+          "反射"
+        ],
+        [
+          "反射"
+        ],
+        [
+          "反射"
+        ]
+      ],
+      "provenances": [
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed"
+      ],
+      "placeholderCounts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "bracketCounts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "nonblankBracketContent": [],
+      "visibleAnswerLeakage": [],
+      "headerExtractions": [],
+      "criticalOcrIssues": [
+        "⑧"
+      ],
+      "requiresReviewAlwaysCount": 0,
+      "blockingWarnings": [],
+      "reviewIssues": [],
+      "safetyHeldQuestionIds": [],
+      "bulkVerification": {
+        "revision": 5,
+        "verifiedQuestionCount": 11,
+        "verifiedAnswerCount": 12,
+        "skippedQuestionCount": 0,
+        "issues": [],
+        "questions": [
+          {
+            "id": "01KZ989RVETQY3XQ17351M5XEW",
+            "displayLabel": "①",
+            "order": 0,
+            "questionText": "私たちは、［　］がないと物を見る事ができない。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEQ6XF0SYRNZ4HRR7V",
+                "text": "光",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVESXNGQW02711XK07P",
+            "displayLabel": "②",
+            "order": 1,
+            "questionText": "自ら光を出している物には(図1)の［　］・電灯・テレビなどがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVE4F8275DEQ23MAFN2",
+                "text": "太陽",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "太陽",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVE9ZGAHM2NHV3HAH3V",
+            "displayLabel": "③",
+            "order": 2,
+            "questionText": "自ら光を出している物を［　］といい、ここから出た光を直接見ている。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEY80X2MZBT4Y4ZJJZ",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEP5CKVPHYRTPW76Q4",
+            "displayLabel": "④",
+            "order": 3,
+            "questionText": "また、自ら光を出さない物には、(図2)の［　］や、ノート・机などがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEGH4XS0Y4JNTM4F3A",
+                "text": "月",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "月",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEP25Q4545TG7F74HG",
+            "displayLabel": "③（2回目）",
+            "order": 4,
+            "questionText": "このような物は、［　］から出た光がはね返ることで見ることができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVE4YYTY03MAEZ7HXDT",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEKNA7H199S9FQ7QK9",
+            "displayLabel": "⑤",
+            "order": 5,
+            "questionText": "ように厚紙を置くと、スクリーンには同じ形の［　］ができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEF5YRTHA2KFYNF6QQ",
+                "text": "かげ",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              },
+              {
+                "id": "01KZ989RVEMQS1S21YQQYXFE1B",
+                "text": "影",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "かげ",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVE1K4AZ0D92SVEBNCY",
+            "displayLabel": "⑥",
+            "order": 6,
+            "questionText": "っすぐ進む性質があるからで、このことを光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEZNVW8BP5YW076RS9",
+                "text": "直進",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "直進",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEE4B23ZCQ2G44NDJK",
+            "displayLabel": "⑦",
+            "order": 7,
+            "questionText": "クリーンには実物と［　］が反対の像がうつる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEZKGS83ACQ3PK59BS",
+                "text": "上下左右",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "上下左右",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEEMMEZ1C8QZH0HN07",
+            "displayLabel": "⑧",
+            "order": 8,
+            "questionText": "光が鏡などによってはいね返る性質を光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVE74375533KHCWCCW8",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVE8WK18E1T5XFSCQC6",
+            "displayLabel": "⑧（2回目）",
+            "order": 9,
+            "questionText": "とき、鏡にあたる前の光を入射光線、［　］したあとの光を反射光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVEGR7YY373CXDP6V1C",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ989RVEMEZXCDGE0Y2JQ2CF",
+            "displayLabel": "⑧（3回目）",
+            "order": 10,
+            "questionText": "とき、鏡にあたる前の光を入射光線、反射したあとの光を［　］光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ989RVE6HFEJ14YA7XHX226",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          }
+        ]
+      },
+      "bulkConfirmationMismatches": [],
+      "postVerificationState": {
+        "state": "draft",
+        "contentHash": null,
+        "publishedAt": null
+      },
+      "checks": {
+        "generationCompleted": true,
+        "questionCount": true,
+        "questionOrder": true,
+        "printedLabels": true,
+        "answerCorrectness": true,
+        "onePlaceholderPerQuestion": true,
+        "filledAnswerLeakageAbsent": true,
+        "administrativeFieldsExcluded": true,
+        "criticalOcrIssueAbsent": false,
+        "answerProvenance": true,
+        "bulkCoverage": true,
+        "unsafeBulkConfirmationAbsent": true,
+        "draftRemainsUnpublished": true
+      },
+      "passed": false,
+      "questions": [
+        {
+          "label": "①",
+          "text": "私たちは、［　］がないと物を見る事ができない。",
+          "answer": "光",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "②",
+          "text": "自ら光を出している物には(図1)の［　］・電灯・テレビなどがある。",
+          "answer": "太陽",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "③",
+          "text": "自ら光を出している物を［　］といい、ここから出た光を直接見ている。",
+          "answer": "光源",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "④",
+          "text": "また、自ら光を出さない物には、(図2)の［　］や、ノート・机などがある。",
+          "answer": "月",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "③（2回目）",
+          "text": "このような物は、［　］から出た光がはね返ることで見ることができる。",
+          "answer": "光源",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑤",
+          "text": "ように厚紙を置くと、スクリーンには同じ形の［　］ができる。",
+          "answer": "かげ",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑥",
+          "text": "っすぐ進む性質があるからで、このことを光の［　］という。",
+          "answer": "直進",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑦",
+          "text": "クリーンには実物と［　］が反対の像がうつる。",
+          "answer": "上下左右",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧",
+          "text": "光が鏡などによってはいね返る性質を光の［　］という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧（2回目）",
+          "text": "とき、鏡にあたる前の光を入射光線、［　］したあとの光を反射光線という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧（3回目）",
+          "text": "とき、鏡にあたる前の光を入射光線、反射したあとの光を［　］光線という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": false
+        }
+      ],
+      "elapsedSeconds": 36.57
+    },
+    {
+      "mode": "model",
+      "runNumber": 1,
+      "templateId": "01KZ989S8FA8VSFMZX52THKPTW",
+      "versionId": "01KZ989S8S8JR7X7K2ZJSV7CN7",
+      "generation": {
+        "state": "completed",
+        "completedQuestions": 11,
+        "estimatedQuestions": 11,
+        "warnings": [],
+        "reviewIssues": [],
+        "inferredMetadata": {
+          "title": "第9回 光",
+          "subject": "理科",
+          "category": "光",
+          "gradeLabel": "小学4年",
+          "confidence": 0.95,
+          "warnings": []
+        },
+        "aiRequestId": "01KZ989SY9J735WJ1JRCX2WKH1",
+        "jobId": "01KZ989S96Q7MT7DRC7AS1A8YN"
+      },
+      "questionCount": 11,
+      "orders": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "labels": [
+        "①",
+        "②",
+        "③",
+        "④",
+        "③（2回目）",
+        "⑤",
+        "⑥",
+        "⑦",
+        "⑧",
+        "⑧（2回目）",
+        "⑧（3回目）"
+      ],
+      "answers": [
+        "光",
+        "太陽",
+        "光源",
+        "月",
+        "光源",
+        "かげ",
+        "直進",
+        "上下左右",
+        "反射",
+        "反射",
+        "反射"
+      ],
+      "acceptedAnswerSets": [
+        [
+          "光"
+        ],
+        [
+          "太陽"
+        ],
+        [
+          "光源"
+        ],
+        [
+          "月"
+        ],
+        [
+          "光源"
+        ],
+        [
+          "かげ"
+        ],
+        [
+          "直進"
+        ],
+        [
+          "上下左右"
+        ],
+        [
+          "反射"
+        ],
+        [
+          "反射"
+        ],
+        [
+          "反射"
+        ]
+      ],
+      "provenances": [
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer",
+        "provided_model_answer"
+      ],
+      "placeholderCounts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "bracketCounts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "nonblankBracketContent": [],
+      "visibleAnswerLeakage": [],
+      "headerExtractions": [],
+      "criticalOcrIssues": [],
+      "requiresReviewAlwaysCount": 0,
+      "blockingWarnings": [],
+      "reviewIssues": [],
+      "safetyHeldQuestionIds": [],
+      "bulkVerification": {
+        "revision": 5,
+        "verifiedQuestionCount": 11,
+        "verifiedAnswerCount": 11,
+        "skippedQuestionCount": 0,
+        "issues": [],
+        "questions": [
+          {
+            "id": "01KZ98B4639G4XDD8GKQNXHVVB",
+            "displayLabel": "①",
+            "order": 0,
+            "questionText": "私たちは，［　］がないと物を見ることができない。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463BEVX8WVV8EAK59TR",
+                "text": "光",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B4632PJ5ZV9XFD4YCYT9",
+            "displayLabel": "②",
+            "order": 1,
+            "questionText": "自ら光を出している物には（図１）の［　］・電灯・テレビなどがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463Z58A69KYK1XN7K85",
+                "text": "太陽",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "太陽",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B4632033EF2PWTPHXFVH",
+            "displayLabel": "③",
+            "order": 2,
+            "questionText": "自ら光を出している物を［　］といい，ここから出た光を直接見ている。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463NT3NMGWMJ4N1B54K",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B46386X72KEYF7WFYBEH",
+            "displayLabel": "④",
+            "order": 3,
+            "questionText": "また，自ら光を出さない物には，（図２）の［　］や，ノート・机などがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463WY9PQMY06JGXX14Z",
+                "text": "月",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "月",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B4639DN84QA43ZGWRZXS",
+            "displayLabel": "③（2回目）",
+            "order": 4,
+            "questionText": "このような物は，［　］から出た光がはね返ることで見ることができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B46320QTFNG8CFDWSHM0",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B463P8YEKZ9HFFCD2Z61",
+            "displayLabel": "⑤",
+            "order": 5,
+            "questionText": "このように厚紙を置くと，スクリーンには同じ形の［　］ができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B4633XDEMJHNY2713QE5",
+                "text": "かげ",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "かげ",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B463HFZYPZNWE1DYFVSR",
+            "displayLabel": "⑥",
+            "order": 6,
+            "questionText": "これは，光が同じ物の中ではまっすぐ進む性質があるからで，このことを光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463FDH0113XBC51EMQF",
+                "text": "直進",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "直進",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B4636SFPVQ7AAMYYF2FZ",
+            "displayLabel": "⑦",
+            "order": 7,
+            "questionText": "ピンホールカメラの穴の前にろうそくを置くと，スクリーンには実物と［　］が反対の像がうつる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463VQH64CSKMDAF05FY",
+                "text": "上下左右",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "上下左右",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B463DR0VPB19XHGGFXS3",
+            "displayLabel": "⑧",
+            "order": 8,
+            "questionText": "光が鏡などによってはね返される性質を光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463XXC40YCCP4161135",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B463R6TFBC2XQS2R1TFS",
+            "displayLabel": "⑧（2回目）",
+            "order": 9,
+            "questionText": "光を鏡にあてたとき，鏡にあたる前の光を入射光線，［　］したあとの光を反射光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463YP5B2DEG4RNSR004",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          },
+          {
+            "id": "01KZ98B463SN9MBD459R6NT2NS",
+            "displayLabel": "⑧（3回目）",
+            "order": 10,
+            "questionText": "光を鏡にあてたとき，鏡にあたる前の光を入射光線，反射したあとの光を［　］光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": false,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ98B463ZXBG0ZAZ8E55ETTR",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "provided_model_answer",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": true,
+                "sourceFileReferenceId": "01KZ988NG8GNCWTV6NX7P8MZCY",
+                "sourcePageNumber": 1,
+                "revision": 2
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] 模範解答の転記候補です。原資料との照合が必要です。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": false,
+            "answerProvenance": "provided_model_answer",
+            "proposalState": "edited",
+            "warnings": [],
+            "teacherVerified": true,
+            "revision": 2
+          }
+        ]
+      },
+      "bulkConfirmationMismatches": [],
+      "postVerificationState": {
+        "state": "draft",
+        "contentHash": null,
+        "publishedAt": null
+      },
+      "checks": {
+        "generationCompleted": true,
+        "questionCount": true,
+        "questionOrder": true,
+        "printedLabels": true,
+        "answerCorrectness": true,
+        "onePlaceholderPerQuestion": true,
+        "filledAnswerLeakageAbsent": true,
+        "administrativeFieldsExcluded": true,
+        "criticalOcrIssueAbsent": true,
+        "answerProvenance": true,
+        "bulkCoverage": true,
+        "unsafeBulkConfirmationAbsent": true,
+        "draftRemainsUnpublished": true
+      },
+      "passed": true,
+      "questions": [
+        {
+          "label": "①",
+          "text": "私たちは，［　］がないと物を見ることができない。",
+          "answer": "光",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "②",
+          "text": "自ら光を出している物には（図１）の［　］・電灯・テレビなどがある。",
+          "answer": "太陽",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "③",
+          "text": "自ら光を出している物を［　］といい，ここから出た光を直接見ている。",
+          "answer": "光源",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "④",
+          "text": "また，自ら光を出さない物には，（図２）の［　］や，ノート・机などがある。",
+          "answer": "月",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "③（2回目）",
+          "text": "このような物は，［　］から出た光がはね返ることで見ることができる。",
+          "answer": "光源",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑤",
+          "text": "このように厚紙を置くと，スクリーンには同じ形の［　］ができる。",
+          "answer": "かげ",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑥",
+          "text": "これは，光が同じ物の中ではまっすぐ進む性質があるからで，このことを光の［　］という。",
+          "answer": "直進",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑦",
+          "text": "ピンホールカメラの穴の前にろうそくを置くと，スクリーンには実物と［　］が反対の像がうつる。",
+          "answer": "上下左右",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧",
+          "text": "光が鏡などによってはね返される性質を光の［　］という。",
+          "answer": "反射",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧（2回目）",
+          "text": "光を鏡にあてたとき，鏡にあたる前の光を入射光線，［　］したあとの光を反射光線という。",
+          "answer": "反射",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        },
+        {
+          "label": "⑧（3回目）",
+          "text": "光を鏡にあてたとき，鏡にあたる前の光を入射光線，反射したあとの光を［　］光線という。",
+          "answer": "反射",
+          "provenance": "provided_model_answer",
+          "requiresReviewAlways": false
+        }
+      ],
+      "elapsedSeconds": 46.64
+    }
+  ],
+  "summary": {
+    "runCount": 2,
+    "passedRunCount": 1,
+    "allPassed": false
+  }
+}

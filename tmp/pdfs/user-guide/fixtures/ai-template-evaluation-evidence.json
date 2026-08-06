@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Synthetic evidence used only to demonstrate the administrator approval workflow in the Japanese user guide.",
+  "deploymentEvidence": false,
+  "dataset": "asia-check-test-blank.pdf",
+  "expectedQuestions": [
+    {
+      "label": "1",
+      "answer": "東京",
+      "points": 8
+    },
+    {
+      "label": "2",
+      "answer": "東南アジア諸国連合",
+      "points": 10
+    },
+    {
+      "label": "3",
+      "answer": "ヒンドゥー教",
+      "points": 8
+    },
+    {
+      "label": "4",
+      "answer": "イ",
+      "points": 8
+    },
+    {
+      "label": "5",
+      "answer": "工業化が進み、天然ゴム中心から機械類中心へ変化した。",
+      "points": 16
+    }
+  ],
+  "warning": "This single fictional sample does not establish production accuracy or satisfy a school golden-set release gate."
+}

@@ -1,0 +1,27 @@
+Test run for /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/bin/Debug/net10.0/OokiGrader.ProviderContract.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.10)
+[xUnit.net 00:00:00.04]   Discovering: OokiGrader.ProviderContract.Tests
+[xUnit.net 00:00:00.07]   Discovered:  OokiGrader.ProviderContract.Tests
+[xUnit.net 00:00:00.08]   Starting:    OokiGrader.ProviderContract.Tests
+[xUnit.net 00:00:03.12]     OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence [FAIL]
+[xUnit.net 00:00:03.12]       OokiGrader.Ai.Abstractions.AiProviderException : gemini_rate_limited
+[xUnit.net 00:00:03.12]       Stack Trace:
+[xUnit.net 00:00:03.12]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/src/OokiGrader.Ai.Gemini/GeminiDirectClient.cs(75,0): at OokiGrader.Ai.Gemini.GeminiDirectClient.GenerateAsync(AiConnectionSettings connection, ReadOnlyMemory`1 credentialUtf8, AiProviderRequest request, CancellationToken cancellationToken)
+[xUnit.net 00:00:03.12]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs(126,0): at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.GradeAsync(GeminiDirectClient client, AiConnectionSettings connection, AiPromptBundle bundle, Byte[] credential, String thinkingLevel, String studentId, IReadOnlyList`1 questions, IReadOnlyList`1 pages, StudentTruth truth)
+[xUnit.net 00:00:03.12]         /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs(57,0): at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence()
+[xUnit.net 00:00:03.12]         --- End of stack trace from previous location ---
+[xUnit.net 00:00:03.13]   Finished:    OokiGrader.ProviderContract.Tests
+  Failed OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence [3 s]
+  Error Message:
+   OokiGrader.Ai.Abstractions.AiProviderException : gemini_rate_limited
+  Stack Trace:
+     at OokiGrader.Ai.Gemini.GeminiDirectClient.GenerateAsync(AiConnectionSettings connection, ReadOnlyMemory`1 credentialUtf8, AiProviderRequest request, CancellationToken cancellationToken) in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/src/OokiGrader.Ai.Gemini/GeminiDirectClient.cs:line 75
+   at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.GradeAsync(GeminiDirectClient client, AiConnectionSettings connection, AiPromptBundle bundle, Byte[] credential, String thinkingLevel, String studentId, IReadOnlyList`1 questions, IReadOnlyList`1 pages, StudentTruth truth) in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs:line 126
+   at OokiGrader.ProviderContract.Tests.GeminiGradingAccuracyEvaluationTests.ExactModelProducesBasicGradingAccuracyEvidence() in /Users/takamimarsh/Developer/Projects/Toshizo/upgraded-ooki-grader/tests/OokiGrader.ProviderContract.Tests/GeminiGradingAccuracyEvaluationTests.cs:line 57
+--- End of stack trace from previous location ---
+
+Test Run Failed.
+Total tests: 1
+     Failed: 1
+ Total time: 3.4659 Seconds

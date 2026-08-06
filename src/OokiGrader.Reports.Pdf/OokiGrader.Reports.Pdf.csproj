@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/Fonts/NotoSansJP[wght].ttf"
+                      LogicalName="OokiGrader.Reports.Pdf.Assets.NotoSansJP.ttf" />
+    <EmbeddedResource Include="Assets/Fonts/OFL.txt"
+                      LogicalName="OokiGrader.Reports.Pdf.Assets.NotoSansJP.OFL.txt" />
+    <None Include="Assets/Fonts/OFL.txt"
+          Pack="true"
+          PackagePath="licenses/NotoSansJP-OFL.txt" />
+  </ItemGroup>
+
+</Project>

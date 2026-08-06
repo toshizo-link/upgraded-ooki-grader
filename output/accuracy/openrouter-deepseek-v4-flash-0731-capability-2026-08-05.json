@@ -1,0 +1,85 @@
+{
+  "schema": "ooki-openrouter-deepseek-capability/v1",
+  "createdAt": "2026-08-05T16:26:18.947571+00:00",
+  "requestedModel": "deepseek/deepseek-v4-flash-0731",
+  "modelMetadata": {
+    "found": true,
+    "id": "deepseek/deepseek-v4-flash-0731",
+    "canonicalSlug": "deepseek/deepseek-v4-flash-20260731",
+    "inputModalities": [
+      "text"
+    ],
+    "outputModalities": [
+      "text"
+    ],
+    "contextLength": 1048576,
+    "pricing": {
+      "prompt": "0.00000009",
+      "completion": "0.00000018",
+      "input_cache_read": "0.000000018"
+    },
+    "supportsResponseFormat": true,
+    "supportsStructuredOutputs": true
+  },
+  "privacyRouting": {
+    "dataCollection": "deny",
+    "zeroDataRetentionRequired": true,
+    "providerParameterSupportRequired": true
+  },
+  "sourceImage": {
+    "name": "codex-clipboard-01f23b28-0ef6-4a27-adb1-064dc8840451.png",
+    "bytes": 752106,
+    "sha256": "ff98af93d6b94156f48d6fcd931610e3ae7d0d731737aeeb44b05df0059d472f"
+  },
+  "textStructuredProbe": {
+    "status": 200,
+    "elapsedMs": 2297,
+    "requestId": "gen-1785947176-OJRhfn4C3Vy5HaaOG2BH",
+    "actualModel": "deepseek/deepseek-v4-flash-0731",
+    "provider": "SiliconFlow",
+    "finishReason": "stop",
+    "usage": {
+      "prompt_tokens": 21,
+      "completion_tokens": 41,
+      "total_tokens": 62,
+      "cost": 1.442e-05,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 1.442e-05,
+        "upstream_inference_prompt_cost": 2.94e-06,
+        "upstream_inference_completions_cost": 1.148e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 30,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "error": null,
+    "schemaPassed": true
+  },
+  "actualImageProbe": {
+    "status": 404,
+    "elapsedMs": 799,
+    "requestId": null,
+    "actualModel": null,
+    "provider": null,
+    "finishReason": null,
+    "usage": null,
+    "error": {
+      "message": "No endpoints found that support image input",
+      "code": 404
+    },
+    "answers": null,
+    "exactAnswerCount": 0,
+    "allAnswersExact": false
+  },
+  "eligibleForCurrentOokiVisualWorkflow": false,
+  "secretPersisted": false
+}

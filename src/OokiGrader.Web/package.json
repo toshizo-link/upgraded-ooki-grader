@@ -1,0 +1,37 @@
+{
+  "name": "ooki-grader-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "api:document": "cross-env ASPNETCORE_ENVIRONMENT=Development Data__Root=obj/openapi-runtime Data__ObjectStore=obj/openapi-runtime/objects Data__Incoming=obj/openapi-runtime/incoming Data__Reports=obj/openapi-runtime/reports dotnet build ../OokiGrader.Host/OokiGrader.Host.csproj --no-restore --disable-build-servers -m:1 /nodeReuse:false -p:OpenApiGenerateDocumentsOnBuild=true",
+    "preapi:generate": "npm run api:document",
+    "api:generate": "npm --prefix ../../tools/openapi-client run generate",
+    "preapi:check": "npm run api:document",
+    "api:check": "npm --prefix ../../tools/openapi-client run check",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "check": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "cross-env": "10.1.0",
+    "jsdom": "29.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

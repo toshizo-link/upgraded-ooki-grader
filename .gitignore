@@ -1,0 +1,41 @@
+# Build output
+**/bin/
+**/obj/
+**/TestResults/
+**/coverage/
+
+# Frontend
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+
+# Local runtime data
+.data/
+/data/
+/logs/
+/backups/
+/uploads/
+*.db
+*.db-shm
+*.db-wal
+
+# Developer tools and local settings
+.dotnet/
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+.playwright-cli/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Downloaded, privacy-reviewed external smoke-test fixtures
+tmp/handwritten-exam-fixtures/*.pdf
+tmp/handwritten-exam-fixtures/*.png
+tmp/handwritten-exam-fixtures/*.txt
+tmp/handwritten-exam-fixtures/*.csv
+tmp/japanese-handwriting-fixtures/*.jpg
+tmp/japanese-handwriting-fixtures/*.json

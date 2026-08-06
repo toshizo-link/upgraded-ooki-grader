@@ -1,0 +1,1120 @@
+﻿{
+  "SchemaVersion": 2,
+  "EvidenceClass": "basic-exploratory",
+  "EvaluatedAt": "2026-08-05T08:59:34.310343+00:00",
+  "RequestedModel": "gemini-3.5-flash",
+  "ThinkingLevel": "MEDIUM",
+  "PromptVersion": "answer-transcribe-grade-v1.1.0",
+  "ResponseSchemaVersion": "answer_transcribe_grade_v1",
+  "PromptContentHash": "9c2ae3112d824c1419ad82ee7e9b3fcc32176a787d1a12008ad716b78f27c24a",
+  "Pipeline": "gemini-initial-grading-full-page-v3-model-comparison-direct-run",
+  "DatasetDescription": "English teacher-scored real handwriting plus one synthetic Japanese canonical-answer sheet",
+  "SourceSha256": {
+    "tmp/handwritten-exam-fixtures/Question.txt": "82ced5174d53505d9bfea65abeea7aabd40fcf4b872f5aa4dc179e2d845402d3",
+    "tmp/handwritten-exam-fixtures/answerkey.txt": "1d1dea2022715b97928ec245a1157d6df3f9f895514f4542e05e1fd03045b2ef",
+    "tmp/handwritten-exam-fixtures/Teacher_manual_marks_Anonymized.csv": "51e194a98970dddf738dd81bdbc51e2d7dea5637666ee1ff7402e7165154b017"
+  },
+  "EvaluationMediaSha256": {
+    "output/accuracy/eval-media/Student_18-page-1.png": "0ce7c9194ee947d9dde54c2ae3d049d4c0fc89274ab411c7a4c4894b5bfa6db5",
+    "output/accuracy/eval-media/Student_18-page-2.png": "b01051ba06b4c08df20e43d14a053788469ac7d0bf8bc6ea72a78cff1098c7cb",
+    "output/accuracy/eval-media/Student_19-page-1.png": "a57d9ed5e235f734f8f474997cdaaad22061d2d2a9b4a0e280d80236f89f1438",
+    "output/accuracy/eval-media/Student_19-page-2.png": "52ad3f438b70233e48c64a3818361d61e1b7838180acd6618a667ab16b40201f",
+    "output/accuracy/eval-media/Student_19-page-3.png": "f5fb637a0f7ba2cd525adfc5b56539a1d4b3d734efb1b59bb2a01ba1f5f2327f",
+    "output/accuracy/eval-media/Student_19-page-4.png": "f8b96ddd8aa837dddc1840450024c9445055fad734dd7bd40ba9e628e4a0984e",
+    "output/accuracy/eval-media/Student_26-page-1.png": "d03c67994821e346cdddc85545e006a0af24b99b76df9a56f5eae6748819d898",
+    "output/accuracy/eval-media/Student_26-page-2.png": "6cda1b63a8e50c6863016068cce8efbfd97884f5d85d94d42700cf8906064765"
+  },
+  "RealHandwrittenRuns": [
+    {
+      "StudentId": "Student_18",
+      "ActualModel": "gemini-3.5-flash",
+      "LatencyMilliseconds": 36212.9317,
+      "Usage": {
+        "PromptTokens": 7546,
+        "CachedTokens": null,
+        "OutputTokens": 1273,
+        "ThinkingTokens": 5340,
+        "TotalTokens": 14159
+      },
+      "MediaSha256": [
+        "0ce7c9194ee947d9dde54c2ae3d049d4c0fc89274ab411c7a4c4894b5bfa6db5",
+        "b01051ba06b4c08df20e43d14a053788469ac7d0bf8bc6ea72a78cff1098c7cb"
+      ],
+      "Predictions": [
+        {
+          "QuestionId": "q1",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q2",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q3",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q4",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q5",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q6",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q7",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q8",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q9",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q10",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q11",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q12",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q13",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q14",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q15",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q16",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q17",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q18",
+          "Transcription": "",
+          "Legibility": "clear",
+          "Blank": true,
+          "ProposedOutcome": "blank",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.99
+        },
+        {
+          "QuestionId": "q19",
+          "Transcription": "",
+          "Legibility": "clear",
+          "Blank": true,
+          "ProposedOutcome": "blank",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.99
+        },
+        {
+          "QuestionId": "q20",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q21",
+          "Transcription": "Supervised learning is the modern language of algorithm model that already know ouput \u0026 input but, giving to input to machine and give predict the output and keep going until get high level of the ouput.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "partial",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q23",
+          "Transcription": "Begression analysis is the process of machine learning that are trying to understand, learning, analyzing the relastion-ship of data.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "partial",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q27",
+          "Transcription": "We can use outlier detection.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "partial",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q29",
+          "Transcription": "Data normalization is require in k-NN becasus it is procces of preparat. in which help organize the difficult to underston data into normal scale.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "partial",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        }
+      ],
+      "SystemValidationErrorCode": null,
+      "Truth": {
+        "StudentId": "Student_18",
+        "Responses": {
+          "1": "D",
+          "2": "D",
+          "3": "B",
+          "4": "D",
+          "5": "B",
+          "6": "B",
+          "7": "A",
+          "8": "A",
+          "9": "A",
+          "10": "B",
+          "11": "B",
+          "12": "C",
+          "13": "B",
+          "14": "C",
+          "15": "A",
+          "16": "C",
+          "17": "A",
+          "18": "-",
+          "19": "-",
+          "20": "C",
+          "21": "2",
+          "22": "",
+          "23": "2.0",
+          "24": "",
+          "25": "",
+          "26": "",
+          "27": "0.0",
+          "28": "",
+          "29": "1.0",
+          "30": "",
+          "31": "",
+          "32": "",
+          "33": "",
+          "34": "",
+          "35": ""
+        },
+        "Points": {
+          "1": 0,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 1,
+          "6": 0,
+          "7": 1,
+          "8": 0,
+          "9": 1,
+          "10": 1,
+          "11": 1,
+          "12": 1,
+          "13": 1,
+          "14": 1,
+          "15": 0,
+          "16": 1,
+          "17": 0,
+          "18": 0,
+          "19": 0,
+          "20": 0,
+          "21": 2,
+          "22": 0,
+          "23": 2,
+          "24": 0,
+          "25": 0,
+          "26": 0,
+          "27": 0,
+          "28": 0,
+          "29": 1,
+          "30": 0,
+          "31": 0,
+          "32": 0,
+          "33": 0,
+          "34": 0,
+          "35": 0
+        }
+      }
+    },
+    {
+      "StudentId": "Student_19",
+      "ActualModel": "gemini-3.5-flash",
+      "LatencyMilliseconds": 62652.7577,
+      "Usage": {
+        "PromptTokens": 9784,
+        "CachedTokens": null,
+        "OutputTokens": 1992,
+        "ThinkingTokens": 3426,
+        "TotalTokens": 15202
+      },
+      "MediaSha256": [
+        "a57d9ed5e235f734f8f474997cdaaad22061d2d2a9b4a0e280d80236f89f1438",
+        "52ad3f438b70233e48c64a3818361d61e1b7838180acd6618a667ab16b40201f",
+        "f5fb637a0f7ba2cd525adfc5b56539a1d4b3d734efb1b59bb2a01ba1f5f2327f",
+        "f8b96ddd8aa837dddc1840450024c9445055fad734dd7bd40ba9e628e4a0984e"
+      ],
+      "Predictions": [
+        {
+          "QuestionId": "q1",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.95
+        },
+        {
+          "QuestionId": "q2",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q3",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q4",
+          "Transcription": "A.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q5",
+          "Transcription": "A.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q6",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q7",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q8",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q9",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q10",
+          "Transcription": "B.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q11",
+          "Transcription": "B.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q12",
+          "Transcription": "C.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q13",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q14",
+          "Transcription": "C.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q15",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q16",
+          "Transcription": "C.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q17",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q18",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q19",
+          "Transcription": "",
+          "Legibility": "clear",
+          "Blank": true,
+          "ProposedOutcome": "blank",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q20",
+          "Transcription": "",
+          "Legibility": "clear",
+          "Blank": true,
+          "ProposedOutcome": "blank",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.98
+        },
+        {
+          "QuestionId": "q24",
+          "Transcription": "1. challenges of Machinee Learning is hard to used python code and numpy array.\n2. Gatt challenge of Machinee Learning is difficault to undersand all the algorithm. and some agorithm of the algorithm are two Similer.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q25",
+          "Transcription": "- Chat board : Auto reply AI.\n- Food recomend.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 2000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q29",
+          "Transcription": "Because in K-NN Data cannot normalize by itseft Like k-mean.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.9
+        }
+      ],
+      "SystemValidationErrorCode": "ai_response_deterministic_contradiction",
+      "Truth": {
+        "StudentId": "Student_19",
+        "Responses": {
+          "1": "D",
+          "2": "C",
+          "3": "A",
+          "4": "A",
+          "5": "A",
+          "6": "D",
+          "7": "A",
+          "8": "D",
+          "9": "D",
+          "10": "B",
+          "11": "B",
+          "12": "C",
+          "13": "B",
+          "14": "C",
+          "15": "B",
+          "16": "C",
+          "17": "A",
+          "18": "A",
+          "19": "-",
+          "20": "-",
+          "21": "",
+          "22": "",
+          "23": "",
+          "24": "0.0",
+          "25": "2.0",
+          "26": "",
+          "27": "",
+          "28": "",
+          "29": "1.0",
+          "30": "",
+          "31": "",
+          "32": "",
+          "33": "",
+          "34": "",
+          "35": ""
+        },
+        "Points": {
+          "1": 0,
+          "2": 1,
+          "3": 1,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 1,
+          "8": 0,
+          "9": 0,
+          "10": 1,
+          "11": 1,
+          "12": 1,
+          "13": 1,
+          "14": 1,
+          "15": 1,
+          "16": 1,
+          "17": 0,
+          "18": 0,
+          "19": 0,
+          "20": 0,
+          "21": 0,
+          "22": 0,
+          "23": 0,
+          "24": 0,
+          "25": 2,
+          "26": 0,
+          "27": 0,
+          "28": 0,
+          "29": 1,
+          "30": 0,
+          "31": 0,
+          "32": 0,
+          "33": 0,
+          "34": 0,
+          "35": 0
+        }
+      }
+    },
+    {
+      "StudentId": "Student_26",
+      "ActualModel": "gemini-3.5-flash",
+      "LatencyMilliseconds": 29610.9467,
+      "Usage": {
+        "PromptTokens": 7546,
+        "CachedTokens": null,
+        "OutputTokens": 1520,
+        "ThinkingTokens": 4264,
+        "TotalTokens": 13330
+      },
+      "MediaSha256": [
+        "d03c67994821e346cdddc85545e006a0af24b99b76df9a56f5eae6748819d898",
+        "6cda1b63a8e50c6863016068cce8efbfd97884f5d85d94d42700cf8906064765"
+      ],
+      "Predictions": [
+        {
+          "QuestionId": "q1",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q2",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q3",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q4",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q5",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q6",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q7",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q8",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q9",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q10",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q11",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q12",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q13",
+          "Transcription": "D",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q14",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q15",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q16",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q17",
+          "Transcription": "A",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q18",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q19",
+          "Transcription": "B",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q20",
+          "Transcription": "C",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 1
+        },
+        {
+          "QuestionId": "q21",
+          "Transcription": "Supervised learning is when a given model data are labeled.\nIt\u0027s being used to improve the accuracy of the ML based on the existing input. EX: Image , Text.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 2000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q24",
+          "Transcription": "challenges of ML: Data Collection and training the model.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 2000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q25",
+          "Transcription": "Two major applications of Data Science\n- Weather forecasting : by analysing the previous weather data we can predict and prepare for the up comming weather.\n- Stock price prediction : by learning about the stock price patter over frame we can predict the stock price in the future and grow into the market on the right time.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 2000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q26",
+          "Transcription": "Structured Data\n- all the data is labeled\n- all data have its corresponding data type\n- ready to used as ML model\nSemi structured Data\n- all the data is not categorized yet\n- still have null or missing value\n- not effecnt for training yet.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "review",
+          "ProposedPointsMilli": 1000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q27",
+          "Transcription": "Outlier detection is the process of separating odd thedata in order to improve the accuracy of model and decrease the unnessary scale of data.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q28",
+          "Transcription": "Data pre processing is the process of getting rid of unusable data such null valere , cleansing and normalizing the data in other to make the model much more efficient of for training.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "correct",
+          "ProposedPointsMilli": 2000,
+          "Confidence": 0.9
+        },
+        {
+          "QuestionId": "q31",
+          "Transcription": "k in k-means represent the number of data point.",
+          "Legibility": "clear",
+          "Blank": false,
+          "ProposedOutcome": "incorrect",
+          "ProposedPointsMilli": 0,
+          "Confidence": 0.9
+        }
+      ],
+      "SystemValidationErrorCode": null,
+      "Truth": {
+        "StudentId": "Student_26",
+        "Responses": {
+          "1": "D",
+          "2": "A",
+          "3": "A",
+          "4": "A",
+          "5": "A",
+          "6": "B",
+          "7": "B",
+          "8": "C",
+          "9": "C",
+          "10": "C",
+          "11": "B",
+          "12": "C",
+          "13": "B",
+          "14": "C",
+          "15": "B",
+          "16": "C",
+          "17": "A",
+          "18": "C",
+          "19": "B",
+          "20": "C",
+          "21": "2",
+          "22": "",
+          "23": "",
+          "24": "1.0",
+          "25": "2.0",
+          "26": "1.0",
+          "27": "2.0",
+          "28": "2.0",
+          "29": "",
+          "30": "",
+          "31": "1.0",
+          "32": "",
+          "33": "",
+          "34": "",
+          "35": ""
+        },
+        "Points": {
+          "1": 0,
+          "2": 0,
+          "3": 1,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0,
+          "8": 1,
+          "9": 0,
+          "10": 0,
+          "11": 1,
+          "12": 1,
+          "13": 1,
+          "14": 1,
+          "15": 1,
+          "16": 1,
+          "17": 0,
+          "18": 1,
+          "19": 1,
+          "20": 0,
+          "21": 2,
+          "22": 0,
+          "23": 0,
+          "24": 1,
+          "25": 2,
+          "26": 1,
+          "27": 2,
+          "28": 2,
+          "29": 0,
+          "30": 0,
+          "31": 1,
+          "32": 0,
+          "33": 0,
+          "34": 0,
+          "35": 0
+        }
+      }
+    }
+  ],
+  "JapaneseSyntheticRun": {
+    "StudentId": "JapaneseSyntheticHanako",
+    "ActualModel": "gemini-3.5-flash",
+    "LatencyMilliseconds": 7981.298,
+    "Usage": {
+      "PromptTokens": 3168,
+      "CachedTokens": null,
+      "OutputTokens": 299,
+      "ThinkingTokens": 1044,
+      "TotalTokens": 4511
+    },
+    "MediaSha256": [
+      "d3b37e38657a6744a8a73b0dd7d2ab3731220ea19371322854f95b6626c5252d"
+    ],
+    "Predictions": [
+      {
+        "QuestionId": "q1",
+        "Transcription": "\u6771\u4EAC",
+        "Legibility": "clear",
+        "Blank": false,
+        "ProposedOutcome": "correct",
+        "ProposedPointsMilli": 8000,
+        "Confidence": 1
+      },
+      {
+        "QuestionId": "q2",
+        "Transcription": "\u6771\u5357\u30A2\u30B8\u30A2\u8AF8\u56FD\u9023\u5408",
+        "Legibility": "clear",
+        "Blank": false,
+        "ProposedOutcome": "correct",
+        "ProposedPointsMilli": 10000,
+        "Confidence": 1
+      },
+      {
+        "QuestionId": "q3",
+        "Transcription": "\u30D2\u30F3\u30C9\u30A5\u30FC\u6559",
+        "Legibility": "clear",
+        "Blank": false,
+        "ProposedOutcome": "correct",
+        "ProposedPointsMilli": 8000,
+        "Confidence": 1
+      },
+      {
+        "QuestionId": "q4",
+        "Transcription": "\u30A4",
+        "Legibility": "clear",
+        "Blank": false,
+        "ProposedOutcome": "correct",
+        "ProposedPointsMilli": 8000,
+        "Confidence": 1
+      },
+      {
+        "QuestionId": "q5",
+        "Transcription": "\u5DE5\u696D\u5316\u304C\u9032\u307F\u3001\u5929\u7136\u30B4\u30E0\u4E2D\u5FC3\u304B\u3089\u6A5F\u68B0\u985E\u4E2D\u5FC3\u3078\u5909\u5316\u3057\u305F\u3002",
+        "Legibility": "clear",
+        "Blank": false,
+        "ProposedOutcome": "correct",
+        "ProposedPointsMilli": 16000,
+        "Confidence": 0.95
+      }
+    ],
+    "SystemValidationErrorCode": null,
+    "Truth": {
+      "StudentId": "JapaneseSyntheticHanako",
+      "Responses": {
+        "1": "\u6771\u4EAC",
+        "2": "\u6771\u5357\u30A2\u30B8\u30A2\u8AF8\u56FD\u9023\u5408",
+        "3": "\u30D2\u30F3\u30C9\u30A5\u30FC\u6559",
+        "4": "\u30A4",
+        "5": "\u5DE5\u696D\u5316\u304C\u9032\u307F\u3001\u5929\u7136\u30B4\u30E0\u4E2D\u5FC3\u304B\u3089\u6A5F\u68B0\u985E\u4E2D\u5FC3\u3078\u5909\u5316\u3057\u305F\u3002"
+      },
+      "Points": {
+        "1": 8,
+        "2": 10,
+        "3": 8,
+        "4": 8,
+        "5": 16
+      }
+    }
+  },
+  "Metrics": {
+    "RealItemSlots": 105,
+    "RealItemsReturned": 74,
+    "ResultCoverage": 0.7047619047619048,
+    "RealRuns": 3,
+    "SystemAcceptedRuns": 2,
+    "SystemAcceptedItems": 51,
+    "SystemUsableCoverage": 0.4857142857142857,
+    "AttemptedChoices": 56,
+    "ExactChoiceTranscriptions": 45,
+    "ExactChoiceTranscriptionRate": 0.8035714285714286,
+    "ExactChoiceTranscriptionWilson95": {
+      "Lower": 0.681553923735416,
+      "Upper": 0.8866140432567635
+    },
+    "ChoiceScoreAgreement": 53,
+    "ChoiceScoreAgreementRate": 0.9464285714285714,
+    "ChoiceScoreAgreementWilson95": {
+      "Lower": 0.8539269093117847,
+      "Upper": 0.9816142186178909
+    },
+    "ChoiceTruePositive": 28,
+    "ChoiceTrueNegative": 25,
+    "ChoiceFalsePositive": 2,
+    "ChoiceFalseNegative": 1,
+    "ChoiceAutoCreditPrecision": 0.9333333333333333,
+    "ChoiceIncorrectCreditFalsePositiveRate": 0.07407407407407407,
+    "ChoiceUnderCreditFalseNegativeRate": 0.034482758620689655,
+    "ExplicitShortAnswerScores": 14,
+    "ExactShortAnswerScoreAgreement": 7,
+    "ExactShortAnswerScoreAgreementRate": 0.5,
+    "ExactShortAnswerScoreAgreementWilson95": {
+      "Lower": 0.26799202452413634,
+      "Upper": 0.7320079754758637
+    },
+    "ShortAnswerMeanAbsoluteErrorPoints": 0.5714285714285714,
+    "ShortAnswerOverCreditCount": 2,
+    "ShortAnswerUnderCreditCount": 5,
+    "BlankShortAnswers": 31,
+    "CorrectBlankShortAnswers": 0,
+    "BlankShortAnswerAccuracy": 0,
+    "JapaneseSyntheticItems": 5,
+    "JapaneseSyntheticExactTranscriptions": 5,
+    "JapaneseSyntheticExactTranscriptionRate": 1,
+    "JapaneseSyntheticScoreAgreement": 5,
+    "JapaneseSyntheticScoreAgreementRate": 1
+  },
+  "Limitations": [
+    "This is a small exploratory sample and is not production approval evidence.",
+    "The scored real-paper corpus is English university material, not Japanese cram-school material.",
+    "Only 14 nonblank short answers have explicit teacher item scores.",
+    "The source CSV MCQ totals conflict with answer-key-derived totals for Student_18 and Student_19, so MCQ aggregate totals are excluded.",
+    "The Japanese sheet uses a handwriting-style font rather than genuine student handwriting.",
+    "All semantic short-answer proposals remain teacher-review-only in Ooki Grader."
+  ]
+}

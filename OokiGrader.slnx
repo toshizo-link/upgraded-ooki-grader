@@ -1,0 +1,25 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OokiGrader.Ai.Abstractions/OokiGrader.Ai.Abstractions.csproj" />
+    <Project Path="src/OokiGrader.Ai.Gemini/OokiGrader.Ai.Gemini.csproj" />
+    <Project Path="src/OokiGrader.Ai.OpenRouter/OokiGrader.Ai.OpenRouter.csproj" />
+    <Project Path="src/OokiGrader.Application/OokiGrader.Application.csproj" />
+    <Project Path="src/OokiGrader.Contracts/OokiGrader.Contracts.csproj" />
+    <Project Path="src/OokiGrader.Domain/OokiGrader.Domain.csproj" />
+    <Project Path="src/OokiGrader.Host/OokiGrader.Host.csproj" />
+    <Project Path="src/OokiGrader.Infrastructure/OokiGrader.Infrastructure.csproj" />
+    <Project Path="src/OokiGrader.Preprocessing/OokiGrader.Preprocessing.csproj" />
+    <Project Path="src/OokiGrader.Reports.Pdf/OokiGrader.Reports.Pdf.csproj" />
+    <Project Path="src/OokiGrader.Tool/OokiGrader.Tool.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OokiGrader.Application.Tests/OokiGrader.Application.Tests.csproj" />
+    <Project Path="tests/OokiGrader.Domain.Tests/OokiGrader.Domain.Tests.csproj" />
+    <Project Path="tests/OokiGrader.Infrastructure.Tests/OokiGrader.Infrastructure.Tests.csproj" />
+    <Project Path="tests/OokiGrader.IntegrationTests/OokiGrader.IntegrationTests.csproj" />
+    <Project Path="tests/OokiGrader.ProviderContract.Tests/OokiGrader.ProviderContract.Tests.csproj" />
+    <Project Path="tests/OokiGrader.Preprocessing.Tests/OokiGrader.Preprocessing.Tests.csproj" />
+    <Project Path="tests/OokiGrader.Reports.Pdf.Tests/OokiGrader.Reports.Pdf.Tests.csproj" />
+    <Project Path="tests/OokiGrader.Tool.Tests/OokiGrader.Tool.Tests.csproj" />
+  </Folder>
+</Solution>

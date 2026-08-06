@@ -1,0 +1,1126 @@
+{
+  "generatedAt": "2026-08-05T14:09:04.232557+00:00",
+  "input": {
+    "name": "codex-clipboard-01f23b28-0ef6-4a27-adb1-064dc8840451.png",
+    "sha256": "ff98af93d6b94156f48d6fcd931610e3ae7d0d731737aeeb44b05df0059d472f",
+    "bytes": 752106,
+    "uploadId": "01KZ94384G9MWXFNE1TT0MF76Y"
+  },
+  "profile": {
+    "modelId": "gemini-3.5-flash-lite",
+    "promptVersion": "template-extract-v1.8.0",
+    "schemaVersion": "template_extract_v4",
+    "processingStrategy": "expedite_standard"
+  },
+  "expected": {
+    "questionCount": 11,
+    "labels": [
+      "①",
+      "②",
+      "③",
+      "④",
+      "③（2回目）",
+      "⑤",
+      "⑥",
+      "⑦",
+      "⑧",
+      "⑧（2回目）",
+      "⑧（3回目）"
+    ],
+    "answers": [
+      "光",
+      "太陽",
+      "光源",
+      "月",
+      "光源",
+      "かげ",
+      "直進",
+      "上下左右",
+      "反射",
+      "反射",
+      "反射"
+    ]
+  },
+  "runs": [
+    {
+      "mode": "non_model",
+      "runNumber": 1,
+      "templateId": "01KZ94387J3P8WEE3CKV4V6WTA",
+      "versionId": "01KZ94388A4Z9C327KEF8V0WV0",
+      "generation": {
+        "state": "completed",
+        "completedQuestions": 11,
+        "estimatedQuestions": 11,
+        "warnings": [
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "⑧の問題文にある対象空欄を1個に分離できませんでした。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。"
+        ],
+        "reviewIssues": [
+          {
+            "code": "template.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q203V8CVNZPVP8CH6",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q36F14JV1MN4GN11P",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q96W3MVVXP75TMSWE",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QC1BQ5MT2HT4W544E",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QC98JT3W6MR139QPH",
+            "blocking": true
+          },
+          {
+            "code": "question.fill_blank_placeholder_invalid",
+            "message": "⑧の問題文にある対象空欄を1個に分離できませんでした。",
+            "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+            "blocking": false
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QKDNC26J0X36XMKBQ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QSCPQT1W68B89D0EZ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QZ840YGSYK63BZRVT",
+            "blocking": true
+          }
+        ],
+        "inferredMetadata": {
+          "title": "まとめてみよう！ 光",
+          "subject": "理科",
+          "category": "光",
+          "gradeLabel": "小学4年生",
+          "confidence": 0.9,
+          "warnings": []
+        },
+        "aiRequestId": "01KZ94396H1220NCF8MJW153FT",
+        "jobId": "01KZ9438PP7YNGKRCHB5GSM6W0"
+      },
+      "questionCount": 11,
+      "labels": [
+        "①",
+        "②",
+        "③",
+        "④",
+        "③（2回目）",
+        "⑤",
+        "⑥",
+        "⑦",
+        "⑧",
+        "⑧（2回目）",
+        "⑧（3回目）"
+      ],
+      "answers": [
+        "光",
+        "太陽",
+        "光源",
+        "月",
+        "光源",
+        "かげ",
+        "直進",
+        "上下左右",
+        "反射",
+        "反射",
+        "反射"
+      ],
+      "provenances": [
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed",
+        "ai_proposed"
+      ],
+      "placeholderCounts": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1
+      ],
+      "nonblankBracketContent": [],
+      "headerExtractions": [],
+      "criticalOcrIssues": [],
+      "requiresReviewAlwaysCount": 11,
+      "blockingWarnings": [
+        "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。"
+      ],
+      "reviewIssues": [
+        {
+          "code": "template.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1Q203V8CVNZPVP8CH6",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1Q36F14JV1MN4GN11P",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1Q96W3MVVXP75TMSWE",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QC1BQ5MT2HT4W544E",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QC98JT3W6MR139QPH",
+          "blocking": true
+        },
+        {
+          "code": "question.fill_blank_placeholder_invalid",
+          "message": "⑧の問題文にある対象空欄を1個に分離できませんでした。",
+          "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+          "blocking": false
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QKDNC26J0X36XMKBQ",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QSCPQT1W68B89D0EZ",
+          "blocking": true
+        },
+        {
+          "code": "question.answer_slot_inventory_mismatch",
+          "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+          "questionId": "01KZ943N1QZ840YGSYK63BZRVT",
+          "blocking": true
+        }
+      ],
+      "bulkVerification": {
+        "revision": 4,
+        "verifiedQuestionCount": 0,
+        "verifiedAnswerCount": 0,
+        "skippedQuestionCount": 11,
+        "issues": [
+          {
+            "code": "template.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q203V8CVNZPVP8CH6",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q36F14JV1MN4GN11P",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1Q96W3MVVXP75TMSWE",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QC1BQ5MT2HT4W544E",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QC98JT3W6MR139QPH",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QKDNC26J0X36XMKBQ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QSCPQT1W68B89D0EZ",
+            "blocking": true
+          },
+          {
+            "code": "question.answer_slot_inventory_mismatch",
+            "message": "ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。",
+            "questionId": "01KZ943N1QZ840YGSYK63BZRVT",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "①は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1Q96W3MVVXP75TMSWE",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "①にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1Q96W3MVVXP75TMSWE",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "②は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QKDNC26J0X36XMKBQ",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "②にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QKDNC26J0X36XMKBQ",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "③は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1Q36F14JV1MN4GN11P",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "③にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1Q36F14JV1MN4GN11P",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "④は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QZ840YGSYK63BZRVT",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "④にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QZ840YGSYK63BZRVT",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "③（2回目）は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "③（2回目）にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑤は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑤にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑥は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1Q203V8CVNZPVP8CH6",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑥にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1Q203V8CVNZPVP8CH6",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑦は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QC98JT3W6MR139QPH",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑦にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QC98JT3W6MR139QPH",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑧は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QSCPQT1W68B89D0EZ",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑧にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QSCPQT1W68B89D0EZ",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑧（2回目）は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑧（2回目）にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QEJE40FB6FCG073ZR",
+            "blocking": true
+          },
+          {
+            "code": "question.review_always",
+            "message": "⑧（3回目）は先生による個別確認が必要です。",
+            "questionId": "01KZ943N1QC1BQ5MT2HT4W544E",
+            "blocking": true
+          },
+          {
+            "code": "question.ai_warning",
+            "message": "⑧（3回目）にAIの警告または解答の競合があります。",
+            "questionId": "01KZ943N1QC1BQ5MT2HT4W544E",
+            "blocking": true
+          }
+        ],
+        "questions": [
+          {
+            "id": "01KZ943N1Q96W3MVVXP75TMSWE",
+            "displayLabel": "①",
+            "order": 0,
+            "questionText": "暗い部屋の中で電灯をつけると明るくなり、これまで見えなかった物が見えるようになる。私たちは、［　］がないと物を見る事ができない。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QGEGJS5FENG3CJRYY",
+                "text": "光",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1Q4H095WBZ4KJ7GYK6",
+                "text": "ひかり",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "光",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QKDNC26J0X36XMKBQ",
+            "displayLabel": "②",
+            "order": 1,
+            "questionText": "自ら光を出している物には(図1)の［　］・電灯・テレビなどがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QM1J6TWXD5XREKTK9",
+                "text": "太陽",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1QY26Y8QFTJ00RZVR3",
+                "text": "たいよう",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "太陽",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1Q36F14JV1MN4GN11P",
+            "displayLabel": "③",
+            "order": 2,
+            "questionText": "自ら光を出している物を［　］といい、ここから出た光を直接見ている。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1Q0YA5TSNSNQB4RPJ8",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1Q4QF355C6SWDXR550",
+                "text": "こうげん",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QZ840YGSYK63BZRVT",
+            "displayLabel": "④",
+            "order": 3,
+            "questionText": "また、自ら光を出さない物には、(図2)の［　］や、ノート・机などがある。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1Q256CGJ1E6D8CVV42",
+                "text": "月",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1QF1Q4WGMBGRKYWE62",
+                "text": "つき",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "月",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QBSXFBZ2GYZ3KDZ6Y",
+            "displayLabel": "③（2回目）",
+            "order": 4,
+            "questionText": "このような物は、［　］から出た光がはね返ることで見ることができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1Q1HFQM09D5P3AKDE3",
+                "text": "光源",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1QT1SJ95WBYQ31BAX4",
+                "text": "こうげん",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "光源",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QK0CNJV82SKQJ6CJZ",
+            "displayLabel": "⑤",
+            "order": 5,
+            "questionText": "このとき、かい中電灯とスクリーンの間に(図3)のように厚紙を置くと、スクリーンには同じ形の［　］ができる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QJ1HZDG1XHASY1TVM",
+                "text": "かげ",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1Q6YF9P13H5HDBK7KE",
+                "text": "影",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "かげ",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1Q203V8CVNZPVP8CH6",
+            "displayLabel": "⑥",
+            "order": 6,
+            "questionText": "これは、光が同じ物の中ではまっすぐ進む性質があるからで、このことを光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QPCBRNE90H9E8CZQ7",
+                "text": "直進",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1Q7Y12509ZPMP9RQCA",
+                "text": "ちょくしん",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "直進",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QC98JT3W6MR139QPH",
+            "displayLabel": "⑦",
+            "order": 7,
+            "questionText": "ピンホールカメラの穴の前にろうそくを置くと、スクリーンには実物と［　］が反対の像がうつる。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1Q6EVY7D3Q9P146XPD",
+                "text": "上下左右",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "上下左右",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QSCPQT1W68B89D0EZ",
+            "displayLabel": "⑧",
+            "order": 8,
+            "questionText": "光が鏡などによってはいかはね返される性質を光の［　］という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QDE4Z26AF7EW4EE5B",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1QT6MDB3WB5X5QW5V2",
+                "text": "はんしゃ",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QEJE40FB6FCG073ZR",
+            "displayLabel": "⑧（2回目）",
+            "order": 9,
+            "questionText": "光を鏡にあてたとき、鏡にあたる前の光を入射光線、［　］したあとの光を［　］光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1Q7HPSTRSAX1W43XJ5",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1Q0SN02M00Z87TCPNP",
+                "text": "はんしゃ",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.fill_blank_placeholder_invalid] ⑧の問題文にある対象空欄を1個に分離できませんでした。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          },
+          {
+            "id": "01KZ943N1QC1BQ5MT2HT4W544E",
+            "displayLabel": "⑧（3回目）",
+            "order": 10,
+            "questionText": "光を鏡にあてたとき、鏡にあたる前の光を入射光線、反射したあとの光を［　］光線という。",
+            "questionType": "exact_short_text",
+            "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": 1000,
+            "pointIncrementMilli": 1,
+            "allowNonKanji": true,
+            "acceptedAnswers": [
+              {
+                "id": "01KZ943N1QG4NQC6A731KV6DX9",
+                "text": "反射",
+                "variantType": "canonical",
+                "provenance": "ai_proposed",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              },
+              {
+                "id": "01KZ943N1QRRGXVJBJYDC3KXNG",
+                "text": "はんしゃ",
+                "variantType": "accepted",
+                "provenance": "derived_variant",
+                "isExplicitNonKanjiException": false,
+                "teacherVerified": false,
+                "revision": 1
+              }
+            ],
+            "canonicalAnswer": "反射",
+            "teacherNote": "[AI確認] [template.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] [question.answer_slot_inventory_mismatch] ページ1で検出した解答欄は13個ですが、個別問題は11件です。解答欄の分割と順番を確認してください。\n[AI確認] 正答はAIによる提案です。先生が根拠資料と照合してください。",
+            "kanjiPolicyNote": "AIによる表記方針の提案です。先生の確認が必要です。",
+            "requiresReviewAlways": true,
+            "answerProvenance": "ai_proposed",
+            "proposalState": "proposed",
+            "warnings": [
+              "先生による確認が必要です。",
+              "未確認の解答候補があります。"
+            ],
+            "teacherVerified": false,
+            "revision": 1
+          }
+        ]
+      },
+      "checks": {
+        "generationCompleted": true,
+        "questionCount": true,
+        "printedLabels": true,
+        "canonicalAnswers": true,
+        "onePlaceholderPerQuestion": false,
+        "filledAnswerLeakageAbsent": true,
+        "administrativeFieldsExcluded": true,
+        "criticalOcrIssueAbsent": true,
+        "answerProvenance": true,
+        "bulkVerification": false
+      },
+      "passed": false,
+      "questions": [
+        {
+          "label": "①",
+          "text": "暗い部屋の中で電灯をつけると明るくなり、これまで見えなかった物が見えるようになる。私たちは、［　］がないと物を見る事ができない。",
+          "answer": "光",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "②",
+          "text": "自ら光を出している物には(図1)の［　］・電灯・テレビなどがある。",
+          "answer": "太陽",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "③",
+          "text": "自ら光を出している物を［　］といい、ここから出た光を直接見ている。",
+          "answer": "光源",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "④",
+          "text": "また、自ら光を出さない物には、(図2)の［　］や、ノート・机などがある。",
+          "answer": "月",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "③（2回目）",
+          "text": "このような物は、［　］から出た光がはね返ることで見ることができる。",
+          "answer": "光源",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑤",
+          "text": "このとき、かい中電灯とスクリーンの間に(図3)のように厚紙を置くと、スクリーンには同じ形の［　］ができる。",
+          "answer": "かげ",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑥",
+          "text": "これは、光が同じ物の中ではまっすぐ進む性質があるからで、このことを光の［　］という。",
+          "answer": "直進",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑦",
+          "text": "ピンホールカメラの穴の前にろうそくを置くと、スクリーンには実物と［　］が反対の像がうつる。",
+          "answer": "上下左右",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑧",
+          "text": "光が鏡などによってはいかはね返される性質を光の［　］という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑧（2回目）",
+          "text": "光を鏡にあてたとき、鏡にあたる前の光を入射光線、［　］したあとの光を［　］光線という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        },
+        {
+          "label": "⑧（3回目）",
+          "text": "光を鏡にあてたとき、鏡にあたる前の光を入射光線、反射したあとの光を［　］光線という。",
+          "answer": "反射",
+          "provenance": "ai_proposed",
+          "requiresReviewAlways": true
+        }
+      ],
+      "elapsedSeconds": 14.68
+    },
+    {
+      "mode": "model",
+      "runNumber": 1,
+      "templateId": "01KZ943PHZRF4190ZGXHKG4Z81",
+      "versionId": "01KZ943PJ2CCDGVWPHT7KV7S2V",
+      "generation": {
+        "state": "failed",
+        "completedQuestions": 0,
+        "estimatedQuestions": 0,
+        "warnings": [
+          "提供済みの模範解答とAIの正答候補が競合しています。"
+        ],
+        "reviewIssues": [
+          {
+            "code": "template_extract_ai_answer_authority_conflict",
+            "message": "提供済みの模範解答とAIの正答候補が競合しています。",
+            "blocking": true
+          }
+        ],
+        "detail": "自動下書きを作成できませんでした。手動編集を続けられます。",
+        "aiRequestId": "01KZ943Q32EKT3D76N6N015EQJ",
+        "jobId": "01KZ943PJAKS9216B0389P5J44"
+      },
+      "questionCount": 0,
+      "labels": [],
+      "answers": [],
+      "provenances": [],
+      "placeholderCounts": [],
+      "nonblankBracketContent": [],
+      "headerExtractions": [],
+      "criticalOcrIssues": [],
+      "requiresReviewAlwaysCount": 0,
+      "blockingWarnings": [],
+      "reviewIssues": [],
+      "bulkVerification": null,
+      "checks": {
+        "generationCompleted": false,
+        "questionCount": false,
+        "printedLabels": false,
+        "canonicalAnswers": false,
+        "onePlaceholderPerQuestion": false,
+        "filledAnswerLeakageAbsent": true,
+        "administrativeFieldsExcluded": true,
+        "criticalOcrIssueAbsent": true,
+        "answerProvenance": false,
+        "bulkVerification": false
+      },
+      "passed": false,
+      "questions": [],
+      "elapsedSeconds": 14.15
+    }
+  ],
+  "summary": {
+    "runCount": 2,
+    "passedRunCount": 0,
+    "allPassed": false
+  }
+}
