@@ -25,18 +25,26 @@ public sealed class AiAdjudicationJobWorkerTests
     public async Task AppendsTeacherGatedProposalAndAccountsUsage()
     {
         await using var fixture = await AdjudicationFixture.CreateAsync();
-        var seeded = await fixture.SeedAsync();
+        var seeded = await fixture.SeedAsync(gradingRuleFlags: true);
 
         Assert.True(await fixture.Worker.ProcessNextAsync());
 
         var providerRequest = Assert.Single(fixture.Provider.Requests);
         Assert.Equal(AiTaskTypes.Adjudication, providerRequest.TaskType);
-        Assert.Equal("answer-recheck-v1.2.0", providerRequest.PromptVersion);
+        Assert.Equal("answer-recheck-v1.3.0", providerRequest.PromptVersion);
         Assert.Equal("answer_transcribe_grade_v1", providerRequest.SchemaVersion);
         Assert.Single(providerRequest.Media);
         Assert.Equal(seeded.CropSha256, providerRequest.Media[0].Sha256);
         Assert.DoesNotContain(
             "東景",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"requires_complete_answer\":true",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"answer_order_insensitive\":true",
             providerRequest.UserInstruction,
             StringComparison.Ordinal);
 
@@ -88,6 +96,28 @@ public sealed class AiAdjudicationJobWorkerTests
         Assert.Equal(220, usage.InputTokens);
         Assert.Equal("settled", reservation.State);
         Assert.Equal(usage.EstimatedUsdMicros, reservation.ActualUsdMicros);
+    }
+
+    [Fact]
+    public async Task CapabilityPassedOneStepProfileRunsWithoutAccuracyEvaluation()
+    {
+        await using var fixture = await AdjudicationFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(
+            profileApprovalState: "capability_passed",
+            accuracyEvaluationId: null);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.Single(fixture.Provider.Requests);
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var request = await db.AiRequests
+            .AsNoTracking()
+            .SingleAsync(item => item.EntityId == seeded.ResultId);
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.Equal("succeeded", request.State);
+        Assert.Equal("succeeded", job.State);
     }
 
     [Fact]
@@ -460,7 +490,11 @@ public sealed class AiAdjudicationJobWorkerTests
             bool activeBudget = false,
             long dailyHardUsdMicros = 1_000_000,
             long monthlyHardUsdMicros = 10_000_000,
-            bool includeJob = true)
+            bool includeJob = true,
+            bool gradingRuleFlags = false,
+            string profileApprovalState = "pilot_approved",
+            string? accuracyEvaluationId =
+                "adjudication-fixture-evaluation")
         {
             var now = DateTimeOffset.UtcNow;
             var staffId = UlidId.New(now);
@@ -539,6 +573,8 @@ public sealed class AiAdjudicationJobWorkerTests
                 MaxPointsMilli = 1_000,
                 PointIncrementMilli = 1_000,
                 AllowNonKanji = false,
+                RequiresCompleteAnswer = gradingRuleFlags,
+                AnswerOrderInsensitive = gradingRuleFlags,
                 TeacherVerified = true,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -755,8 +791,8 @@ public sealed class AiAdjudicationJobWorkerTests
                 MediaResolution = "high",
                 MaxOutputTokens = 1_024,
                 ConcurrencyLimit = 1,
-                ApprovalState = "pilot_approved",
-                AccuracyEvaluationId = "adjudication-fixture-evaluation",
+                ApprovalState = profileApprovalState,
+                AccuracyEvaluationId = accuracyEvaluationId,
                 Active = true,
                 ActivatedAt = now,
                 ActivatedByStaffUserId = staffId,

@@ -16,6 +16,30 @@ Unless stated otherwise:
 - list endpoints are paginated and searchable;
 - a failed AI call must not lose the uploaded scan or teacher edits.
 
+### FR-LST-001 — Robust list discovery (P0)
+
+The student, template, test-session, and finalized-result lists MUST support
+server-side search, relevant combined filters, allowlisted sorting in both
+directions, and cursor pagination. Search MUST tolerate Unicode compatibility
+forms and ordinary Japanese spacing differences; multiple search terms narrow
+the result set. Every sort has a stable immutable-ID tie-breaker.
+
+**Acceptance criteria**
+
+- Search, filters, sort, direction, page size, and the current cursor are
+  represented in the URL so a reload preserves the view.
+- The server rejects unknown sorts, malformed dates, overlong values, and a
+  cursor created for different filter/sort criteria with a typed problem
+  response.
+- Filter choices come from bounded server-side facets for the complete visible
+  corpus, not only the current page; values absent from page one remain usable.
+- The UI shows active criteria, offers one clear-all action, supports 25, 50,
+  100, or 200 rows per page, and exposes loading, error, empty, previous, and
+  next states accessibly.
+- A mutation between page requests cannot silently duplicate or skip a row
+  that has an unchanged sort key; cursor ordering always ends with the stable
+  record ID.
+
 ## 2. Authentication, authorization, and staff administration
 
 ### FR-AUTH-001 — Initial administrator bootstrap (P0)
@@ -153,6 +177,19 @@ replace recognized placeholder values with high-confidence printed metadata.
 Explicit teacher values MUST NOT be overwritten. Templates have `draft`,
 `active`, `retired`, and `archived` lifecycle states.
 
+The settings-first deterministic batch route is stricter. It MUST resolve the
+grade before assigning a final title. For teacher-selected known types, the
+title is host-owned and MUST be exactly:
+
+- HOP: `{subject}{grade}年HOP{unitSequence}`;
+- STEP: `{subject}{grade}年STEPセット{set}-{variation}`;
+- ClassPlacement: `{subject}{grade}年クラス分けテスト`.
+
+These known-type titles are read-only and MUST NOT be derived from or
+overridden by AI output. An AI-transcribed printed title is retained and shown
+only as provenance/reference. Only `Other` uses the normalized printed title as
+an editable proposed title; a teacher MUST resolve it when missing or unsafe.
+
 ### FR-TPL-003 — Automated grading-key draft generation (P0)
 
 From the normalized blank/model-answer/non-model-answer/answer-key sources and
@@ -168,7 +205,8 @@ their roles, the system MUST request a structured AI draft containing:
 - grading mode;
 - rubric/notes;
 - confidence and warnings;
-- default value for “allow answers not written in Kanji.”
+- default values for the complete-answer, order-insensitive, and Kanji-required
+  grading policies.
 
 Generated content MUST remain a draft until a teacher publishes it. The default
 review experience MUST show blocking or low-confidence exceptions first. A
@@ -233,25 +271,41 @@ Teachers MUST be able to:
 - edit text, expected answers, variants, points, type, and rubric;
 - draw, move, and resize question/answer/name regions over a page preview;
 - split one detected question into several or merge detections;
-- apply a Kanji policy to selected/all questions;
+- set `完答`, `順不同`, and `漢字必須` independently per question;
 - preview the total points;
 - run validations before publish.
 
 All unsaved editing SHOULD be protected with local draft recovery.
 
-### FR-TPL-005 — Kanji answer policy (P0)
+### FR-TPL-005 — Complete, order, and Kanji answer policies (P0)
 
-Every question MUST expose the checkbox:
+Every question MUST expose these positive Japanese checkboxes:
 
-> 漢字以外の解答を許可する  
-> Allow an answer not written in Kanji
+- `完答`: an otherwise valid partial award is converted to zero/incorrect;
+  unreadable or ambiguous evidence remains teacher review rather than being
+  silently marked wrong;
+- `順不同`: explicitly separated answer components are compared as a
+  duplicate-preserving multiset, so all required occurrences must be present
+  but their order may differ;
+- `漢字必須`: when the canonical expected answer contains Kanji, a
+  phonetic-only equivalent is not correct unless the teacher registered it as
+  an explicit exception.
+
+The supported `順不同` separators are Japanese or ASCII comma, slash,
+semicolon, Japanese middle dot, and newline. Ordinary spaces remain part of a
+component. The two new stored policies default to `false` for legacy rows.
+
+`漢字必須` is the positive UI representation of the compatible API/storage
+field `allowNonKanji`: checked means `allowNonKanji = false`.
 
 Rules:
 
-- checked: a semantically correct hiragana, katakana, or supported phonetic form MAY receive credit according to normal variant/rubric rules;
-- unchecked: when the canonical expected answer contains Kanji, a phonetic-only equivalent MUST NOT receive credit;
-- unchecked has no special effect if the canonical expected answer contains no Kanji;
-- the teacher MAY list specific non-Kanji variants as accepted; this explicit exception overrides the checkbox and is visibly marked;
+- `漢字必須` unchecked: a semantically correct hiragana, katakana, or supported phonetic form MAY receive credit according to normal variant/rubric rules;
+- `漢字必須` checked: when the canonical expected answer contains Kanji, a phonetic-only equivalent MUST NOT receive credit;
+- checked has no special effect if the canonical expected answer contains no Kanji;
+- the teacher MAY list specific non-Kanji readings in the dedicated
+  `漢字必須の例外（読み）` field; only this visibly marked explicit exception
+  overrides the checkbox, while an ordinary accepted variant does not;
 - the stored result MUST include whether the Kanji rule affected the grade.
 
 ### FR-TPL-006 — Publish and version (P0)
@@ -268,9 +322,29 @@ Publishing MUST create an immutable template version. It MUST be rejected when:
 
 Editing a published version creates a new draft version. Existing grading runs remain linked to the version used.
 
+Archiving a template is a reversible soft deletion. It MUST remove the template
+from the ordinary working list and prevent edits, publication, new versions,
+and new test sessions. It MUST NOT delete published versions, existing test
+sessions, submissions, results, or audit evidence. An explicit archived filter
+MUST expose it for restoration; restore returns a template with a published
+version to `active`, otherwise to `draft`. Archive MUST return a typed conflict
+while automatic draft extraction is active; the teacher retries after that
+generation job reaches a terminal state.
+
 ### FR-TPL-007 — Regrade on template change (P1)
 
 Activating a new template version MUST NOT silently change historical results. A teacher MAY explicitly create a regrade run for selected submissions. Both the original and replacement results remain auditable.
+
+### FR-TPL-008 — Start reception from the confirmed draft (P0)
+
+The normal teacher action MUST be `受付を開始`, not a separate publish action.
+For a draft version, one idempotent transaction MUST validate and make the
+version immutable, snapshot the canonical template name, subject, grade,
+category, and course, create the test session directly in `open`, and return
+that session. Failure MUST leave both the version and session unchanged. A
+later version MUST NOT invalidate an already-open session pinned to an older
+immutable version. The lower-level publish contract remains only for backward
+compatibility.
 
 ## 5. Test sessions and scan upload
 
@@ -278,14 +352,28 @@ Activating a new template version MUST NOT silently change historical results. A
 
 A teacher MUST create a test session associating:
 
-- one published template version;
+- one immutable template version;
 - a test date;
-- optional class/course;
+- the canonical template name, subject, grade, category, and course captured at
+  reception start;
+- an optional target class specific to this administration;
 - optional expected student set;
-- grading priority (`economy` default or `expedite`);
 - open/closed state.
 
-The test date, not upload time, drives progress and reports.
+The teacher MUST NOT re-enter a session name, course, or processing priority.
+The test date, not upload time, drives progress and reports. Starting another
+administration from an already immutable template creates only a new open
+session and never republishes the version.
+
+### FR-SES-002 — Safe session archive (P0)
+
+A closed session MAY be archived only when every submission is finalized or
+voided and every related upload, duplicate resolution, ordered-scan batch, and
+grading job is terminal. A failed readiness check MUST return a typed conflict
+that identifies the remaining class of work. Archived sessions leave actionable
+review/finalization queues and reject metadata, roster, identity, duplicate,
+override, finalize, and reopen mutations, while all authorized historical GETs
+remain readable.
 
 ### FR-UPL-001 — Peer upload (P0)
 
@@ -376,12 +464,14 @@ Each submitted paper MUST have one or more immutable grading runs. A run records
 
 ### FR-GRD-002 — Hybrid grading (P0)
 
-The system MUST select the lowest-risk method by question:
-
-1. deterministic parsing/comparison for multiple choice, selected numeric, and exact-token questions;
-2. AI transcription followed by local rule evaluation for short answers;
-3. AI rubric evaluation for semantic short answers;
-4. mandatory teacher review for subjective, unsupported, or low-confidence answers.
+The template editor MUST use AI-rubric judgment as the simple default for every
+supported question type. A teacher MAY explicitly change an individual question
+to exact/variant matching, numeric comparison, choice comparison, or manual
+grading. Regardless of the selected method, local code validates score bounds,
+point increments, Kanji/complete-answer constraints, and computes the test total.
+Low-confidence, ambiguous, partial, unreadable, conflicting, unsupported, or
+explicitly `always review` results require teacher review; a clear valid AI
+proposal does not require review merely because AI produced it.
 
 The model MUST NOT calculate the test total.
 
@@ -419,7 +509,7 @@ A result enters the review queue when any of the following is true:
 - the model marks unreadable/ambiguous;
 - a safety filter blocks processing;
 - Kanji presence is uncertain and Kanji is required;
-- subjective grading is used;
+- the question explicitly requires review;
 - points/reason conflict with deterministic policy;
 - the template question was flagged as risky.
 
@@ -511,6 +601,36 @@ The PDF MUST NOT include internal confidence, model prompts, API key/cost, priva
 
 An export record MUST store the result revision, template version, renderer version, SHA-256, creating user, and time. Regeneration after a grade change creates a new export revision. Stored PDFs follow a configurable record-retention policy independent of scan retention.
 
+### FR-EXP-005 — Bulk student result package (P0)
+
+A teacher or administrator MUST be able to create one bulk package from either
+explicitly checked finalized-result rows or every result matching the current
+server-side report filters. The package is a ZIP containing the existing
+canonical Japanese result PDF for each selected student/test result, grouped in
+deterministically named student folders, plus a UTF-8-with-BOM CSV manifest.
+This operation does not invent a new aggregate transcript or recalculate any
+grade.
+
+**Acceptance criteria**
+
+- Preview resolves the selector on the server and shows the exact student and
+  result counts before creation. Creation supplies that preview fingerprint;
+  any changed, voided, reassigned, reopened, superseded, unassigned, missing,
+  or duplicate source rejects the whole request without a partial package.
+- Selection mode accepts at most 500 distinct results; the resolved package
+  contains at most 100 students and 500 current finalized, non-void results.
+- Filter mode uses the same normalized search and filter membership as the
+  finalized-result list, independent of the current page or its checkboxes.
+- Rendering is durable, asynchronous, progress-reporting, idempotent, and
+  revalidates every frozen result before and after PDF generation. A source
+  change marks the request stale/superseded rather than mixing revisions.
+- ZIP entry names are relative, sanitized, unique, bounded, and free of path
+  traversal. Manifest cells are quoted and neutralize spreadsheet-formula
+  prefixes. The verified archive is at most 512 MiB.
+- The package and every child PDF retain result/template/renderer provenance.
+  Audit metadata contains internal IDs, counts, and hashes—not student names,
+  filenames, or free-text search terms.
+
 ## 10. Scan retention and storage quota
 
 ### FR-RET-001 — Managed bytes (P0)
@@ -573,17 +693,48 @@ Before accepting a new upload, the host MUST verify enough free physical disk fo
 
 Only an administrator on the host or an authenticated administrator over HTTPS may configure official Gemini and/or OpenRouter connections and replace their keys. Every key MUST be:
 
-- tested against a non-personal health prompt;
+- tested against non-personal synthetic text and image tasks before persistence;
 - stored encrypted with Windows-protected key material;
 - masked after save;
 - never returned by an API;
 - usable only by the host AI adapter.
 
-The production connection test MUST verify authentication/credits, the configured model, image input, strict structured output, usage/cost metadata, and provider-specific capabilities. Gemini tests Batch API when selected. OpenRouter tests model and endpoint parameter support with `require_parameters` behavior.
+Gemini connection create/replace accepts optional `testAndEnable`; the normal Web
+flow sends `true`. With that flag, the host MUST probe the supplied candidate
+before changing any persisted state. Authentication/credits, the exact model,
+image input, strict structured output, usage metadata, and the representative
+image-task contract MUST all pass. Only full success may encrypt/persist the key
+and atomically activate the exact current `templateExtraction`,
+`nameTranscription`, `initialGrading`, and `adjudication` profiles with
+`approval_state=capability_passed`. Any failure, timeout, or ambiguous replace
+outcome MUST leave the previous key, connection, active profiles, and their
+revisions unchanged. The candidate secret MUST NOT enter logs, audit metadata,
+or durable failure data.
+
+An explicit connection `:test` for an existing Gemini connection MUST run the
+same full capability contract and self-heal missing or stale exact-current
+profiles only on success. Startup MUST reconcile already active Gemini profiles
+after checked-in prompt/schema/configuration-hash changes while preserving the
+immutable profile snapshot of in-flight jobs. The one-step behavior is
+Gemini-only. OpenRouter tests exact model and endpoint parameter support with
+`require_parameters` behavior and retains the advanced/manual profile path.
 
 ### FR-ADM-002 — Model and prompt configuration (P0)
 
-The direct-Gemini default is `gemini-3.5-flash-lite`; the OpenRouter default remains a separately validated model slug. Administrators can define task profiles for template extraction, name recognition, initial grading, and adjudication. A provider/model/routing change requires capability plus accuracy validation and creates a configuration revision. Requested model, actual returned model/provider where available, endpoint, prompt, schema, and pipeline versions are captured for every AI result.
+The direct-Gemini default is `gemini-3.5-flash-lite`; successful one-step setup
+selects the checked-in exact-current profile for template extraction, name
+recognition, initial grading, and adjudication without normal-UI evaluation,
+pilot-approval, or manual-activation controls. Capability-gated activation only
+enables AI drafts and review support: template publication, student assignment,
+and result finalization remain explicit teacher actions.
+
+The OpenRouter default remains a separately validated model slug.
+Administrators/technical operators can use the advanced profile, evaluation,
+approval, activation, and rollback contracts for OpenRouter and
+backward-compatible data. A provider/model/routing change in that path requires
+capability plus accuracy validation and creates a configuration revision.
+Requested model, actual returned model/provider where available, endpoint,
+prompt, schema, and pipeline versions are captured for every AI result.
 
 ### FR-ADM-003 — Provider selection and validated failover (P0)
 
@@ -665,9 +816,16 @@ Upgrades MUST be signed, versioned, logged, backed up before schema change, and 
 
 ## 13. Cross-feature acceptance scenarios
 
-### AS-01 — Normal economy flow
+### AS-01 — Normal standard-queue flow
 
-Given a published test and active student roster, when an operator uploads 30 papers from a peer, then the host preserves originals, preprocesses pages, dispatches them through the configured economy provider profile (direct Gemini batch or OpenRouter queued requests), auto-assigns only safe names, queues uncertain items, lets a teacher resolve them, calculates totals locally, and updates progress after finalization.
+Given a published test and active student roster, when an operator uploads 30
+papers from a peer, then the host preserves originals, preprocesses pages, and
+dispatches them through the current standard-request profile and one durable
+queue. The profile is either exact-current `capability_passed` Gemini or a
+separately evaluated advanced profile. The system auto-assigns only safe names,
+queues uncertain items, lets a teacher resolve them, calculates totals locally,
+and updates progress after finalization. New work does not use or expose Gemini
+Batch/economy/priority choices.
 
 ### AS-02 — Internet outage
 
@@ -675,7 +833,12 @@ Given no Internet, when staff upload scans, then uploads and local preprocessing
 
 ### AS-03 — Provider timeout
 
-Given a direct Gemini economy batch that has not completed for 24 hours, the system shows delayed status and provider operation ID, does not create a duplicate batch automatically, and offers an administrator a reconcile/cancel/expedite decision. Given OpenRouter throttling/outage, queued requests remain individually retryable and the UI does not describe them as a Gemini batch.
+Given a retained legacy direct Gemini economy batch that has not completed for
+24 hours, the system shows delayed status and provider operation ID, does not
+create a duplicate batch automatically, and preserves the historical reconcile
+path without exposing it for new work. Given current Gemini/OpenRouter standard
+request throttling or outage, queued requests remain individually retryable and
+the UI does not describe them as a Gemini batch.
 
 ### AS-04 — Scan aged out
 

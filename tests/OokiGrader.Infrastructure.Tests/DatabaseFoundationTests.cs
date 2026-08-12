@@ -261,6 +261,18 @@ public sealed class DatabaseFoundationTests
                     'subjective', 'manual', 1000, 0, 1, 1, 1, 1, 1);
                 """);
 
+            // Exercise the historical data-preservation migrations first,
+            // then model the production 0016 state where the initializer has
+            // already installed all integrity triggers before 0017 runs.
+            await migrator.MigrateAsync(
+                "20260806000000_0016_OpenRouterProviders");
+
+            foreach (var triggerStatement in
+                     TemplateVersionIntegrityTriggerCatalog.Schema16Statements)
+            {
+                await context.Database.ExecuteSqlRawAsync(triggerStatement);
+            }
+
             await migrator.MigrateAsync();
             await context.Database.ExecuteSqlRawAsync(
                 """
@@ -280,6 +292,12 @@ public sealed class DatabaseFoundationTests
             var increment = await ExecuteScalarAsync(
                 context,
                 $"SELECT point_increment_milli FROM question WHERE id = '{questionId}';");
+            var requiresCompleteAnswer = await ExecuteScalarAsync(
+                context,
+                $"SELECT requires_complete_answer FROM question WHERE id = '{questionId}';");
+            var answerOrderInsensitive = await ExecuteScalarAsync(
+                context,
+                $"SELECT answer_order_insensitive FROM question WHERE id = '{questionId}';");
             var originalSourceRole = await ExecuteScalarAsync(
                 context,
                 "SELECT source_role FROM template_source WHERE ordinal = 0;");
@@ -287,20 +305,137 @@ public sealed class DatabaseFoundationTests
                 context,
                 "SELECT COUNT(*) FROM template_source " +
                 "WHERE source_role = 'contains_non_model_answers';");
+            var historicalTestType = await ExecuteScalarAsync(
+                context,
+                "SELECT test_type FROM template_version " +
+                "WHERE id = '01K13MIGRATIONVERSION0001';");
+            var generationBatchTableCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM sqlite_master " +
+                "WHERE type = 'table' AND name = 'template_generation_batch';");
+            var generationUnitTableCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM sqlite_master " +
+                "WHERE type = 'table' AND name = 'template_generation_unit';");
+            var preservedTriggerCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' " +
+                "AND name IN (" +
+                "'trg_test_session_requires_published_template_insert'," +
+                "'trg_published_template_version_content_immutable'," +
+                "'trg_published_answer_no_delete');");
+            var publishedVersionTriggerSql = await ExecuteScalarAsync(
+                context,
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' " +
+                "AND name = 'trg_published_template_version_content_immutable';");
             var integrity = await ExecuteScalarAsync(context, "PRAGMA integrity_check;");
             var foreignKeyViolation = await ExecuteScalarAsync(
                 context,
                 "SELECT COUNT(*) FROM pragma_foreign_key_check;");
 
             Assert.Equal(1L, Convert.ToInt64(increment, CultureInfo.InvariantCulture));
+            Assert.Equal(
+                0L,
+                Convert.ToInt64(
+                    requiresCompleteAnswer,
+                    CultureInfo.InvariantCulture));
+            Assert.Equal(
+                0L,
+                Convert.ToInt64(
+                    answerOrderInsensitive,
+                    CultureInfo.InvariantCulture));
             Assert.Equal("blank_test", originalSourceRole?.ToString());
             Assert.Equal(
                 1L,
                 Convert.ToInt64(nonModelSourceCount, CultureInfo.InvariantCulture));
+            Assert.Equal(DBNull.Value, historicalTestType);
+            Assert.Equal(
+                1L,
+                Convert.ToInt64(generationBatchTableCount, CultureInfo.InvariantCulture));
+            Assert.Equal(
+                1L,
+                Convert.ToInt64(generationUnitTableCount, CultureInfo.InvariantCulture));
+            Assert.Equal(
+                3L,
+                Convert.ToInt64(preservedTriggerCount, CultureInfo.InvariantCulture));
+            Assert.Contains(
+                "generation_profile_hash",
+                publishedVersionTriggerSql?.ToString(),
+                StringComparison.Ordinal);
             Assert.Equal("ok", integrity?.ToString(), ignoreCase: true);
             Assert.Equal(
                 0L,
                 Convert.ToInt64(foreignKeyViolation, CultureInfo.InvariantCulture));
+
+            await context.Database.CloseConnectionAsync();
+            await migrator.MigrateAsync(
+                "20260806000000_0016_OpenRouterProviders");
+            await context.Database.OpenConnectionAsync();
+
+            var downgradedGenerationColumnCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM pragma_table_info('template_version') " +
+                "WHERE name IN ('test_type','generation_profile_hash');");
+            var downgradedGenerationTableCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' " +
+                "AND name = 'template_generation_batch';");
+            var downgradedTriggerCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' " +
+                "AND name IN (" +
+                "'trg_test_session_requires_published_template_insert'," +
+                "'trg_published_template_version_content_immutable'," +
+                "'trg_published_answer_no_delete');");
+            var downgradedVersionTriggerSql = await ExecuteScalarAsync(
+                context,
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' " +
+                "AND name = 'trg_published_template_version_content_immutable';");
+
+            Assert.Equal(
+                0L,
+                Convert.ToInt64(
+                    downgradedGenerationColumnCount,
+                    CultureInfo.InvariantCulture));
+            Assert.Equal(
+                0L,
+                Convert.ToInt64(
+                    downgradedGenerationTableCount,
+                    CultureInfo.InvariantCulture));
+            Assert.Equal(
+                3L,
+                Convert.ToInt64(downgradedTriggerCount, CultureInfo.InvariantCulture));
+            Assert.DoesNotContain(
+                "generation_profile_hash",
+                downgradedVersionTriggerSql?.ToString(),
+                StringComparison.Ordinal);
+
+            await context.Database.CloseConnectionAsync();
+            await migrator.MigrateAsync();
+            await context.Database.OpenConnectionAsync();
+
+            var reappliedGenerationColumnCount = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM pragma_table_info('template_version') " +
+                "WHERE name IN ('test_type','generation_profile_hash');");
+            var reappliedIntegrity = await ExecuteScalarAsync(
+                context,
+                "PRAGMA integrity_check;");
+            var reappliedForeignKeyViolation = await ExecuteScalarAsync(
+                context,
+                "SELECT COUNT(*) FROM pragma_foreign_key_check;");
+
+            Assert.Equal(
+                2L,
+                Convert.ToInt64(
+                    reappliedGenerationColumnCount,
+                    CultureInfo.InvariantCulture));
+            Assert.Equal("ok", reappliedIntegrity?.ToString(), ignoreCase: true);
+            Assert.Equal(
+                0L,
+                Convert.ToInt64(
+                    reappliedForeignKeyViolation,
+                    CultureInfo.InvariantCulture));
         }
         finally
         {

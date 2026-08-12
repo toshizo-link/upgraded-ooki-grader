@@ -469,6 +469,8 @@ internal static class TemplateContentHasher
             Add(builder, question.MaximumPoints.Value);
             Add(builder, question.PointIncrement.Value);
             Add(builder, question.AllowNonKanji);
+            Add(builder, question.RequiresCompleteAnswer);
+            Add(builder, question.AnswerOrderInsensitive);
             Add(builder, question.RequiresReviewAlways);
             Add(builder, question.KanjiPolicyNote);
 

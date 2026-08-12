@@ -208,11 +208,33 @@ public sealed class AiInitialGradingJobWorkerTests
     public async Task SendsOnlyDisclosureApprovedAnswerCropsOutsideWriteLock()
     {
         await using var fixture = await AiWorkerFixture.CreateAsync();
-        var seeded = await fixture.SeedAsync(includePrivateNameCrop: true);
+        var seeded = await fixture.SeedAsync(
+            includePrivateNameCrop: true,
+            gradingRuleFlags: true);
 
         Assert.True(await fixture.Worker.ProcessNextAsync());
 
         var providerRequest = Assert.Single(fixture.Provider.Requests);
+        Assert.Contains(
+            "\"requires_complete_answer\":true",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"answer_order_insensitive\":true",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "directly from the original page pixels in one integrated",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every visible line boundary as \\n",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "not the sole input to grading",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
         Assert.Single(providerRequest.Media);
         Assert.Equal(
             seeded.AnswerCropSha256,
@@ -229,7 +251,7 @@ public sealed class AiInitialGradingJobWorkerTests
     }
 
     [Fact]
-    public async Task PersistsLocalTotalsAndRequiresTeacherReviewForEveryPilotItem()
+    public async Task ClearValidatedResultIsReadyForExplicitFinalization()
     {
         await using var fixture = await AiWorkerFixture.CreateAsync();
         var seeded = await fixture.SeedAsync();
@@ -258,10 +280,10 @@ public sealed class AiInitialGradingJobWorkerTests
             .AsNoTracking()
             .SingleAsync(item => item.Id == seeded.JobId);
 
-        Assert.Equal("needs_grade_review", submission.State);
+        Assert.Equal("ready_to_finalize", submission.State);
         Assert.Equal(run.Id, submission.CurrentGradingRunId);
         Assert.Null(submission.FinalizedAt);
-        Assert.Equal("needs_grade_review", run.State);
+        Assert.Equal("ready_to_finalize", run.State);
         Assert.Equal(AiProviders.GeminiDirect, run.Provider);
         Assert.Equal(AiInitialGradingJobWorker.ModelId, run.Model);
         Assert.Equal(AiInitialGradingJobWorker.PipelineVersion, run.PipelineVersion);
@@ -273,8 +295,8 @@ public sealed class AiInitialGradingJobWorkerTests
         Assert.Equal(seeded.QuestionId, result.QuestionId);
         Assert.Equal("東京", result.TranscribedAnswer);
         Assert.Equal(1_000, result.ProposedPointsMilli);
-        Assert.True(result.ReviewRequired);
-        Assert.Equal("pending", result.ReviewStatus);
+        Assert.False(result.ReviewRequired);
+        Assert.Equal("not_required", result.ReviewStatus);
         var revision = Assert.Single(result.Revisions);
         Assert.Equal(1_000, revision.AwardedPointsMilli);
         Assert.Equal(result.CurrentRevisionId, revision.Id);
@@ -478,7 +500,7 @@ public sealed class AiInitialGradingJobWorkerTests
     }
 
     [Fact]
-    public async Task StoredBatchResponseUsesNormalValidatorAndCreatesReviewRun()
+    public async Task StoredBatchResponseUsesNormalValidatorAndCreatesReadyRun()
     {
         await using var fixture = await AiWorkerFixture.CreateAsync(
             enableBatch: true);
@@ -501,15 +523,51 @@ public sealed class AiInitialGradingJobWorkerTests
             .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
         Assert.Equal("succeeded", request.State);
         Assert.Equal(AiInitialGradingJobWorker.ModelId + "-001", run.Model);
-        Assert.Equal("needs_grade_review", run.State);
+        Assert.Equal("ready_to_finalize", run.State);
         Assert.Single(run.QuestionResults);
-        Assert.True(run.QuestionResults.Single().ReviewRequired);
+        Assert.False(run.QuestionResults.Single().ReviewRequired);
         Assert.Single(
             await db.AiUsage
                 .AsNoTracking()
                 .Where(item => item.AiRequestId == request.Id)
                 .ToListAsync());
         Assert.Empty(fixture.Provider.Requests);
+    }
+
+    [Theory]
+    [InlineData(false, "ready_to_finalize", "not_required")]
+    [InlineData(true, "needs_grade_review", "pending")]
+    public async Task AiRubricPermanentReviewFlagControlsBlockingReview(
+        bool requiresReviewAlways,
+        string expectedState,
+        string expectedReviewStatus)
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(
+            questionType: "subjective",
+            gradingMode: "ai_rubric",
+            rubricText: "模範解答と必要な説明要素を比較する。",
+            requiresReviewAlways: requiresReviewAlways);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        Assert.Contains(
+            "\"grading_mode\":\"ai_rubric\"",
+            Assert.Single(fixture.Provider.Requests).UserInstruction,
+            StringComparison.Ordinal);
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        var result = Assert.Single(run.QuestionResults);
+        Assert.Equal(expectedState, submission.State);
+        Assert.Equal(expectedState, run.State);
+        Assert.Equal(requiresReviewAlways, result.ReviewRequired);
+        Assert.Equal(expectedReviewStatus, result.ReviewStatus);
     }
 
     [Fact]
@@ -535,36 +593,600 @@ public sealed class AiInitialGradingJobWorkerTests
         Assert.Empty(await db.GradingRuns.AsNoTracking().ToListAsync());
     }
 
+    [Fact]
+    public async Task CombinedAnalysisStagesGradingAndPersistsLocalIdentityEvidence()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateCombinedResponse(request));
+        var seeded = await fixture.SeedAsync(
+            requiresIdentityReview: true,
+            includeRosterStudent: true);
+
+        await fixture.ProcessUntilRunAsync();
+
+        var providerRequest = Assert.Single(fixture.Provider.Requests);
+        Assert.Contains(
+            "\"identity_required\":true",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "大木 花子",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "S-001",
+            providerRequest.UserInstruction,
+            StringComparison.Ordinal);
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        Assert.Equal("needs_name_review", submission.State);
+        Assert.Null(submission.CurrentGradingRunId);
+        Assert.Equal("awaiting_identity", run.State);
+        Assert.False(Assert.Single(run.QuestionResults).ReviewRequired);
+
+        using var evidence = JsonDocument.Parse(
+            submission.AssignmentEvidenceJson!);
+        Assert.Equal(
+            "name_assignment_evidence_v2",
+            evidence.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.Equal(
+            "大木 花子",
+            evidence.RootElement
+                .GetProperty("transcription")
+                .GetProperty("visibleName")
+                .GetString());
+        Assert.Equal(
+            seeded.StudentId,
+            evidence.RootElement
+                .GetProperty("candidates")[0]
+                .GetProperty("studentId")
+                .GetString());
+        Assert.Equal(
+            1,
+            evidence.RootElement.GetProperty("identityPageNumber").GetInt32());
+
+        var request = Assert.Single(await db.AiRequests
+            .AsNoTracking()
+            .Where(item => item.EntityId == seeded.SubmissionId)
+            .ToListAsync());
+        Assert.Equal(AiTaskTypes.InitialGrading, request.Purpose);
+        Assert.Single(await db.AiUsage.AsNoTracking().ToListAsync());
+        Assert.Single(await db.AiBudgetReservations.AsNoTracking().ToListAsync());
+        Assert.DoesNotContain(
+            await db.BackgroundJobs.AsNoTracking().ToListAsync(),
+            item => item.Type == AiNameTranscriptionJobWorker.JobType);
+    }
+
+    [Fact]
+    public async Task InvalidIdentityDoesNotTaintValidGradingResult()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateCombinedResponse(
+                request,
+                invalidIdentity: true));
+        var seeded = await fixture.SeedAsync();
+
+        await fixture.ProcessUntilRunAsync();
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        var result = Assert.Single(run.QuestionResults);
+        Assert.Equal("ready_to_finalize", run.State);
+        Assert.Equal("correct", result.Outcome);
+        Assert.False(result.ReviewRequired);
+        Assert.NotEqual("ai_unexpected_content", result.ReasonCode);
+        using var usage = JsonDocument.Parse(run.AiUsageAggregationJson!);
+        Assert.Equal(
+            "ai_identity_semantics_invalid",
+            usage.RootElement
+                .GetProperty("identityValidationError")
+                .GetString());
+    }
+
+    [Fact]
+    public async Task ValidIdentitySurvivesInvalidGradingWithoutProviderRetry()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateCombinedResponse(
+                request,
+                evidenceMediaIndex: request.Media.Count));
+        var seeded = await fixture.SeedAsync(
+            requiresIdentityReview: true,
+            includeRosterStudent: true);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        Assert.Equal("needs_name_review", submission.State);
+        Assert.Null(submission.CurrentGradingRunId);
+        Assert.Empty(await db.GradingRuns.AsNoTracking().ToListAsync());
+        using var evidence = JsonDocument.Parse(
+            submission.AssignmentEvidenceJson!);
+        Assert.Equal(
+            "大木 花子",
+            evidence.RootElement
+                .GetProperty("transcription")
+                .GetProperty("visibleName")
+                .GetString());
+        var request = await db.AiRequests.AsNoTracking().SingleAsync();
+        Assert.Equal("invalid_output", request.State);
+        Assert.Equal("ai_response_evidence_media_invalid", request.ErrorCode);
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.Equal("blocked", job.State);
+        Assert.Single(fixture.Provider.Requests);
+        Assert.Single(await db.AiUsage.AsNoTracking().ToListAsync());
+        Assert.Single(await db.AiBudgetReservations.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task CombinedMultiChunkUsesIdentityOnlyOnFirstChunkAndExactEvidencePage()
+    {
+        const int answerPage = 3;
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateCombinedResponse(
+                request,
+                includeObservation: RequestContainsPage(request, answerPage),
+                evidenceMediaIndex: RequestContainsPage(request, answerPage)
+                    ? MediaIndexForPage(request, answerPage)
+                    : 0),
+            maximumMediaBytes: 1_024);
+        var seeded = await fixture.SeedAsync(
+            pageCount: answerPage,
+            additionalPageBytes: 700,
+            requiresIdentityReview: true,
+            includeRosterStudent: true);
+
+        await fixture.ProcessUntilRunAsync();
+
+        Assert.Equal(2, fixture.Provider.Requests.Count);
+        Assert.Contains(
+            "\"identity_required\":true",
+            fixture.Provider.Requests[0].UserInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"identity_required\":false",
+            fixture.Provider.Requests[1].UserInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "大木 花子",
+            fixture.Provider.Requests[0].UserInstruction,
+            StringComparison.Ordinal);
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        Assert.Equal("awaiting_identity", run.State);
+        Assert.Equal(
+            seeded.LastPageReferenceId,
+            Assert.Single(run.QuestionResults).AnswerCropFileReferenceId);
+        Assert.Equal(
+            2,
+            await db.AiRequests.CountAsync(item =>
+                item.EntityId == seeded.SubmissionId
+                && item.Purpose == AiTaskTypes.InitialGrading));
+        Assert.Equal(2, await db.AiUsage.CountAsync());
+        Assert.Equal(2, await db.AiBudgetReservations.CountAsync());
+    }
+
+    [Fact]
+    public async Task TeacherAssignmentBeforeCompletionActivatesCombinedRunNormally()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateCombinedResponse(request));
+        var seeded = await fixture.SeedAsync(
+            includeRosterStudent: true,
+            assignedStudent: true);
+
+        await fixture.ProcessUntilRunAsync();
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        Assert.Equal(seeded.StudentId, submission.AssignedStudentId);
+        Assert.Equal(run.Id, submission.CurrentGradingRunId);
+        Assert.Equal("ready_to_finalize", submission.State);
+        Assert.Equal("ready_to_finalize", run.State);
+        Assert.NotNull(run.ActivatedAt);
+    }
+
+    [Fact]
+    public async Task FourUnderCapPagesStayInOneBoundedRequest()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            maximumMediaBytes: 4_096);
+        var seeded = await fixture.SeedAsync(
+            pageCount: 4,
+            additionalPageBytes: 700);
+
+        await fixture.ProcessUntilRunAsync();
+
+        var providerRequest = Assert.Single(fixture.Provider.Requests);
+        Assert.Equal(4, providerRequest.Media.Count);
+        Assert.True(providerRequest.Media.Sum(item => item.Bytes.Length)
+            <= 4_096);
+        Assert.True(EstimateGeminiInlineBytes(providerRequest)
+            < 18L * 1024 * 1024);
+        await using var db = await fixture.CreateDbContextAsync();
+        Assert.Single(await db.AiRequests
+            .AsNoTracking()
+            .Where(item => item.EntityId == seeded.SubmissionId)
+            .ToListAsync());
+        Assert.Single(await db.GradingRuns.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task SixteenOversizedPagesUseBoundedChunksAndKeepLastPageAnswer()
+    {
+        const int pageCount = 16;
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateResponse(
+                request,
+                includeObservation: RequestContainsPage(request, pageCount)));
+        var seeded = await fixture.SeedAsync(
+            pageCount: pageCount,
+            additionalPageBytes: 3_400_000);
+
+        await fixture.ProcessUntilRunAsync();
+
+        Assert.True(fixture.Provider.Requests.Count >= 3);
+        Assert.All(fixture.Provider.Requests, request =>
+        {
+            Assert.True(request.Media.Sum(item => item.Bytes.Length)
+                <= 12 * 1024 * 1024);
+            Assert.InRange(request.Media.Count, 1, 32);
+            Assert.True(EstimateGeminiInlineBytes(request)
+                < 18L * 1024 * 1024);
+        });
+        Assert.Equal(
+            pageCount,
+            fixture.Provider.Requests.Sum(item => item.Media.Count));
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var requests = await db.AiRequests
+            .AsNoTracking()
+            .Where(item => item.EntityId == seeded.SubmissionId)
+            .OrderBy(item => item.CreatedAt)
+            .ThenBy(item => item.Id)
+            .ToListAsync();
+        Assert.Equal(fixture.Provider.Requests.Count, requests.Count);
+        Assert.Equal(
+            requests.Count,
+            requests.Select(item => item.InputManifestHash)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync();
+        var result = Assert.Single(run.QuestionResults);
+        Assert.Equal("東京", result.TranscribedAnswer);
+        Assert.NotEqual(seeded.FirstPageReferenceId,
+            result.AnswerCropFileReferenceId);
+        using var usage = JsonDocument.Parse(run.AiUsageAggregationJson!);
+        Assert.Equal(
+            requests.Count,
+            usage.RootElement.GetProperty("chunkCount").GetInt32());
+        Assert.Equal(
+            requests.Count,
+            usage.RootElement.GetProperty("chunks").GetArrayLength());
+        Assert.Equal(
+            requests.Count,
+            usage.RootElement.GetProperty("aiRequestIds").GetArrayLength());
+        foreach (var chunk in usage.RootElement
+                     .GetProperty("chunks")
+                     .EnumerateArray())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(
+                chunk.GetProperty("requestId").GetString()));
+            Assert.Equal(
+                64,
+                chunk.GetProperty("inputManifestHash")
+                    .GetString()!
+                    .Length);
+        }
+        Assert.Equal(
+            requests.Count * 240,
+            usage.RootElement.GetProperty("promptTokens").GetInt64());
+        Assert.Equal(
+            await db.AiUsage.AsNoTracking()
+                .SumAsync(item => item.EstimatedUsdMicros),
+            usage.RootElement.GetProperty("estimatedUsdMicros").GetInt64());
+    }
+
+    [Fact]
+    public async Task FiftyPagesStayWithinConfiguredAndProviderBounds()
+    {
+        const int pageCount = 50;
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateResponse(
+                request,
+                includeObservation: RequestContainsPage(request, pageCount)),
+            maximumMediaBytes: 4_096);
+        _ = await fixture.SeedAsync(
+            pageCount: pageCount,
+            additionalPageBytes: 700);
+
+        await fixture.ProcessUntilRunAsync();
+
+        Assert.True(fixture.Provider.Requests.Count >= 10);
+        Assert.Equal(
+            pageCount,
+            fixture.Provider.Requests.Sum(item => item.Media.Count));
+        Assert.All(fixture.Provider.Requests, request =>
+        {
+            Assert.True(request.Media.Sum(item => item.Bytes.Length)
+                <= 4_096);
+            Assert.InRange(request.Media.Count, 1, 32);
+            Assert.True(EstimateGeminiInlineBytes(request)
+                < 18L * 1024 * 1024);
+        });
+        await using var db = await fixture.CreateDbContextAsync();
+        Assert.Single(await db.GradingRuns.AsNoTracking().ToListAsync());
+        Assert.Single(await db.QuestionResults
+            .AsNoTracking()
+            .Where(item => item.TranscribedAnswer == "東京")
+            .ToListAsync());
+    }
+
+    [Fact]
+    public async Task PartialChunkRetryIsIdempotentAndCreatesOneRun()
+    {
+        const int pageCount = 8;
+        var providerCalls = 0;
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request =>
+            {
+                providerCalls++;
+                if (providerCalls == 2)
+                {
+                    throw new AiProviderException(
+                        AiFailureKind.TransientProvider,
+                        "gemini_temporarily_unavailable",
+                        isTransient: true);
+                }
+
+                return CreateResponse(
+                    request,
+                    includeObservation: RequestContainsPage(
+                        request,
+                        pageCount));
+            },
+            maximumMediaBytes: 2_048);
+        var seeded = await fixture.SeedAsync(
+            pageCount: pageCount,
+            additionalPageBytes: 700);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await fixture.RequeueRetryingInitialGradingJobAsync();
+        await fixture.ProcessUntilRunAsync();
+
+        await using (var db = await fixture.CreateDbContextAsync())
+        {
+            var requests = await db.AiRequests
+                .AsNoTracking()
+                .Where(item => item.EntityId == seeded.SubmissionId)
+                .ToListAsync();
+            Assert.Equal(
+                fixture.Provider.Requests.Count - 1,
+                requests.Count);
+            Assert.All(requests, item => Assert.Equal("succeeded", item.State));
+            var requestIds = requests.Select(item => item.Id).ToArray();
+            var reservations = await db.AiBudgetReservations
+                .AsNoTracking()
+                .Where(item => requestIds.Contains(item.AiRequestId))
+                .ToListAsync();
+            var usages = await db.AiUsage
+                .AsNoTracking()
+                .Where(item => requestIds.Contains(item.AiRequestId))
+                .ToListAsync();
+            Assert.Equal(requests.Count, reservations.Count);
+            Assert.Equal(requests.Count, usages.Count);
+            Assert.All(reservations, item =>
+                Assert.Equal("settled", item.State));
+            Assert.Equal(
+                usages.Sum(item => item.EstimatedUsdMicros),
+                reservations.Sum(item => item.ActualUsdMicros));
+            var run = await db.GradingRuns.AsNoTracking().SingleAsync();
+            using var aggregate = JsonDocument.Parse(
+                run.AiUsageAggregationJson!);
+            Assert.Equal(
+                usages.Sum(item => item.EstimatedUsdMicros),
+                aggregate.RootElement
+                    .GetProperty("estimatedUsdMicros")
+                    .GetInt64());
+            Assert.Equal(
+                usages.Sum(item => item.InputTokens ?? 0),
+                aggregate.RootElement.GetProperty("promptTokens").GetInt64());
+        }
+
+        var callsBeforeReplay = fixture.Provider.Requests.Count;
+        await fixture.RequeueAsync(seeded.JobId);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.Equal(callsBeforeReplay, fixture.Provider.Requests.Count);
+        await using var replayDb = await fixture.CreateDbContextAsync();
+        Assert.Single(await replayDb.GradingRuns.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task MultipleChunkObservationsBecomeExplicitReviewConflict()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateResponse(
+                request,
+                includeObservation: RequestChunkIndex(request) <= 2),
+            maximumMediaBytes: 1_024);
+        _ = await fixture.SeedAsync(
+            pageCount: 4,
+            additionalPageBytes: 700);
+
+        await fixture.ProcessUntilRunAsync();
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync();
+        var result = Assert.Single(run.QuestionResults);
+        Assert.Equal(0, result.ProposedPointsMilli);
+        Assert.Equal("review", result.Outcome);
+        Assert.Equal("manual", result.Method);
+        Assert.Equal("ai_chunk_observation_conflict", result.ReasonCode);
+        Assert.True(result.ReviewRequired);
+        Assert.NotNull(result.ModelResponseItemHash);
+    }
+
+    [Fact]
+    public async Task MultiChunkGeminiBatchAppliesAllChunksBeforeOneRun()
+    {
+        const int pageCount = 6;
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            enableBatch: true,
+            maximumMediaBytes: 2_048);
+        var seeded = await fixture.SeedAsync(
+            processingStrategy: "gemini_batch",
+            pageCount: pageCount,
+            additionalPageBytes: 700);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        for (var chunk = 0; chunk < 10; chunk++)
+        {
+            var staged = fixture.BatchProvider!.Requests[^1];
+            await fixture.StoreLatestBatchResponseAndQueueApplyAsync(
+                seeded,
+                includeObservation: RequestContainsPage(staged, pageCount));
+            Assert.True(await fixture.Worker.ProcessNextAsync());
+
+            await using (var db = await fixture.CreateDbContextAsync())
+            {
+                if (await db.GradingRuns.AsNoTracking().AnyAsync())
+                {
+                    break;
+                }
+            }
+
+            Assert.True(await fixture.Worker.ProcessNextAsync());
+        }
+
+        Assert.True(fixture.BatchProvider!.Requests.Count >= 3);
+        Assert.Empty(fixture.Provider.Requests);
+        Assert.All(fixture.BatchProvider.Requests, request =>
+        {
+            Assert.True(request.Media.Sum(item => item.Bytes.Length)
+                <= 2_048);
+            Assert.True(EstimateGeminiInlineBytes(request)
+                < 18L * 1024 * 1024);
+        });
+        await using var finalDb = await fixture.CreateDbContextAsync();
+        var requests = await finalDb.AiRequests
+            .AsNoTracking()
+            .Where(item => item.EntityId == seeded.SubmissionId)
+            .ToListAsync();
+        Assert.Equal(fixture.BatchProvider.Requests.Count, requests.Count);
+        Assert.All(requests, item => Assert.Equal("succeeded", item.State));
+        Assert.Single(await finalDb.GradingRuns.AsNoTracking().ToListAsync());
+        Assert.Equal(
+            requests.Count * 7L,
+            await finalDb.AiUsage.AsNoTracking()
+                .SumAsync(item => item.EstimatedUsdMicros));
+    }
+
+    [Fact]
+    public async Task MoreThanThreeHundredQuestionsFailBeforeMediaOrProvider()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(questionCount: 301);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        Assert.Empty(fixture.Provider.Requests);
+        Assert.Empty(fixture.ContentStore.OpenedHashes);
+        await using var db = await fixture.CreateDbContextAsync();
+        Assert.Empty(await db.AiRequests.AsNoTracking().ToListAsync());
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.Equal("failed", job.State);
+        Assert.Equal("ai_grading_template_invalid", job.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OversizedPromptFailsBeforeMediaOrProvider()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(
+            questionText: new string('問', 20_000));
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        Assert.Empty(fixture.Provider.Requests);
+        Assert.Empty(fixture.ContentStore.OpenedHashes);
+        await using var db = await fixture.CreateDbContextAsync();
+        Assert.Empty(await db.AiRequests.AsNoTracking().ToListAsync());
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.Equal("failed", job.State);
+        Assert.Equal("ai_grading_prompt_too_large", job.ErrorCode);
+    }
+
     private static AiProviderResponse CreateResponse(
         AiProviderRequest request,
         long proposedPointsMilli = 1_000,
-        string proposedOutcome = "correct")
+        string proposedOutcome = "correct",
+        bool includeObservation = true)
     {
         var questionId = ExtractQuestionId(request.UserInstruction);
+        var results = includeObservation
+            ? new object[]
+            {
+                new
+                {
+                    question_id = questionId,
+                    transcription = "東京",
+                    script_observed = KanjiScript,
+                    legibility = "clear",
+                    blank = false,
+                    proposed_outcome = proposedOutcome,
+                    proposed_points_milli = proposedPointsMilli,
+                    kanji_observation = "not_applicable",
+                    reason_code = "exact_match",
+                    confidence = 0.99,
+                    review_recommended = false,
+                    bounded_explanation = "Matches the supplied answer.",
+                },
+            }
+            : [];
         using var document = JsonDocument.Parse(
             JsonSerializer.Serialize(new
             {
                 schema_version = "answer_transcribe_grade_v1",
                 request_key = request.RequestKey,
-                results = new[]
-                {
-                    new
-                    {
-                        question_id = questionId,
-                        transcription = "東京",
-                        script_observed = KanjiScript,
-                        legibility = "clear",
-                        blank = false,
-                        proposed_outcome = proposedOutcome,
-                        proposed_points_milli = proposedPointsMilli,
-                        kanji_observation = "not_applicable",
-                        reason_code = "exact_match",
-                        confidence = 0.99,
-                        review_recommended = false,
-                        bounded_explanation = "Matches the supplied answer.",
-                    },
-                },
-                missing_question_ids = Array.Empty<string>(),
+                results,
+                missing_question_ids = includeObservation
+                    ? Array.Empty<string>()
+                    : [questionId],
                 unexpected_content = false,
             }));
         return new AiProviderResponse(
@@ -581,6 +1203,153 @@ public sealed class AiInitialGradingJobWorkerTests
                 ThinkingTokens: 0,
                 TotalTokens: 256),
             TimeSpan.FromMilliseconds(25));
+    }
+
+    private static AiProviderResponse CreateCombinedResponse(
+        AiProviderRequest request,
+        bool includeObservation = true,
+        bool invalidIdentity = false,
+        int evidenceMediaIndex = 0)
+    {
+        var questionId = ExtractQuestionId(request.UserInstruction);
+        var identityRequired = RequestIdentityRequired(request);
+        object? identity = identityRequired
+            ? invalidIdentity
+                ? (object)new
+                {
+                    transcribed_name = (string?)null,
+                    transcribed_student_number = (string?)null,
+                    legibility = "clear",
+                    confidence = 0.99,
+                    unexpected_content = false,
+                }
+                : (object)new
+                {
+                    transcribed_name = "大木 花子",
+                    transcribed_student_number = "S-001",
+                    legibility = "clear",
+                    confidence = 0.99,
+                    unexpected_content = false,
+                }
+            : null;
+        var results = includeObservation
+            ? new object[]
+            {
+                new
+                {
+                    question_id = questionId,
+                    evidence_media_index = evidenceMediaIndex,
+                    transcription = "東京",
+                    legibility = "clear",
+                    blank = false,
+                    proposed_outcome = "correct",
+                    proposed_points_milli = 1_000,
+                    confidence = 0.99,
+                },
+            }
+            : [];
+        using var document = JsonDocument.Parse(
+            JsonSerializer.Serialize(new
+            {
+                schema_version = "submission_analysis_v2",
+                request_key = request.RequestKey,
+                identity,
+                results,
+                missing_question_ids = includeObservation
+                    ? Array.Empty<string>()
+                    : [questionId],
+                unexpected_content = false,
+            }));
+        return new AiProviderResponse(
+            AiProviders.GeminiDirect,
+            AiInitialGradingJobWorker.ModelId,
+            AiInitialGradingJobWorker.ModelId,
+            "combined-response-1",
+            "STOP",
+            document.RootElement.Clone(),
+            new AiUsage(
+                PromptTokens: 240,
+                CachedTokens: 0,
+                OutputTokens: 20,
+                ThinkingTokens: 0,
+                TotalTokens: 260),
+            TimeSpan.FromMilliseconds(25));
+    }
+
+    private static bool RequestContainsPage(
+        AiProviderRequest request,
+        int pageNumber)
+    {
+        var start = request.UserInstruction.IndexOf('{');
+        using var document = JsonDocument.Parse(
+            request.UserInstruction[start..]);
+        return document.RootElement
+            .GetProperty("media")
+            .EnumerateArray()
+            .Any(item => item.GetProperty("page_number").GetInt32()
+                == pageNumber);
+    }
+
+    private static int RequestChunkIndex(AiProviderRequest request)
+    {
+        var start = request.UserInstruction.IndexOf('{');
+        using var document = JsonDocument.Parse(
+            request.UserInstruction[start..]);
+        return document.RootElement
+            .GetProperty("chunk_index")
+            .GetInt32();
+    }
+
+    private static bool RequestIdentityRequired(AiProviderRequest request)
+    {
+        var start = request.UserInstruction.IndexOf('{');
+        using var document = JsonDocument.Parse(
+            request.UserInstruction[start..]);
+        return document.RootElement
+            .GetProperty("identity_required")
+            .GetBoolean();
+    }
+
+    private static int MediaIndexForPage(
+        AiProviderRequest request,
+        int pageNumber)
+    {
+        var start = request.UserInstruction.IndexOf('{');
+        using var document = JsonDocument.Parse(
+            request.UserInstruction[start..]);
+        var index = 0;
+        foreach (var media in document.RootElement
+                     .GetProperty("media")
+                     .EnumerateArray())
+        {
+            if (media.GetProperty("page_number").GetInt32() == pageNumber)
+            {
+                return index;
+            }
+
+            index++;
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"Page {pageNumber} is not present in the provider request.");
+    }
+
+    private static long EstimateGeminiInlineBytes(
+        AiProviderRequest request)
+    {
+        var mediaBase64Bytes = request.Media.Aggregate(
+            0L,
+            static (total, item) => checked(
+                total + ((item.Bytes.Length + 2L) / 3L * 4L)));
+        return checked(
+            mediaBase64Bytes
+            + System.Text.Encoding.UTF8.GetByteCount(
+                request.SystemInstruction)
+            + System.Text.Encoding.UTF8.GetByteCount(
+                request.UserInstruction)
+            + System.Text.Encoding.UTF8.GetByteCount(
+                request.ResponseJsonSchema.GetRawText())
+            + 1024L * 1024L);
     }
 
     private static string ExtractQuestionId(string instruction)
@@ -641,7 +1410,8 @@ public sealed class AiInitialGradingJobWorkerTests
             bool enableBatch = false,
             string providerId = AiProviders.GeminiDirect,
             string modelId = AiInitialGradingJobWorker.ModelId,
-            IAiProviderFeaturePolicy? providerFeaturePolicy = null)
+            IAiProviderFeaturePolicy? providerFeaturePolicy = null,
+            int maximumMediaBytes = 17 * 1024 * 1024)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -680,7 +1450,10 @@ public sealed class AiInitialGradingJobWorkerTests
             services.AddSingleton<IAiPromptBundleCatalog>(
                 new ApprovedPromptBundleCatalog());
             services.AddSingleton(
-                Options.Create(new AiInitialGradingJobWorkerOptions()));
+                Options.Create(new AiInitialGradingJobWorkerOptions
+                {
+                    MaximumMediaBytes = maximumMediaBytes,
+                }));
             services.AddDbContextFactory<OokiGraderDbContext>(
                 options => options.UseSqlite(connection));
             services.AddSingleton<AiInitialGradingJobWorker>();
@@ -731,7 +1504,19 @@ public sealed class AiInitialGradingJobWorkerTests
             long monthlyHardUsdMicros = 10_000_000,
             string processingStrategy = "expedite_standard",
             string sessionPriority = "economy",
-            bool forceExpedite = false)
+            bool forceExpedite = false,
+            int pageCount = 1,
+            int additionalPageBytes = 700,
+            int questionCount = 1,
+            string? questionText = null,
+            bool gradingRuleFlags = false,
+            string questionType = "exact_short_text",
+            string gradingMode = "transcribe_then_rules",
+            string? rubricText = null,
+            bool requiresReviewAlways = false,
+            bool requiresIdentityReview = false,
+            bool includeRosterStudent = false,
+            bool assignedStudent = false)
         {
             var now = DateTimeOffset.UtcNow;
             var bundle = _services
@@ -744,6 +1529,9 @@ public sealed class AiInitialGradingJobWorkerTests
             var answerId = UlidId.New(now);
             var sessionId = UlidId.New(now);
             var submissionId = UlidId.New(now);
+            var studentId = includeRosterStudent || assignedStudent
+                ? UlidId.New(now)
+                : null;
             var pageId = UlidId.New(now);
             var answerArtifactId = UlidId.New(now);
             var answerReferenceId = UlidId.New(now);
@@ -754,6 +1542,8 @@ public sealed class AiInitialGradingJobWorkerTests
                     System.Security.Cryptography.SHA256.HashData(answerBytes))
                 .ToLowerInvariant();
             ContentStore.Add(answerHash, answerBytes);
+            var lastPageHash = answerHash;
+            var lastPageReferenceId = pageReferenceId;
 
             await using var db = await CreateDbContextAsync();
             db.TestTemplates.Add(new TestTemplateEntity
@@ -771,7 +1561,7 @@ public sealed class AiInitialGradingJobWorkerTests
                 TestTemplateId = templateId,
                 VersionNumber = 1,
                 State = "published",
-                TargetTotalPointsMilli = 1_000,
+                TargetTotalPointsMilli = checked(questionCount * 1_000L),
                 PipelineVersion = "template-v1",
                 PublishedByStaffUserId = staffId,
                 PublishedAt = now,
@@ -786,12 +1576,16 @@ public sealed class AiInitialGradingJobWorkerTests
                 LogicalQuestionId = UlidId.New(now),
                 OrderIndex = 0,
                 DisplayLabel = "Q1",
-                QuestionText = "日本の首都を書きなさい。",
-                QuestionType = "exact_short_text",
-                GradingMode = "transcribe_then_rules",
+                QuestionText = questionText ?? "日本の首都を書きなさい。",
+                QuestionType = questionType,
+                GradingMode = gradingMode,
                 MaxPointsMilli = 1_000,
                 PointIncrementMilli = 1_000,
                 AllowNonKanji = false,
+                RequiresCompleteAnswer = gradingRuleFlags,
+                AnswerOrderInsensitive = gradingRuleFlags,
+                RubricText = rubricText,
+                RequiresReviewAlways = requiresReviewAlways,
                 TeacherVerified = true,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -808,6 +1602,28 @@ public sealed class AiInitialGradingJobWorkerTests
                 CreatedAt = now,
                 UpdatedAt = now,
             });
+            for (var orderIndex = 1;
+                 orderIndex < questionCount;
+                 orderIndex++)
+            {
+                db.Questions.Add(new QuestionEntity
+                {
+                    Id = UlidId.New(now),
+                    TemplateVersionId = versionId,
+                    LogicalQuestionId = UlidId.New(now),
+                    OrderIndex = orderIndex,
+                    DisplayLabel = $"Q{orderIndex + 1}",
+                    QuestionText = $"追加問題 {orderIndex + 1}",
+                    QuestionType = "exact_short_text",
+                    GradingMode = "transcribe_then_rules",
+                    MaxPointsMilli = 1_000,
+                    PointIncrementMilli = 1_000,
+                    AllowNonKanji = false,
+                    TeacherVerified = true,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+            }
             db.TestSessions.Add(new TestSessionEntity
             {
                 Id = sessionId,
@@ -815,19 +1631,54 @@ public sealed class AiInitialGradingJobWorkerTests
                 TestDate = DateOnly.FromDateTime(now.UtcDateTime),
                 Priority = sessionPriority,
                 State = "open",
+                ExpectedRosterEnabled = studentId is not null,
                 CreatedByStaffUserId = staffId,
                 CreatedAt = now,
                 UpdatedAt = now,
             });
+            if (studentId is not null)
+            {
+                db.Students.Add(new StudentEntity
+                {
+                    Id = studentId,
+                    StudentNumber = "S-001",
+                    StudentNumberNormalized = "S-001",
+                    FamilyName = "大木",
+                    GivenName = "花子",
+                    FamilyNameNormalized = "大木",
+                    GivenNameNormalized = "花子",
+                    FamilyNameKana = "オオキ",
+                    GivenNameKana = "ハナコ",
+                    FamilyNameKanaNormalized = "オオキ",
+                    GivenNameKanaNormalized = "ハナコ",
+                    DisplayName = "大木 花子",
+                    SchoolClass = "6年A組",
+                    Status = "active",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+                db.SessionRosterMembers.Add(new SessionRosterMemberEntity
+                {
+                    TestSessionId = sessionId,
+                    StudentId = studentId,
+                    Expected = true,
+                });
+            }
+
             db.Submissions.Add(new SubmissionEntity
             {
                 Id = submissionId,
                 TestSessionId = sessionId,
-                State = "grading",
+                AssignedStudentId = assignedStudent ? studentId : null,
+                State = requiresIdentityReview
+                    ? "needs_name_review"
+                    : "grading",
                 ScanPayloadState = "scan_available",
-                AssignmentMethod = "none",
-                AssignmentEvidenceJson =
-                    """{"disposition":"unidentified"}""",
+                AssignmentMethod = assignedStudent ? "teacher" : "none",
+                AssignmentEvidenceJson = requiresIdentityReview
+                    || assignedStudent
+                        ? null
+                        : """{"disposition":"unidentified"}""",
                 AttemptNumber = 1,
                 CanonicalForSession = false,
                 UploadedByStaffUserId = staffId,
@@ -836,7 +1687,7 @@ public sealed class AiInitialGradingJobWorkerTests
                 PreprocessingPipelineVersion = "submission-normalize-v1",
                 PreprocessingManifestHash = new string('c', 64),
                 PreprocessingCompletedAt = now,
-                PageCount = 1,
+                PageCount = pageCount,
                 QualitySummaryJson =
                     """{"pipeline":"submission-normalize-v1","status":"accepted"}""",
                 CreatedAt = now,
@@ -929,6 +1780,87 @@ public sealed class AiInitialGradingJobWorkerTests
                 ProviderDisclosureAllowed = true,
                 CreatedAt = now,
             });
+
+            for (var pageNumber = 2; pageNumber <= pageCount; pageNumber++)
+            {
+                var additionalBytes = new byte[additionalPageBytes];
+                BitConverter.TryWriteBytes(
+                    additionalBytes.AsSpan(),
+                    pageNumber);
+                var additionalHash = Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(
+                            additionalBytes))
+                    .ToLowerInvariant();
+                ContentStore.Add(additionalHash, additionalBytes);
+                var additionalPageId = UlidId.New(now);
+                var additionalObjectId = UlidId.New(now);
+                var additionalReferenceId = UlidId.New(now);
+                var additionalThumbnailReferenceId = UlidId.New(now);
+                db.FileObjects.Add(new FileObjectEntity
+                {
+                    Id = additionalObjectId,
+                    Sha256 = additionalHash,
+                    Bytes = additionalBytes.Length,
+                    VerifiedMime = "image/png",
+                    Extension = ".png",
+                    RelativeObjectPath =
+                        $"scan/derived/{additionalHash}.png",
+                    StorageClass =
+                        ContentStorageClass.ManagedScanDerived.ToString(),
+                    RetentionClass = "submitted_scan_derived",
+                    ManagedScanBytes = true,
+                    State = "available",
+                    CreatedAt = now,
+                    VerifiedAt = now,
+                    ReferenceCountCache = 2,
+                });
+                db.FileReferences.AddRange(
+                    new FileReferenceEntity
+                    {
+                        Id = additionalReferenceId,
+                        FileObjectId = additionalObjectId,
+                        OwnerType = "submission_page",
+                        OwnerId = additionalPageId,
+                        Purpose = "normalized_page",
+                        RetentionAnchorAt = now,
+                        CreatedAt = now,
+                    },
+                    new FileReferenceEntity
+                    {
+                        Id = additionalThumbnailReferenceId,
+                        FileObjectId = additionalObjectId,
+                        OwnerType = "submission_page",
+                        OwnerId = additionalPageId,
+                        Purpose = "thumbnail",
+                        RetentionAnchorAt = now,
+                        CreatedAt = now,
+                    });
+                db.SubmissionPages.Add(new SubmissionPageEntity
+                {
+                    Id = additionalPageId,
+                    SubmissionId = submissionId,
+                    PageNumber = pageNumber,
+                    NormalizedFileReferenceId = additionalReferenceId,
+                    ThumbnailFileReferenceId =
+                        additionalThumbnailReferenceId,
+                    WidthPixels = 1_000,
+                    HeightPixels = 1_400,
+                    RotationDegrees = 0,
+                    SourceSha256 = additionalHash,
+                    NormalizedSha256 = additionalHash,
+                    DifferenceHash = "0123456789abcdef",
+                    PerceptualHash = "0123456789abcdef",
+                    QualityState = "accepted",
+                    BlurBasisPoints = 5_000,
+                    ContrastBasisPoints = 5_000,
+                    BrightnessBasisPoints = 5_000,
+                    InkCoverageBasisPoints = 5_000,
+                    AlignmentState = "not_configured",
+                    CreatedAt = now,
+                });
+                lastPageHash = additionalHash;
+                lastPageReferenceId = additionalReferenceId;
+            }
 
             string? privateHash = null;
             if (includePrivateNameCrop)
@@ -1090,15 +2022,33 @@ public sealed class AiInitialGradingJobWorkerTests
                 versionId,
                 questionId,
                 answerHash,
-                privateHash);
+                privateHash,
+                pageReferenceId,
+                lastPageHash,
+                lastPageReferenceId,
+                studentId);
         }
 
         public async Task StoreBatchResponseAndQueueApplyAsync(
             SeededAiWorkflow seeded,
             string? actualModel = null)
         {
-            var providerRequest = Assert.Single(BatchProvider!.Requests);
-            var response = CreateResponse(providerRequest) with
+            Assert.Single(BatchProvider!.Requests);
+            await StoreLatestBatchResponseAndQueueApplyAsync(
+                seeded,
+                includeObservation: true,
+                actualModel: actualModel);
+        }
+
+        public async Task StoreLatestBatchResponseAndQueueApplyAsync(
+            SeededAiWorkflow seeded,
+            bool includeObservation,
+            string? actualModel = null)
+        {
+            var providerRequest = BatchProvider!.Requests[^1];
+            var response = CreateResponse(
+                providerRequest,
+                includeObservation: includeObservation) with
             {
                 ActualModel = actualModel
                     ?? AiInitialGradingJobWorker.ModelId,
@@ -1112,7 +2062,9 @@ public sealed class AiInitialGradingJobWorkerTests
             await using var db = await CreateDbContextAsync();
             var request = await db.AiRequests
                 .Include(item => item.BatchRequest)
-                .SingleAsync(item => item.EntityId == seeded.SubmissionId);
+                .SingleAsync(item =>
+                    item.EntityId == seeded.SubmissionId
+                    && item.RequestKey == providerRequest.RequestKey);
             request.State = "response_ready";
             request.ProviderResponseId = response.ProviderResponseId;
             request.ActualModel = response.ActualModel;
@@ -1190,6 +2142,43 @@ public sealed class AiInitialGradingJobWorkerTests
             await db.SaveChangesAsync();
         }
 
+        public async Task ProcessUntilRunAsync(int maximumSteps = 250)
+        {
+            for (var step = 0; step < maximumSteps; step++)
+            {
+                await using (var db = await CreateDbContextAsync())
+                {
+                    if (await db.GradingRuns.AsNoTracking().AnyAsync())
+                    {
+                        return;
+                    }
+                }
+
+                if (!await Worker.ProcessNextAsync())
+                {
+                    break;
+                }
+            }
+
+            throw new Xunit.Sdk.XunitException(
+                "The grading run was not created within the bounded steps.");
+        }
+
+        public async Task RequeueRetryingInitialGradingJobAsync()
+        {
+            await using var db = await CreateDbContextAsync();
+            var job = await db.BackgroundJobs
+                .Where(item =>
+                    item.Type == AiInitialGradingJobWorker.JobType
+                    && item.State == "retry_waiting")
+                .OrderByDescending(item => item.CreatedAt)
+                .ThenByDescending(item => item.Id)
+                .FirstAsync();
+            job.State = "queued";
+            job.NextAttemptAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+            await db.SaveChangesAsync();
+        }
+
         public async ValueTask DisposeAsync()
         {
             await _services.DisposeAsync();
@@ -1204,7 +2193,11 @@ public sealed class AiInitialGradingJobWorkerTests
         string TemplateVersionId,
         string QuestionId,
         string AnswerCropSha256,
-        string? PrivateNameCropSha256);
+        string? PrivateNameCropSha256,
+        string FirstPageReferenceId,
+        string LastPageSha256,
+        string LastPageReferenceId,
+        string? StudentId);
 
     private sealed class BoundaryProbe
     {

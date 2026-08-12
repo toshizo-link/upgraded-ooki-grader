@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Host.Jobs;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 
 namespace OokiGrader.Host.Api;
@@ -27,8 +28,8 @@ internal static class CapabilitiesEndpoints
             .AsNoTracking()
             .Where(profile =>
                 profile.Active
-                && (profile.ApprovalState == "pilot_approved"
-                    || profile.ApprovalState == "production_approved"))
+                && AiTaskProfileRuntimePolicy.ReadyApprovalStates.Contains(
+                    profile.ApprovalState))
             .Select(profile => new ReadyProfile(
                 profile.TaskType,
                 profile.ProcessingStrategy,

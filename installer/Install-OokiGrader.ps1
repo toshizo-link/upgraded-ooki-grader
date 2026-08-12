@@ -39,6 +39,8 @@ param(
     })]
     [string] $ExpectedSignerThumbprint,
 
+    [switch] $AllowChecksumVerifiedOnSitePackage,
+
     [switch] $AllowUnsignedDevelopmentBuild
 )
 
@@ -48,10 +50,16 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+if ($AllowChecksumVerifiedOnSitePackage -and
+    $AllowUnsignedDevelopmentBuild) {
+    throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
+}
+$allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
+    $AllowUnsignedDevelopmentBuild
 $packageEvidence = Assert-OokiReleasePackage -PackageRoot $PackageRoot `
     -ExpectedVersion $Version `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $package = $packageEvidence.Root
 $install = Assert-OokiInstallRoot -InstallRoot $InstallRoot
 $data = Assert-OokiDataRoot -DataRoot $DataRoot
@@ -71,10 +79,10 @@ if (-not [IO.File]::Exists($toolSource)) {
 }
 $hostSignature = Assert-OokiAuthenticodeSignature -FilePath $hostSource `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $toolSignature = Assert-OokiAuthenticodeSignature -FilePath $toolSource `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 
 if (-not [string]::IsNullOrWhiteSpace($BackupRoot) -and
     -not $BackupDestinationEncryptionConfirmed) {
@@ -100,6 +108,8 @@ $preflightArguments = @{
     HttpsPort = $HttpsPort
     ServiceName = $ServiceName
     PassThru = $true
+    AllowChecksumVerifiedOnSitePackage = `
+        $AllowChecksumVerifiedOnSitePackage
     AllowUnsignedDevelopmentBuild = $AllowUnsignedDevelopmentBuild
     ExpectedSignerThumbprint = $ExpectedSignerThumbprint
 }
@@ -124,7 +134,7 @@ if ($null -ne $existingManifest -and (
     -not ([string] $existingManifest.serviceName).Equals(
         $ServiceName,
         [StringComparison]::Ordinal) -or
-    (-not $AllowUnsignedDevelopmentBuild -and
+    (-not $allowUnsignedPackage -and
         -not ([string] $existingManifest.expectedSignerThumbprint).Equals(
             $ExpectedSignerThumbprint,
             [StringComparison]::OrdinalIgnoreCase)))) {
@@ -161,11 +171,11 @@ if ($PSCmdlet.ShouldProcess(
     }
     Assert-OokiAuthenticodeSignature -FilePath $hostExecutable `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-        -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild |
+        -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage |
         Out-Null
     Assert-OokiAuthenticodeSignature -FilePath $toolExecutable `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-        -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild |
+        -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage |
         Out-Null
 
     if ($null -ne $existingService -and
@@ -260,8 +270,19 @@ if ($PSCmdlet.ShouldProcess(
         dataPreserved = $true
         hostSignature = $hostSignature.ExternalGate
         toolSignature = $toolSignature.ExternalGate
+        packageTrustMode = if ($AllowChecksumVerifiedOnSitePackage) {
+            'physically-controlled-checksum-verified-on-site-package'
+        } elseif ($AllowUnsignedDevelopmentBuild) {
+            'isolated-development-override'
+        } else {
+            'authenticode-signed-production-package'
+        }
         externalGates = @(
-            'The release signature must be independently verified against the controlled release channel.',
+            $(if ($AllowChecksumVerifiedOnSitePackage) {
+                'The technician must confirm physical custody of the unsigned on-site package; the complete checksum inventory was verified before installation.'
+            } else {
+                'The release signature must be independently verified against the controlled release channel.'
+            }),
             'Install the public CA on authorized peers and validate DNS/TLS from a peer.',
             'Complete a verified backup and isolated restore drill before production use.'
         )

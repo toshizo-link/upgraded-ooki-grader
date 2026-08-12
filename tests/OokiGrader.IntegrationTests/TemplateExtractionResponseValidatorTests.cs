@@ -119,6 +119,37 @@ public sealed class TemplateExtractionResponseValidatorTests
                 && issue.Blocking);
     }
 
+    [Fact]
+    public void CarriesIndependentPrintedGradingRuleSuggestions()
+    {
+        var validated = Validate(
+            detectedAnswerSlotCount: 1,
+            CreateQuestion(
+                "slot-1",
+                "A",
+                1,
+                "完答・順不同で答えなさい。",
+                "東京、大阪",
+                requiresCompleteAnswer: true,
+                answerOrderInsensitive: true));
+
+        var question = Assert.Single(Assert.Single(validated.Pages).Questions);
+        Assert.True(question.RequiresCompleteAnswerSuggestion);
+        Assert.True(question.AnswerOrderInsensitiveSuggestion);
+    }
+
+    [Fact]
+    public void LegacyV4QuestionWithoutNewFlagsDefaultsBothToFalse()
+    {
+        var validated = Validate(
+            detectedAnswerSlotCount: 1,
+            CreateLegacyV4Question());
+
+        var question = Assert.Single(Assert.Single(validated.Pages).Questions);
+        Assert.False(question.RequiresCompleteAnswerSuggestion);
+        Assert.False(question.AnswerOrderInsensitiveSuggestion);
+    }
+
     private static ValidatedTemplateExtraction Validate(
         int detectedAnswerSlotCount,
         params object[] questions)
@@ -170,7 +201,9 @@ public sealed class TemplateExtractionResponseValidatorTests
         string label,
         int ordinal,
         string questionText,
-        string answer) =>
+        string answer,
+        bool requiresCompleteAnswer = false,
+        bool answerOrderInsensitive = false) =>
         new
         {
             source_key = sourceKey,
@@ -187,10 +220,33 @@ public sealed class TemplateExtractionResponseValidatorTests
             accepted_variants = Array.Empty<string>(),
             suggested_points_milli = 1_000,
             allow_non_kanji_suggestion = false,
+            requires_complete_answer_suggestion = requiresCompleteAnswer,
+            answer_order_insensitive_suggestion = answerOrderInsensitive,
             requires_teacher_answer = false,
             confidence = 0.99,
             warnings = Array.Empty<string>(),
         };
+
+    private static object CreateLegacyV4Question() => new
+    {
+        source_key = "legacy-v4-slot-1",
+        display_label = "1",
+        question_text = "答えなさい。",
+        answer_slot_ordinal = 1,
+        answer_slot_count = 1,
+        filled_answer_removed = true,
+        is_embedded_fill_blank = false,
+        question_type = "exact_short_text",
+        expected_answer = "東京",
+        answer_provenance = "ai_proposed",
+        answer_source = (object?)null,
+        accepted_variants = Array.Empty<string>(),
+        suggested_points_milli = 1_000,
+        allow_non_kanji_suggestion = false,
+        requires_teacher_answer = false,
+        confidence = 0.99,
+        warnings = Array.Empty<string>(),
+    };
 
     private static bool IsMultiPlaceholderBlocker(
         TemplateExtractionReviewIssue issue) =>

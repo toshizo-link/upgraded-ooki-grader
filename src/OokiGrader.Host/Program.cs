@@ -15,6 +15,7 @@ using OokiGrader.Host.Common;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Host.Middleware;
 using OokiGrader.Host.Security;
+using OokiGrader.Host.Services;
 using OokiGrader.Host.Uploads;
 using OokiGrader.Infrastructure.Backups;
 using OokiGrader.Infrastructure.DependencyInjection;
@@ -22,6 +23,8 @@ using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Security;
 using OokiGrader.Preprocessing;
 using OokiGrader.Reports.Pdf;
+using OokiGrader.Domain.Templates;
+using OokiGrader.Domain.Grading;
 
 var (filteredArgs, externalConfigurationPath) =
     ExtractExternalConfigurationArgument(args);
@@ -72,6 +75,7 @@ builder.Services.AddSingleton<IUlidGenerator, UlidGenerator>();
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<ISessionTokenService, SessionTokenService>();
 builder.Services.AddSingleton<UploadLockProvider>();
+builder.Services.AddSingleton<ContentObjectLockProvider>();
 builder.Services.AddSingleton<IdempotencyLockProvider>();
 builder.Services.AddSingleton<ProtectedCursorCodec>();
 builder.Services.AddSingleton<IAiProviderFeaturePolicy>(
@@ -81,6 +85,19 @@ builder.Services.AddSingleton<IAiProviderFeaturePolicy>(
 builder.Services.AddSingleton<HostCertificateHealthService>();
 builder.Services.AddSingleton<RosterImportStore>();
 builder.Services.AddSingleton<IPreprocessingService, PreprocessingService>();
+builder.Services.AddSingleton<IPdfPageCountReader, LocalPdfPageCountReader>();
+builder.Services.AddSingleton<IPdfPageRangeExtractor, PdfPageRangeExtractor>();
+builder.Services.AddSingleton<ITemplateUnitPlanner, TemplateUnitPlanner>();
+builder.Services.AddSingleton<IOrderedScanAssemblyPlanner, OrderedScanAssemblyPlanner>();
+builder.Services.Configure<TemplateGenerationBatchOptions>(
+    builder.Configuration.GetSection("TemplateGeneration"));
+builder.Services.AddScoped<TemplateGenerationBatchService>();
+builder.Services.AddScoped<TemplateGenerationFinalizationService>();
+builder.Services.AddScoped<OrderedScanBatchService>();
+builder.Services.AddSingleton<OrderedScanAssemblyWorker>();
+builder.Services.AddHostedService(serviceProvider =>
+    serviceProvider.GetRequiredService<OrderedScanAssemblyWorker>());
+builder.Services.AddHostedService<OrderedScanBatchCleanupWorker>();
 builder.Services.Configure<SubmissionPreprocessingWorkerOptions>(
     builder.Configuration.GetSection("Workers:SubmissionPreprocessing"));
 builder.Services.AddSingleton<SubmissionPreprocessingWorker>();
@@ -119,17 +136,25 @@ if (standardAiEnabled)
 builder.Services.Configure<TemplateExtractionJobWorkerOptions>(
     builder.Configuration.GetSection("Workers:TemplateExtraction"));
 builder.Services.AddSingleton<TemplateExtractionJobWorker>();
+builder.Services.Configure<TemplateGenerationUnitJobWorkerOptions>(
+    builder.Configuration.GetSection("Workers:TemplateGenerationUnit"));
+builder.Services.AddSingleton<TemplateGenerationUnitJobWorker>();
 if (standardAiEnabled && templateGenerationEnabled)
 {
     builder.Services.AddHostedService(serviceProvider =>
         serviceProvider.GetRequiredService<TemplateExtractionJobWorker>());
+    builder.Services.AddHostedService(serviceProvider =>
+        serviceProvider.GetRequiredService<TemplateGenerationUnitJobWorker>());
 }
 builder.Services.AddSingleton<IResultPdfRenderer, ResultPdfRenderer>();
 builder.Services.AddSingleton<ResultPdfJobWorker>();
+builder.Services.AddSingleton<BulkTranscriptExportJobWorker>();
 if (pdfReportsEnabled)
 {
     builder.Services.AddHostedService(serviceProvider =>
         serviceProvider.GetRequiredService<ResultPdfJobWorker>());
+    builder.Services.AddHostedService(serviceProvider =>
+        serviceProvider.GetRequiredService<BulkTranscriptExportJobWorker>());
 }
 builder.Services.AddSingleton<IAiPromptBundleCatalog, ApprovedPromptBundleCatalog>();
 builder.Services.AddHttpClient<IAiProviderClient, GeminiDirectClient>(client =>
@@ -179,6 +204,16 @@ var databasePath = Path.Combine(dataRoot, "ooki-grader.db");
 var secretRoot = Path.Combine(dataRoot, "secrets");
 var dataProtectionKeyRoot = Path.Combine(dataRoot, "data-protection-keys");
 Directory.CreateDirectory(dataProtectionKeyRoot);
+var testingEnvironment = builder.Environment.IsEnvironment("Testing");
+var useDevelopmentDataProtectionSecretStore =
+    OperatingSystem.IsMacOS()
+    && builder.Environment.IsDevelopment()
+    && !testingEnvironment;
+if (useDevelopmentDataProtectionSecretStore)
+{
+    RestrictDevelopmentKeyRing(dataProtectionKeyRoot);
+}
+
 var dataProtection = builder.Services
     .AddDataProtection()
     .SetApplicationName("OokiGrader")
@@ -190,19 +225,39 @@ if (OperatingSystem.IsWindows())
 #pragma warning restore CA1416
 }
 else if (!builder.Environment.IsDevelopment()
-         && !builder.Environment.IsEnvironment("Testing"))
+         && !testingEnvironment)
 {
     throw new PlatformNotSupportedException(
         "Production secret and Data Protection key storage require Windows DPAPI.");
 }
 
-builder.Services.AddSingleton<IAiSecretStore>(_ =>
-    OperatingSystem.IsWindows()
-        ? new WindowsDpapiAiSecretStore(new WindowsDpapiAiSecretStoreOptions
+builder.Services.AddSingleton<IAiSecretStore>(serviceProvider =>
+{
+    if (testingEnvironment)
+    {
+        return new InMemoryAiSecretStore();
+    }
+
+    if (OperatingSystem.IsWindows())
+    {
+        return new WindowsDpapiAiSecretStore(new WindowsDpapiAiSecretStoreOptions
         {
             RootPath = secretRoot,
-        })
-        : new InMemoryAiSecretStore());
+        });
+    }
+
+    if (useDevelopmentDataProtectionSecretStore)
+    {
+        return new DataProtectionFileAiSecretStore(
+            new DataProtectionFileAiSecretStoreOptions
+            {
+                RootPath = secretRoot,
+            },
+            serviceProvider.GetRequiredService<IDataProtectionProvider>());
+    }
+
+    return new InMemoryAiSecretStore();
+});
 
 var configuredObjectStore = builder.Configuration["Data:ObjectStore"];
 var objectStoreRoot = string.IsNullOrWhiteSpace(configuredObjectStore)
@@ -318,6 +373,18 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true,
                 QueueLimit = 0,
             }));
+    options.AddPolicy(
+        BulkTranscriptExportEndpoints.CreateRateLimitPolicy,
+        _ => RateLimitPartition.GetTokenBucketLimiter(
+            "bulk-transcript-export-site",
+            _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 3,
+                TokensPerPeriod = 1,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                AutoReplenishment = true,
+                QueueLimit = 0,
+            }));
 });
 
 var app = builder.Build();
@@ -413,8 +480,10 @@ app.MapStudentsEndpoints();
 app.MapRosterImportEndpoints();
 app.MapTemplatesEndpoints();
 app.MapTemplateAutomationEndpoints();
+app.MapTemplateGenerationBatchEndpoints();
 app.MapTestSessionsEndpoints();
 app.MapUploadsEndpoints();
+app.MapOrderedScanBatchEndpoints();
 app.MapSubmissionsEndpoints();
 app.MapReviewEndpoints();
 app.MapResultsEndpoints();
@@ -423,6 +492,7 @@ app.MapBackupAdminEndpoints();
 app.MapAiAdminEndpoints();
 app.MapAiBatchAdminEndpoints();
 app.MapReportsEndpoints();
+app.MapBulkTranscriptExportEndpoints();
 app.MapEventsEndpoints();
 
 if (app.Environment.IsDevelopment())
@@ -493,6 +563,40 @@ static bool HasPhysicalReserve(string root, long reserveBytes)
             or ArgumentException)
     {
         return false;
+    }
+}
+
+static void RestrictDevelopmentKeyRing(string root)
+{
+    if (OperatingSystem.IsWindows())
+    {
+        throw new PlatformNotSupportedException(
+            "Development key-ring permissions are available only on Unix hosts.");
+    }
+
+    const UnixFileMode directoryMode =
+        UnixFileMode.UserRead
+        | UnixFileMode.UserWrite
+        | UnixFileMode.UserExecute;
+    const UnixFileMode fileMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+    {
+        throw new IOException(
+            "The development Data Protection key ring cannot be a symbolic link.");
+    }
+
+    File.SetUnixFileMode(root, directoryMode);
+    foreach (var path in Directory.EnumerateFiles(root))
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException(
+                "The development Data Protection key ring cannot contain symbolic links.");
+        }
+
+        File.SetUnixFileMode(path, fileMode);
     }
 }
 

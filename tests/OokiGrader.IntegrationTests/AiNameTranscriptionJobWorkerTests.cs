@@ -1,13 +1,16 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Ai.Gemini;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Domain.Grading;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
@@ -17,6 +20,30 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class AiNameTranscriptionJobWorkerTests
 {
+    [Fact]
+    public async Task OrderedOtherUsesOnlyFirstPageForNameDisclosure()
+    {
+        await using var fixture = await NameWorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(orderedPageCount: 4);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        var request = Assert.Single(fixture.Provider.Requests);
+        var media = Assert.Single(request.Media);
+        Assert.Equal(seeded.NameCropSha256, media.Sha256);
+        Assert.Equal([seeded.NameCropSha256], fixture.ContentStore.OpenedHashes);
+        Assert.Contains("identity-bearing page", request.UserInstruction);
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        Assert.Equal(4, submission.PageCount);
+        Assert.Equal(4, await db.SubmissionPages.CountAsync(
+            item => item.SubmissionId == seeded.SubmissionId));
+        Assert.Equal("needs_name_review", submission.State);
+    }
+
     [Fact]
     public async Task SendsCompletePagesAndPersistsLocalReviewCandidates()
     {
@@ -299,6 +326,32 @@ public sealed class AiNameTranscriptionJobWorkerTests
         Assert.Empty(await db.AiBudgetReservations.ToArrayAsync());
     }
 
+    [Theory]
+    [InlineData("queued")]
+    [InlineData("retry_waiting")]
+    [InlineData("leased")]
+    public async Task ReadyCombinedAnalysisNeverLeasesPreexistingLegacyJob(
+        string legacyState)
+    {
+        await using var fixture = await NameWorkerFixture.CreateAsync(
+            combinedAnalysisReady: true);
+        var seeded = await fixture.SeedAsync(readyCombinedProfile: true);
+        var legacyJobId = await fixture.AddLegacyJobAsync(
+            seeded.SubmissionId,
+            legacyState);
+
+        Assert.False(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var legacyJob = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == legacyJobId);
+        Assert.Equal(legacyState, legacyJob.State);
+        Assert.Empty(fixture.Provider.Requests);
+        Assert.Empty(fixture.ContentStore.OpenedHashes);
+        Assert.Empty(await db.AiRequests.AsNoTracking().ToArrayAsync());
+    }
+
     private static AiProviderResponse CreateResponse(
         AiProviderRequest request,
         InvalidResponseKind invalid = InvalidResponseKind.None)
@@ -380,7 +433,8 @@ public sealed class AiNameTranscriptionJobWorkerTests
         public FakeAiProvider Provider { get; }
 
         public static async Task<NameWorkerFixture> CreateAsync(
-            Func<AiProviderRequest, AiProviderResponse>? responseFactory = null)
+            Func<AiProviderRequest, AiProviderResponse>? responseFactory = null,
+            bool combinedAnalysisReady = false)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -407,6 +461,18 @@ public sealed class AiNameTranscriptionJobWorkerTests
             services.AddSingleton<IAiSecretStore>(secretStore);
             services.AddSingleton<IAiPromptBundleCatalog>(
                 new ApprovedPromptBundleCatalog());
+            if (combinedAnalysisReady)
+            {
+                services.AddSingleton<IConfiguration>(
+                    new ConfigurationBuilder()
+                        .AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["Features:Grading.Semantic"] = "true",
+                            ["Features:Ai.GeminiDirect"] = "true",
+                            ["Features:Ai.OpenRouter"] = "false",
+                        })
+                        .Build());
+            }
             services.AddSingleton(
                 Options.Create(new AiNameTranscriptionJobWorkerOptions()));
             services.AddDbContextFactory<OokiGraderDbContext>(
@@ -450,7 +516,9 @@ public sealed class AiNameTranscriptionJobWorkerTests
         public async Task<SeededNameWorkflow> SeedAsync(
             bool activeBudget = false,
             long dailyHardUsdMicros = 1_000_000,
-            long monthlyHardUsdMicros = 10_000_000)
+            long monthlyHardUsdMicros = 10_000_000,
+            int orderedPageCount = 0,
+            bool readyCombinedProfile = false)
         {
             var now = DateTimeOffset.UtcNow;
             var staffId = UlidId.New(now);
@@ -461,6 +529,9 @@ public sealed class AiNameTranscriptionJobWorkerTests
             var studentId = UlidId.New(now);
             var submissionId = UlidId.New(now);
             var pageId = UlidId.New(now);
+            var orderedBatchId = orderedPageCount > 0
+                ? UlidId.New(now)
+                : null;
             var bundle = _services
                 .GetRequiredService<IAiPromptBundleCatalog>()
                 .GetRequired(AiTaskTypes.NameTranscription);
@@ -475,6 +546,20 @@ public sealed class AiNameTranscriptionJobWorkerTests
             ContentStore.Add(answerHash, answerBytes);
 
             await using var db = await CreateDbContextAsync();
+            db.StaffUsers.Add(new StaffUserEntity
+            {
+                Id = staffId,
+                Username = "name.worker",
+                UsernameNormalized = "name.worker",
+                DisplayName = "Name worker fixture",
+                PasswordHash = "argon2id:test",
+                PasswordAlgorithm = "argon2id",
+                PasswordAlgorithmVersion = 1,
+                Status = "active",
+                CredentialChangedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
             db.TestTemplates.Add(new TestTemplateEntity
             {
                 Id = templateId,
@@ -563,6 +648,24 @@ public sealed class AiNameTranscriptionJobWorkerTests
                 Expected = true,
                 SeatLabel = "1",
             });
+            if (orderedBatchId is not null)
+            {
+                db.OrderedScanBatches.Add(new OrderedScanBatchEntity
+                {
+                    Id = orderedBatchId,
+                    TestSessionId = sessionId,
+                    ExpectedPageCount = orderedPageCount,
+                    Status = OrderedScanBatchStatus.Completed,
+                    AssemblyPolicyVersion =
+                        OrderedScanAssemblyPlanner.CurrentPolicyVersion,
+                    PlanHash = new string('b', 64),
+                    CreatedByStaffUserId = staffId,
+                    ExpiresAt = now.AddHours(1),
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    CompletedAt = now,
+                });
+            }
             db.Submissions.Add(new SubmissionEntity
             {
                 Id = submissionId,
@@ -574,11 +677,16 @@ public sealed class AiNameTranscriptionJobWorkerTests
                 CanonicalForSession = false,
                 UploadedByStaffUserId = staffId,
                 OriginalFileName = "completed-test.png",
+                OrderedScanBatchId = orderedBatchId,
+                OrderedScanGroupOrdinal = orderedBatchId is null ? null : 1,
+                AssemblyManifestHash = orderedBatchId is null
+                    ? null
+                    : new string('d', 64),
                 UploadCompletedAt = now,
                 PreprocessingPipelineVersion = "submission-normalize-v1",
                 PreprocessingManifestHash = new string('c', 64),
                 PreprocessingCompletedAt = now,
-                PageCount = 1,
+                PageCount = orderedPageCount > 0 ? orderedPageCount : 1,
                 QualitySummaryJson =
                     """{"pipeline":"submission-normalize-v1","status":"accepted"}""",
                 CreatedAt = now,
@@ -648,6 +756,67 @@ public sealed class AiNameTranscriptionJobWorkerTests
                 AlignmentState = "not_configured",
                 CreatedAt = now,
             });
+            for (var pageNumber = 2;
+                 pageNumber <= orderedPageCount;
+                 pageNumber++)
+            {
+                var additionalPageId = UlidId.New(now);
+                var additionalHash = Hash(
+                    Encoding.UTF8.GetBytes($"ordered-page-{pageNumber}"));
+                var additionalObject = AddFileObject(
+                    db,
+                    now,
+                    additionalHash,
+                    3 * 1024 * 1024,
+                    referenceCount: 2);
+                var additionalNormalizedReferenceId = UlidId.New(now);
+                var additionalThumbnailReferenceId = UlidId.New(now);
+                db.FileReferences.AddRange(
+                    new FileReferenceEntity
+                    {
+                        Id = additionalNormalizedReferenceId,
+                        FileObjectId = additionalObject.Id,
+                        OwnerType = "submission_page",
+                        OwnerId = additionalPageId,
+                        Purpose = "normalized_page",
+                        RetentionAnchorAt = now,
+                        CreatedAt = now,
+                    },
+                    new FileReferenceEntity
+                    {
+                        Id = additionalThumbnailReferenceId,
+                        FileObjectId = additionalObject.Id,
+                        OwnerType = "submission_page",
+                        OwnerId = additionalPageId,
+                        Purpose = "page_thumbnail",
+                        RetentionAnchorAt = now,
+                        CreatedAt = now,
+                    });
+                db.SubmissionPages.Add(new SubmissionPageEntity
+                {
+                    Id = additionalPageId,
+                    SubmissionId = submissionId,
+                    PageNumber = pageNumber,
+                    NormalizedFileReferenceId =
+                        additionalNormalizedReferenceId,
+                    ThumbnailFileReferenceId =
+                        additionalThumbnailReferenceId,
+                    WidthPixels = 1_000,
+                    HeightPixels = 1_400,
+                    RotationDegrees = 0,
+                    SourceSha256 = additionalHash,
+                    NormalizedSha256 = additionalHash,
+                    DifferenceHash = $"{pageNumber:x16}",
+                    PerceptualHash = $"{pageNumber:x16}",
+                    QualityState = "accepted",
+                    BlurBasisPoints = 5_000,
+                    ContrastBasisPoints = 5_000,
+                    BrightnessBasisPoints = 5_000,
+                    InkCoverageBasisPoints = 5_000,
+                    AlignmentState = "not_configured",
+                    CreatedAt = now,
+                });
+            }
             AddArtifact(
                 db,
                 now,
@@ -724,6 +893,38 @@ public sealed class AiNameTranscriptionJobWorkerTests
                 UpdatedAt = now,
                 Revision = 1,
             });
+            if (readyCombinedProfile)
+            {
+                var gradingBundle = _services
+                    .GetRequiredService<IAiPromptBundleCatalog>()
+                    .GetRequired(AiTaskTypes.InitialGrading);
+                db.AiTaskProfiles.Add(new AiTaskProfileEntity
+                {
+                    Id = UlidId.New(now),
+                    Name = "Combined submission analysis",
+                    TaskType = AiTaskTypes.InitialGrading,
+                    AiConnectionId = _connectionId,
+                    ConnectionRevision = 1,
+                    ModelId = AiInitialGradingJobWorker.ModelId,
+                    ProcessingStrategy = "expedite_standard",
+                    PromptVersion = gradingBundle.PromptVersion,
+                    SchemaVersion = gradingBundle.SchemaVersion,
+                    PromptContentHash = gradingBundle.ContentHash,
+                    ThinkingLevel = "minimal",
+                    MediaResolution = "high",
+                    MaxOutputTokens = 4_096,
+                    ConcurrencyLimit = 1,
+                    ApprovalState = "pilot_approved",
+                    AccuracyEvaluationId = "fixture-combined-evaluation",
+                    Active = true,
+                    ActivatedAt = now,
+                    ActivatedByStaffUserId = staffId,
+                    CreatedByStaffUserId = staffId,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    Revision = 1,
+                });
+            }
             db.PricingSnapshots.Add(new PricingSnapshotEntity
             {
                 Id = UlidId.New(now),
@@ -756,6 +957,40 @@ public sealed class AiNameTranscriptionJobWorkerTests
                 nameHash,
                 numberHash,
                 answerHash);
+        }
+
+        public async Task<string> AddLegacyJobAsync(
+            string submissionId,
+            string state)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var jobId = UlidId.New(now);
+            await using var db = await CreateDbContextAsync();
+            db.BackgroundJobs.Add(new BackgroundJobEntity
+            {
+                Id = jobId,
+                Type = AiNameTranscriptionJobWorker.JobType,
+                SchemaVersion = 1,
+                DeduplicationKey = $"submission:{submissionId}:name:legacy",
+                Priority = 10,
+                PayloadJson = JsonSerializer.Serialize(new
+                {
+                    submissionId,
+                    manifestHash = new string('c', 64),
+                }),
+                State = state,
+                AttemptCount = state == "leased" ? 1 : 0,
+                MaxAttempts = 8,
+                NextAttemptAt = now.AddMinutes(-5),
+                LeaseOwner = state == "leased" ? "retired-worker" : null,
+                LeaseExpiresAt = state == "leased"
+                    ? now.AddMinutes(-1)
+                    : null,
+                CreatedAt = now.AddMinutes(-10),
+                UpdatedAt = now.AddMinutes(-1),
+            });
+            await db.SaveChangesAsync();
+            return jobId;
         }
 
         public async Task<string> FindJobIdAsync()

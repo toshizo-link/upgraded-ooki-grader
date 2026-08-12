@@ -7,6 +7,7 @@ import {
 } from "react";
 import { Link, useNavigate, useParams } from "../router";
 import { Icon } from "../components/Icon";
+import { TemplateSessionMetadata } from "../components/TemplateSessionMetadata";
 import {
   Badge,
   Button,
@@ -21,12 +22,19 @@ import {
 } from "../components/ui";
 import { useApiQuery } from "../hooks/useApiQuery";
 import { ApiError, api, asPaged, newIdempotencyKey } from "../lib/api";
-import { classNames, formatDateTime, formatPoints } from "../lib/format";
+import {
+  classNames,
+  formatDateTime,
+  formatPoints,
+  toDateInput,
+} from "../lib/format";
 import type {
+  AnswerVariant,
   PagedResponse,
   TemplateQuestion,
   TemplateSource,
   TemplateSummary,
+  TestSessionSummary,
   TemplateValidation,
   TemplateVersionDetail,
 } from "../types";
@@ -59,6 +67,42 @@ interface ProposalVerificationResponse {
   skippedQuestionCount: number;
   issues: ProposalVerificationIssue[];
   questions: TemplateQuestion[];
+}
+
+interface PublishTestSessionResponse {
+  id: string;
+  name: string;
+  sessionName: string;
+  title: string;
+  templateId: string;
+  templateVersionId: string;
+  templateTitle: string;
+  templateVersionNumber: number;
+  subject: string | null;
+  gradeLabel: string | null;
+  category: string | null;
+  expectedSubmissionPageCount: number | null;
+  course: string | null;
+  templateCourse: string | null;
+  testDate: string;
+  classLabel: string | null;
+  priority: "economy" | "expedite";
+  state: string;
+  creationSource: string;
+  revision: number;
+}
+
+interface PublishAndStartReceptionResponse extends TemplateVersionDetail {
+  testSession: PublishTestSessionResponse;
+}
+
+interface PendingPublishReceptionRequest {
+  body: {
+    revision: number;
+    testDate: string;
+    classLabel?: string;
+  };
+  etag: string;
 }
 
 type SaveState = "saved" | "dirty" | "saving" | "conflict" | "error";
@@ -122,6 +166,144 @@ export function templateSourceRoleLabel(
   }
 }
 
+export function isKanjiRequired(
+  question: Pick<TemplateQuestion, "allowNonKanji">,
+) {
+  return !question.allowNonKanji;
+}
+
+export function allowNonKanjiForKanjiRequired(kanjiRequired: boolean) {
+  return !kanjiRequired;
+}
+
+export const DEFAULT_AI_RUBRIC =
+  "模範解答と照合し、内容と根拠が一致する場合のみ正解とします。部分的な一致、曖昧な表現、別解の可能性がある場合は点数を確定せず、先生の確認に回します。";
+
+export function defaultsForQuestionTypeChange(
+  question: Pick<
+    TemplateQuestion,
+    "questionType" | "gradingMode" | "rubric" | "requiresReviewAlways"
+  >,
+  questionType: string,
+) {
+  const gradingMode = questionType === "unsupported" ? "manual" : "ai_rubric";
+  const changes: Partial<TemplateQuestion> = {
+    questionType,
+    gradingMode,
+    requiresReviewAlways: false,
+  };
+  if (gradingMode === "ai_rubric" && !question.rubric?.trim()) {
+    changes.rubric = DEFAULT_AI_RUBRIC;
+  }
+  return changes;
+}
+
+export type GradingPreset =
+  | "ai"
+  | "exact"
+  | "numeric"
+  | "choice"
+  | "manual"
+  | "custom";
+
+export function gradingPresetForQuestion(
+  question: Pick<TemplateQuestion, "questionType" | "gradingMode">,
+): GradingPreset {
+  if (question.gradingMode === "ai_rubric") return "ai";
+  if (
+    question.questionType === "exact_short_text" &&
+    question.gradingMode === "transcribe_then_rules"
+  ) {
+    return "exact";
+  }
+  if (
+    question.questionType === "numeric" &&
+    question.gradingMode === "transcribe_then_rules"
+  ) {
+    return "numeric";
+  }
+  if (
+    question.questionType === "multiple_choice" &&
+    question.gradingMode === "transcribe_then_rules"
+  ) {
+    return "choice";
+  }
+  if (
+    question.questionType === "subjective" &&
+    question.gradingMode === "manual"
+  ) {
+    return "manual";
+  }
+  return "custom";
+}
+
+export function changesForGradingPreset(
+  question: Pick<
+    TemplateQuestion,
+    "questionType" | "gradingMode" | "rubric" | "requiresReviewAlways"
+  >,
+  preset: Exclude<GradingPreset, "custom">,
+): Partial<TemplateQuestion> {
+  if (preset === "ai") {
+    return defaultsForQuestionTypeChange(
+      question,
+      question.questionType === "unsupported"
+        ? "subjective"
+        : question.questionType,
+    );
+  }
+  const byPreset = {
+    exact: {
+      questionType: "exact_short_text",
+      gradingMode: "transcribe_then_rules",
+    },
+    numeric: {
+      questionType: "numeric",
+      gradingMode: "transcribe_then_rules",
+    },
+    choice: {
+      questionType: "multiple_choice",
+      gradingMode: "transcribe_then_rules",
+    },
+    manual: {
+      questionType: "subjective",
+      gradingMode: "manual",
+    },
+  } as const;
+  return { ...byPreset[preset], requiresReviewAlways: false };
+}
+
+export function newQuestionPayload(
+  questionCount: number,
+  defaultPointsMilli = 1000,
+) {
+  const order = questionCount + 1;
+  return {
+    displayLabel: `問${order}`,
+    order,
+    questionText: "",
+    questionType: "exact_short_text",
+    gradingMode: "ai_rubric",
+    maxPointsMilli: defaultPointsMilli,
+    pointIncrementMilli: defaultPointIncrementMilli(defaultPointsMilli),
+    allowNonKanji: false,
+    requiresCompleteAnswer: false,
+    answerOrderInsensitive: false,
+    acceptedAnswers: [],
+    rubric: DEFAULT_AI_RUBRIC,
+    requiresReviewAlways: false,
+  };
+}
+
+export function defaultPointIncrementMilli(maxPointsMilli: number) {
+  let left = Math.max(1, Math.round(maxPointsMilli));
+  let right = 1000;
+  while (right !== 0) {
+    [left, right] = [right, left % right];
+  }
+  return left;
+}
+
 function localDraftKey(
   templateId: string,
   versionId: string,
@@ -154,7 +336,11 @@ function readLocalDraft(
       ...value,
       question: {
         ...value.question,
-        pointIncrementMilli: value.question.pointIncrementMilli ?? 1,
+        pointIncrementMilli: value.question.pointIncrementMilli ?? 1000,
+        requiresCompleteAnswer:
+          value.question.requiresCompleteAnswer ?? false,
+        answerOrderInsensitive:
+          value.question.answerOrderInsensitive ?? false,
       },
     };
   } catch {
@@ -171,11 +357,94 @@ function questionCanonical(question: TemplateQuestion) {
   );
 }
 
-function questionVariants(question: TemplateQuestion) {
+function isCanonicalVariant(answer: AnswerVariant) {
+  return answer.variantType === "canonical";
+}
+
+function isAcceptedVariant(answer: AnswerVariant) {
+  return (
+    !answer.variantType ||
+    answer.variantType === "accepted" ||
+    answer.variantType === "equivalent"
+  );
+}
+
+function isPhoneticExceptionVariant(answer: AnswerVariant) {
+  return (
+    answer.variantType === "explicitException" ||
+    answer.variantType === "phonetic_exception"
+  );
+}
+
+export function questionAcceptedVariants(question: TemplateQuestion) {
   return question.acceptedAnswers
-    .filter((answer) => answer.variantType !== "canonical")
+    .filter(isAcceptedVariant)
     .map((answer) => answer.text)
     .join("\n");
+}
+
+export function questionPhoneticExceptions(question: TemplateQuestion) {
+  return question.acceptedAnswers
+    .filter(isPhoneticExceptionVariant)
+    .map((answer) => answer.text)
+    .join("\n");
+}
+
+function answerLines(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function editedVariants(
+  value: string,
+  existing: AnswerVariant[],
+  newVariantType: "accepted" | "explicitException",
+) {
+  const unused = [...existing];
+  return answerLines(value).map((text): AnswerVariant => {
+    const existingIndex = unused.findIndex((answer) => answer.text === text);
+    if (existingIndex < 0) return { text, variantType: newVariantType };
+    const [matched] = unused.splice(existingIndex, 1);
+    return { ...matched!, text };
+  });
+}
+
+export function answersForQuestionEdit(
+  question: TemplateQuestion,
+  canonical: string,
+  acceptedVariantText: string,
+  phoneticExceptionText: string,
+): AnswerVariant[] {
+  const canonicalAnswer = question.acceptedAnswers.find(isCanonicalVariant);
+  const acceptedAnswers = question.acceptedAnswers.filter(isAcceptedVariant);
+  const phoneticExceptions = question.acceptedAnswers.filter(
+    isPhoneticExceptionVariant,
+  );
+  const otherTypedAnswers = question.acceptedAnswers.filter(
+    (answer) =>
+      !isCanonicalVariant(answer) &&
+      !isAcceptedVariant(answer) &&
+      !isPhoneticExceptionVariant(answer),
+  );
+
+  return [
+    ...(canonical.trim()
+      ? [
+          canonicalAnswer?.text === canonical
+            ? { ...canonicalAnswer, text: canonical }
+            : { text: canonical, variantType: "canonical" as const },
+        ]
+      : []),
+    ...editedVariants(acceptedVariantText, acceptedAnswers, "accepted"),
+    ...editedVariants(
+      phoneticExceptionText,
+      phoneticExceptions,
+      "explicitException",
+    ),
+    ...otherTypedAnswers,
+  ];
 }
 
 export function needsProposalVerification(question: TemplateQuestion) {
@@ -238,6 +507,13 @@ export function needsIndividualReview(question: TemplateQuestion) {
   return !questionCanonical(question).trim();
 }
 
+export function isTemplateEditorReadOnly(
+  template: Pick<TemplateSummary, "lifecycleState">,
+  version: Pick<TemplateVersionDetail, "state">,
+) {
+  return version.state !== "draft" || template.lifecycleState === "archived";
+}
+
 export function TemplateEditorPage() {
   const { templateId = "", versionId = "" } = useParams();
   const navigate = useNavigate();
@@ -295,13 +571,20 @@ export function TemplateEditorPage() {
   const [bulkVerification, setBulkVerification] =
     useState<ProposalVerificationResponse>();
   const [verifyingQuestionId, setVerifyingQuestionId] = useState("");
-  const [publishOpen, setPublishOpen] = useState(false);
-  const [publishing, setPublishing] = useState(false);
+  const [receptionOpen, setReceptionOpen] = useState(false);
+  const [startingReception, setStartingReception] = useState(false);
+  const [receptionDetails, setReceptionDetails] = useState({
+    testDate: toDateInput(),
+    classLabel: "",
+  });
   const [retryingGeneration, setRetryingGeneration] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [recoveryDraft, setRecoveryDraft] = useState<LocalQuestionDraft>();
   const draftRef = useRef<TemplateQuestion | undefined>(undefined);
   const completedGenerationRef = useRef("");
+  const receptionIdempotencyKeyRef = useRef("");
+  const pendingPublishReceptionRef =
+    useRef<PendingPublishReceptionRequest | undefined>(undefined);
 
   useEffect(() => {
     const data = editor.data;
@@ -436,6 +719,7 @@ export function TemplateEditorPage() {
   function changeDraft(changes: Partial<TemplateQuestion>) {
     if (!draft) return;
     setDraft({ ...draft, ...changes });
+    setBulkVerification(undefined);
     setSaveState("dirty");
     setValidation(undefined);
   }
@@ -476,19 +760,10 @@ export function TemplateEditorPage() {
               displayLabel: `${copyFrom.displayLabel}（コピー）`,
               order: questions.length + 1,
             }
-          : {
-              displayLabel: `問${questions.length + 1}`,
-              order: questions.length + 1,
-              questionText: "",
-              questionType: "exact_short_text",
-              gradingMode: "transcribe_then_rules",
-              maxPointsMilli:
-                editor.data?.version.defaultPointsMilli ?? 1000,
-              pointIncrementMilli: 1,
-              allowNonKanji: false,
-              acceptedAnswers: [],
-              requiresReviewAlways: false,
-            },
+          : newQuestionPayload(
+              questions.length,
+              editor.data?.version.defaultPointsMilli ?? 1000,
+            ),
         { idempotencyKey: newIdempotencyKey() },
       );
       setQuestions((current) => [...current, created]);
@@ -554,7 +829,7 @@ export function TemplateEditorPage() {
     }
   }
 
-  async function verifyNonBlockingProposals() {
+  async function verifyAllProposals() {
     setBulkVerifying(true);
     setActionError(undefined);
     try {
@@ -567,7 +842,7 @@ export function TemplateEditorPage() {
       const result = await api.post<ProposalVerificationResponse>(
         `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions:verifyProposals`,
         {
-          selectionMode: "allNonBlocking",
+          selectionMode: "all",
           revision: latest.revision,
         },
         {
@@ -580,16 +855,22 @@ export function TemplateEditorPage() {
       setBulkVerification(result);
       setBulkVerifyOpen(false);
       setValidation(undefined);
+      const firstSkippedQuestionId = result.issues.find(
+        (issue) => issue.blocking !== false && issue.questionId,
+      )?.questionId;
       const nextQuestion =
+        updated.find((question) => question.id === firstSkippedQuestionId) ||
         updated.find(needsIndividualReview) ||
         updated.find(needsProposalVerification) ||
         updated[0];
       setSelectedId(nextQuestion?.id || "");
-      if (!updated.some(needsIndividualReview)) setShowAllQuestions(true);
+      setShowAllQuestions(
+        result.skippedQuestionCount === 0 || !updated.some(needsIndividualReview),
+      );
       editor.reload();
     } catch (reason) {
       setActionError(
-        errorMessage(reason, "安全な提案を一括確認できませんでした。"),
+        errorMessage(reason, "すべての問題を確認できませんでした。"),
       );
       setBulkVerifyOpen(false);
     } finally {
@@ -625,6 +906,7 @@ export function TemplateEditorPage() {
         draftRef.current = nextQuestion;
       }
       setSaveState("saved");
+      setBulkVerification(undefined);
       setValidation(undefined);
     } catch (reason) {
       setActionError(errorMessage(reason, "この問題を確認済みにできませんでした。"));
@@ -633,7 +915,25 @@ export function TemplateEditorPage() {
     }
   }
 
-  async function validateForPublish() {
+  function openReception() {
+    if (!receptionIdempotencyKeyRef.current) {
+      receptionIdempotencyKeyRef.current = newIdempotencyKey();
+    }
+    setReceptionOpen(true);
+  }
+
+  function closeReception() {
+    receptionIdempotencyKeyRef.current = "";
+    pendingPublishReceptionRef.current = undefined;
+    setReceptionOpen(false);
+  }
+
+  async function prepareReception() {
+    if (editor.data?.version.state === "published") {
+      setActionError(undefined);
+      openReception();
+      return;
+    }
     setValidating(true);
     setActionError(undefined);
     try {
@@ -642,10 +942,10 @@ export function TemplateEditorPage() {
         {},
       );
       setValidation(report);
-      if (report.valid) setPublishOpen(true);
+      if (report.valid) openReception();
     } catch (reason) {
       setActionError(
-        errorMessage(reason, "公開前の確認を完了できませんでした。"),
+        errorMessage(reason, "受付開始前の確認を完了できませんでした。"),
       );
     } finally {
       setValidating(false);
@@ -680,30 +980,77 @@ export function TemplateEditorPage() {
     }
   }
 
-  async function publish() {
-    setPublishing(true);
+  async function startReception() {
+    setStartingReception(true);
     setActionError(undefined);
     try {
-      const latest = await api.get<TemplateVersionDetail>(
-        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}`,
-      );
-      await api.post(
-        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}:publish`,
-        { revision: latest.revision },
-        {
-          idempotencyKey: newIdempotencyKey(),
-          etag: `"rev-${latest.revision}"`,
-        },
-      );
-      setPublishOpen(false);
-      navigate("/templates", {
-        state: { message: "テストひな形を公開しました。" },
-      });
+      const idempotencyKey =
+        receptionIdempotencyKeyRef.current || newIdempotencyKey();
+      receptionIdempotencyKeyRef.current = idempotencyKey;
+      let session: TestSessionSummary;
+      if (editor.data?.version.state === "published") {
+        session = await api.post<TestSessionSummary>(
+          "/test-sessions",
+          {
+            templateVersionId: versionId,
+            testDate: receptionDetails.testDate,
+            classLabel: receptionDetails.classLabel.trim() || undefined,
+            openImmediately: true,
+          },
+          { idempotencyKey },
+        );
+      } else {
+        let request = pendingPublishReceptionRef.current;
+        if (!request) {
+          const latest = await api.get<TemplateVersionDetail>(
+            `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}`,
+          );
+          if (latest.revision === undefined) {
+            throw new Error("最新版の改訂番号を取得できませんでした。");
+          }
+          request = {
+            body: {
+              revision: latest.revision,
+              testDate: receptionDetails.testDate,
+              classLabel: receptionDetails.classLabel.trim() || undefined,
+            },
+            etag: `"rev-${latest.revision}"`,
+          };
+          pendingPublishReceptionRef.current = request;
+        }
+        const result = await api.post<PublishAndStartReceptionResponse>(
+          `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}:publish`,
+          request.body,
+          {
+            idempotencyKey,
+            etag: request.etag,
+          },
+        );
+        if (!result.testSession?.id) {
+          throw new Error(
+            "テスト実施の作成結果を確認できませんでした。一覧を更新してください。",
+          );
+        }
+        session = result.testSession;
+      }
+      receptionIdempotencyKeyRef.current = "";
+      pendingPublishReceptionRef.current = undefined;
+      setReceptionOpen(false);
+      navigate(`/sessions/${encodeURIComponent(session.id)}`);
     } catch (reason) {
-      setActionError(errorMessage(reason, "公開できませんでした。"));
-      setPublishOpen(false);
+      if (reason instanceof ApiError) {
+        receptionIdempotencyKeyRef.current = "";
+        pendingPublishReceptionRef.current = undefined;
+      }
+      const rejectedValidation = validationFromPublishError(reason, questions);
+      if (rejectedValidation) {
+        setValidation(rejectedValidation);
+      } else {
+        setActionError(errorMessage(reason, "答案受付を開始できませんでした。"));
+      }
+      setReceptionOpen(false);
     } finally {
-      setPublishing(false);
+      setStartingReception(false);
     }
   }
 
@@ -722,7 +1069,18 @@ export function TemplateEditorPage() {
     );
   }
 
-  const isReadOnly = editor.data.version.state === "published";
+  const isArchived = editor.data.template.lifecycleState === "archived";
+  const isDraftVersion = editor.data.version.state === "draft";
+  const isPublishedVersion = editor.data.version.state === "published";
+  const receptionLifecycleAvailable = !["archived", "retired"].includes(
+    editor.data.template.lifecycleState,
+  );
+  const canStartReception =
+    receptionLifecycleAvailable && (isDraftVersion || isPublishedVersion);
+  const isReadOnly = isTemplateEditorReadOnly(
+    editor.data.template,
+    editor.data.version,
+  );
   const sources = editor.data.version.sources || [];
   const activeSource = sources.find(
     (source) => source.id === selectedSourceId,
@@ -736,9 +1094,9 @@ export function TemplateEditorPage() {
   );
   const proposalQuestions = questions.filter(needsProposalVerification);
   const individualReviewQuestions = questions.filter(needsIndividualReview);
-  const nonBlockingProposalCount = proposalQuestions.filter(
-    (question) => !needsIndividualReview(question),
-  ).length;
+  const bulkSkippedIssues = (bulkVerification?.issues || []).filter(
+    (issue) => issue.blocking !== false,
+  );
   const visibleQuestions =
     showAllQuestions || isReadOnly
       ? questions
@@ -791,16 +1149,26 @@ export function TemplateEditorPage() {
           <span className="editor-total">
             合計 <strong>{formatPoints(totalPoints)}</strong>点
           </span>
-          {!isReadOnly ? (
+          {canStartReception ? (
             <Button
-              onClick={() => void validateForPublish()}
-              disabled={validating || saveState !== "saved"}
+              onClick={() => void prepareReception()}
+              disabled={
+                validating || (isDraftVersion && saveState !== "saved")
+              }
             >
-              {validating ? "確認中…" : "公開する"}
+              {validating ? "確認中…" : "受付を開始"}
             </Button>
           ) : null}
         </div>
       </header>
+
+      {isArchived ? (
+        <InlineAlert tone="info" title="このひな形はアーカイブされています">
+          <p>
+            保存済みの版と採点基準を確認できます。編集や答案受付を再開する場合は、ひな形一覧の「アーカイブ」表示から復元してください。
+          </p>
+        </InlineAlert>
+      ) : null}
 
       {saveState === "conflict" ? (
         <InlineAlert
@@ -815,7 +1183,7 @@ export function TemplateEditorPage() {
           <p>自動的に上書きせず、サーバー上の最新版を保持しています。</p>
         </InlineAlert>
       ) : null}
-      {recoveryDraft ? (
+      {recoveryDraft && !isReadOnly ? (
         <InlineAlert
           tone="warning"
           title="この端末に未送信の下書きがあります"
@@ -845,13 +1213,15 @@ export function TemplateEditorPage() {
           tone="danger"
           title="変更を保存できませんでした"
           action={
-            <Button
-              variant="secondary"
-              size="small"
-              onClick={() => setSaveState("dirty")}
-            >
-              再試行
-            </Button>
+            !isReadOnly ? (
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={() => setSaveState("dirty")}
+              >
+                再試行
+              </Button>
+            ) : undefined
           }
         >
           <p>入力内容はこの画面に残っています。</p>
@@ -878,7 +1248,7 @@ export function TemplateEditorPage() {
           tone="danger"
           title="AI下書き作成を完了できませんでした"
           action={
-            questions.length === 0 ? (
+            !isReadOnly && questions.length === 0 ? (
               <Button
                 size="small"
                 variant="secondary"
@@ -892,44 +1262,64 @@ export function TemplateEditorPage() {
         >
           <p>
             {generation.data.detail ||
-              "資料は保存されています。もう一度試しても失敗する場合は、右上の＋から問題を追加できます。"}
+              (isReadOnly
+                ? "資料は保存されています。編集を再開する場合は、ひな形を復元してください。"
+                : "資料は保存されています。もう一度試しても失敗する場合は、右上の＋から問題を追加できます。")}
           </p>
         </InlineAlert>
       ) : null}
-      {!isReadOnly &&
-      questions.length > 0 &&
-      !["queued", "running"].includes(generation.data?.state || "") &&
-      proposalQuestions.length > 0 ? (
+      {!isReadOnly && bulkVerification ? (
         <InlineAlert
-          tone={individualReviewQuestions.length ? "warning" : "info"}
+          tone={bulkVerification.skippedQuestionCount > 0 ? "warning" : "success"}
           title={
-            bulkVerification
-              ? `${bulkVerification.verifiedQuestionCount}問を確認済み。${individualReviewQuestions.length}問は個別確認が必要です`
-              : individualReviewQuestions.length
-              ? `${individualReviewQuestions.length}問は個別確認が必要です`
-              : `${nonBlockingProposalCount}問のAI下書きができました`
-          }
-          action={
-            nonBlockingProposalCount > 0 ? (
-              <Button
-                size="small"
-                onClick={() => setBulkVerifyOpen(true)}
-                disabled={bulkVerifying || saveState !== "saved"}
-              >
-                まとめて確認
-              </Button>
-            ) : undefined
+            bulkVerification.skippedQuestionCount > 0
+              ? `${bulkVerification.verifiedQuestionCount}問を確認済み。${bulkVerification.skippedQuestionCount}問は確認できませんでした`
+              : `${bulkVerification.verifiedQuestionCount}問をすべて確認済みにしました`
           }
         >
           <p>
-            {bulkVerification
-              ? "残りは左の「要修正」から順に確認してください。"
-              : "元の資料と問題文・正解・配点を見比べてください。"}
-            {!bulkVerification && nonBlockingProposalCount > 0
-              ? ` 警告のない${nonBlockingProposalCount}問はまとめて確認済みにできます。`
-              : !bulkVerification
-                ? " 左の「要修正」から順に確認できます。"
-                : ""}
+            {bulkVerification.skippedQuestionCount > 0
+              ? "入力が不足している問題は確認済みにしていません。最初の問題を表示しました。内容を直してから、もう一度「すべての問題を確認」を押してください。"
+              : "受付開始前の問題確認が完了しました。「受付を開始」から実施日を入力できます。"}
+          </p>
+          {bulkSkippedIssues.length > 0 ? (
+            <ul className="proposal-verification-issues">
+              {bulkSkippedIssues.map((issue, index) => (
+                <li key={`${issue.code || "issue"}-${issue.questionId || index}`}>
+                  {issue.questionId ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(issue.questionId!)}
+                    >
+                      {issue.message}
+                    </button>
+                  ) : (
+                    issue.message
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </InlineAlert>
+      ) : !isReadOnly &&
+        questions.length > 0 &&
+        !["queued", "running"].includes(generation.data?.state || "") &&
+        proposalQuestions.length > 0 ? (
+        <InlineAlert
+          tone="info"
+          title={`${proposalQuestions.length}問の内容を確認してください`}
+          action={
+            <Button
+              size="small"
+              onClick={() => setBulkVerifyOpen(true)}
+              disabled={bulkVerifying || saveState !== "saved"}
+            >
+              すべての問題を確認
+            </Button>
+          }
+        >
+          <p>
+            元の資料と問題文・正解・配点を見比べます。入力がそろっている問題は一度に確認済みにでき、不足がある問題だけ残ります。
           </p>
         </InlineAlert>
       ) : null}
@@ -938,18 +1328,20 @@ export function TemplateEditorPage() {
           <div>
             <Icon name="alert" />
             <div>
-              <strong>公開前に{validation.issues.length}件を確認してください</strong>
+              <strong>受付開始前に{validation.issues.length}件を確認してください</strong>
               <ul>
                 {validation.issues.map((issue) => (
                   <li key={`${issue.code}-${issue.questionId || ""}`}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        issue.questionId && setSelectedId(issue.questionId)
-                      }
-                    >
-                      {issue.message}
-                    </button>
+                    {issue.questionId ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(issue.questionId!)}
+                      >
+                        {issue.message}
+                      </button>
+                    ) : (
+                      <span>{issue.message}</span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -1084,7 +1476,9 @@ export function TemplateEditorPage() {
               description={
                 questions.length
                   ? "「すべて」に戻すと、AIが作成した問題を確認できます。"
-                  : "AIの作成完了を待つか、右上の＋から追加してください。"
+                  : isReadOnly
+                    ? "この版には問題が登録されていません。"
+                    : "AIの作成完了を待つか、右上の＋から追加してください。"
               }
               icon={questions.length ? "check" : "templates"}
             />
@@ -1204,9 +1598,9 @@ export function TemplateEditorPage() {
       </div>
 
       <Modal
-        open={bulkVerifyOpen}
+        open={bulkVerifyOpen && !isReadOnly}
         onClose={() => !bulkVerifying && setBulkVerifyOpen(false)}
-        title={`警告のない${nonBlockingProposalCount}問をまとめて確認しますか？`}
+        title="すべての問題を確認済みにしますか？"
         description="元の資料とAIの下書きを見比べたあとに実行してください。"
         size="medium"
         footer={
@@ -1219,84 +1613,118 @@ export function TemplateEditorPage() {
               戻る
             </Button>
             <Button
-              onClick={() => void verifyNonBlockingProposals()}
-              disabled={bulkVerifying || nonBlockingProposalCount === 0}
+              onClick={() => void verifyAllProposals()}
+              disabled={
+                isReadOnly ||
+                bulkVerifying ||
+                proposalQuestions.length === 0
+              }
             >
-              {bulkVerifying
-                ? "確認しています…"
-                : `${nonBlockingProposalCount}問を確認済みにする`}
+              {bulkVerifying ? "確認しています…" : "すべての問題を確認"}
             </Button>
           </>
         }
       >
         <dl className="proposal-verification-summary">
           <div>
-            <dt>一括確認の候補</dt>
-            <dd>{nonBlockingProposalCount}問</dd>
+            <dt>確認する問題</dt>
+            <dd>{proposalQuestions.length}問</dd>
           </div>
           <div>
-            <dt>個別確認</dt>
-            <dd>{individualReviewQuestions.length}問</dd>
+            <dt>入力不足がある問題</dt>
+            <dd>確認せず残す</dd>
           </div>
         </dl>
         <InlineAlert tone="info">
           <p>
-            問題文、正解、配点、採点方法を確認済みにします。要修正の問題は対象外です。
+            問題文、正解、配点、採点方法がそろっている問題を確認済みにします。入力不足や構造上の問題がある項目は確認済みにせず、理由と件数を表示します。
           </p>
         </InlineAlert>
       </Modal>
 
       <Modal
-        open={publishOpen}
-        onClose={() => !publishing && setPublishOpen(false)}
-        title={`第${editor.data.version.versionNumber}版を公開しますか？`}
-        description="公開した版は変更できません。修正時は新しい下書き版を作成します。"
+        open={receptionOpen && canStartReception}
+        onClose={() => !startingReception && closeReception()}
+        title="答案受付を開始"
+        description={
+          isDraftVersion
+            ? "確認済みのひな形を確定し、すぐに答案を受け付けられる状態にします。"
+            : "この確定済みひな形を使って、新しい答案受付を開始します。"
+        }
         size="medium"
         footer={
           <>
             <Button
               variant="secondary"
-              onClick={() => setPublishOpen(false)}
-              disabled={publishing}
+              onClick={closeReception}
+              disabled={startingReception}
             >
               戻る
             </Button>
             <Button
-              onClick={() => void publish()}
-              disabled={publishing}
+              onClick={() => void startReception()}
+              disabled={startingReception || !receptionDetails.testDate}
             >
-              {publishing ? "公開しています…" : "この版を公開"}
+              {startingReception ? "開始しています…" : "受付を開始"}
             </Button>
           </>
         }
       >
-        {validation ? (
-          <dl className="publish-summary">
-            <div>
-              <dt>ページ</dt>
-              <dd>{validation.pageCount}</dd>
-            </div>
-            <div>
-              <dt>問題</dt>
-              <dd>{validation.questionCount}問</dd>
-            </div>
-            <div>
-              <dt>合計点</dt>
-              <dd>{formatPoints(validation.totalPointsMilli)}点</dd>
-            </div>
-            <div>
-              <dt>漢字必須</dt>
-              <dd>{validation.kanjiRequiredCount}問</dd>
-            </div>
-            <div>
-              <dt>常に確認</dt>
-              <dd>{validation.alwaysReviewCount}問</dd>
-            </div>
-          </dl>
-        ) : null}
-        <InlineAlert tone="warning">
+        <div className="session-form">
+          <TemplateSessionMetadata template={editor.data.template} />
+          <div className="form-grid form-grid--2">
+            <Field
+              label="実施日"
+              htmlFor="template-reception-date"
+              required
+              hint="答案用紙に記載された日付を選びます。"
+            >
+              <input
+                id="template-reception-date"
+                type="date"
+                value={receptionDetails.testDate}
+                onChange={(event) => {
+                  receptionIdempotencyKeyRef.current = "";
+                  pendingPublishReceptionRef.current = undefined;
+                  setReceptionDetails({
+                    ...receptionDetails,
+                    testDate: event.target.value,
+                  });
+                }}
+                required
+              />
+            </Field>
+            <Field
+              label="対象クラス"
+              htmlFor="template-reception-class"
+              hint="クラスを分けて管理するときだけ入力します。"
+            >
+              <input
+                id="template-reception-class"
+                value={receptionDetails.classLabel}
+                onChange={(event) => {
+                  receptionIdempotencyKeyRef.current = "";
+                  pendingPublishReceptionRef.current = undefined;
+                  setReceptionDetails({
+                    ...receptionDetails,
+                    classLabel: event.target.value,
+                  });
+                }}
+                placeholder="例：6年A組"
+              />
+            </Field>
+          </div>
+          <InlineAlert tone="info">
+            <p>
+              試験名・教科・学年・カテゴリ・コースはひな形から引き継がれます。試験情報や処理方法を入力し直す必要はありません。
+            </p>
+          </InlineAlert>
+        </div>
+        <InlineAlert tone={isDraftVersion ? "warning" : "info"}>
           <p>
-            この版を使って開始した採点は、後から別の版を公開しても自動では変わりません。
+            {isDraftVersion
+              ? `開始すると第${editor.data.version.versionNumber}版は確定され、編集できなくなります。答案受付は自動で受付中になります。`
+              : "確定済みのひな形は変更せず、新しいテスト実施を受付中で作成します。"}
           </p>
         </InlineAlert>
       </Modal>
@@ -1304,7 +1732,7 @@ export function TemplateEditorPage() {
   );
 }
 
-function QuestionProperties({
+export function QuestionProperties({
   question,
   readOnly,
   onChange,
@@ -1319,28 +1747,31 @@ function QuestionProperties({
   accepting: boolean;
   acceptDisabled: boolean;
 }) {
-  const [variants, setVariants] = useState(() => questionVariants(question));
+  const [variants, setVariants] = useState(() =>
+    questionAcceptedVariants(question),
+  );
+  const [phoneticExceptions, setPhoneticExceptions] = useState(() =>
+    questionPhoneticExceptions(question),
+  );
 
   useEffect(() => {
-    setVariants(questionVariants(question));
+    setVariants(questionAcceptedVariants(question));
+    setPhoneticExceptions(questionPhoneticExceptions(question));
   }, [question.id, question.acceptedAnswers]);
 
-  function updateAnswers(canonical: string, variantText = variants) {
-    const accepted = variantText
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean);
+  function updateAnswers(
+    canonical: string,
+    variantText = variants,
+    phoneticExceptionText = phoneticExceptions,
+  ) {
     onChange({
       canonicalAnswer: canonical,
-      acceptedAnswers: [
-        ...(canonical
-          ? [{ text: canonical, variantType: "canonical" as const }]
-          : []),
-        ...accepted.map((text) => ({
-          text,
-          variantType: "accepted" as const,
-        })),
-      ],
+      acceptedAnswers: answersForQuestionEdit(
+        question,
+        canonical,
+        variantText,
+        phoneticExceptionText,
+      ),
     });
   }
 
@@ -1425,6 +1856,32 @@ function QuestionProperties({
         />
       </Field>
       <Field
+        label="採点方法"
+        htmlFor="question-grading-preset"
+        hint="通常は「AIで判定」のままで使えます。必要な問題だけ変更してください。"
+      >
+        <select
+          id="question-grading-preset"
+          value={gradingPresetForQuestion(question)}
+          disabled={readOnly}
+          onChange={(event) => {
+            const preset = event.target.value as GradingPreset;
+            if (preset !== "custom") {
+              onChange(changesForGradingPreset(question, preset));
+            }
+          }}
+        >
+          <option value="ai">AIで判定（おすすめ）</option>
+          <option value="exact">完全一致・登録した別表記で判定</option>
+          <option value="numeric">数値として判定</option>
+          <option value="choice">選択肢として判定</option>
+          <option value="manual">先生が採点</option>
+          {gradingPresetForQuestion(question) === "custom" ? (
+            <option value="custom">現在の詳細設定を使用</option>
+          ) : null}
+        </select>
+      </Field>
+      <Field
         label={question.questionType === "subjective" ? "模範解答" : "正解"}
         htmlFor="canonical-answer"
         required
@@ -1457,41 +1914,54 @@ function QuestionProperties({
       <details className="question-advanced-settings" key={question.id}>
         <summary>
           <span>
-            <strong>採点の詳細設定</strong>
-            <small>問題の種類・別表記・部分点など</small>
+            <strong>詳細設定</strong>
+            <small>通常は変更不要です</small>
           </span>
           <Icon name="chevronDown" size={16} />
         </summary>
         <div className="question-advanced-settings__content">
           <div className="form-grid form-grid--2">
-            <Field label="問題の種類" htmlFor="question-type">
+            <Field label="解答形式（詳細）" htmlFor="question-type">
               <select
                 id="question-type"
                 value={question.questionType}
                 disabled={readOnly}
                 onChange={(event) =>
-                  onChange({ questionType: event.target.value })
+                  onChange(
+                    defaultsForQuestionTypeChange(
+                      question,
+                      event.target.value,
+                    ),
+                  )
                 }
               >
                 <option value="multiple_choice">選択式</option>
                 <option value="numeric">数値</option>
                 <option value="exact_short_text">短答（完全一致）</option>
-                <option value="semantic_short_text">短答（意味で判定）</option>
-                <option value="subjective">記述・先生が確認</option>
+                <option value="semantic_short_text">
+                  短答（AIが意味を確認）
+                </option>
+                <option value="subjective">記述（AIが採点）</option>
               </select>
             </Field>
-            <Field label="採点方法" htmlFor="grading-mode">
+            <Field label="判定方式（詳細）" htmlFor="grading-mode">
               <select
                 id="grading-mode"
                 value={question.gradingMode}
                 disabled={readOnly}
-                onChange={(event) =>
-                  onChange({ gradingMode: event.target.value })
-                }
+                onChange={(event) => {
+                  if (event.target.value === "ai_rubric") {
+                    onChange(
+                      changesForGradingPreset(question, "ai"),
+                    );
+                  } else {
+                    onChange({ gradingMode: event.target.value });
+                  }
+                }}
               >
                 <option value="deterministic">規則で判定</option>
                 <option value="transcribe_then_rules">読取後に規則で判定</option>
-                <option value="ai_rubric">採点基準で判定</option>
+                <option value="ai_rubric">AIが採点基準で判定</option>
                 <option value="manual">先生が確認</option>
               </select>
             </Field>
@@ -1515,7 +1985,7 @@ function QuestionProperties({
               />
               <span>点</span>
             </div>
-            <small>配点を割り切れる値にします。</small>
+            <small>通常は1点です。配点を割り切れる値にします。</small>
           </Field>
           <Field
             label="正解として認める別表記"
@@ -1536,23 +2006,77 @@ function QuestionProperties({
           <label className="setting-check">
             <input
               type="checkbox"
-              checked={question.allowNonKanji}
+              checked={question.requiresCompleteAnswer}
               disabled={readOnly}
               onChange={(event) =>
-                onChange({ allowNonKanji: event.target.checked })
+                onChange({ requiresCompleteAnswer: event.target.checked })
               }
             />
             <span>
-              <strong>漢字以外の解答も正解にする</strong>
+              <strong>完答</strong>
               <small>
-                {question.allowNonKanji
-                  ? "登録した読みや採点基準に合えば正解にできます。"
-                  : hasKanji
-                    ? "ひらがな・カタカナだけの同じ読みは不正解になります。"
-                    : "正解に漢字がないため、この設定による違いはありません。"}
+                すべての正解要素がそろった場合だけ満点にし、不足時は部分点を付けません。
               </small>
             </span>
           </label>
+          <label className="setting-check">
+            <input
+              type="checkbox"
+              checked={question.answerOrderInsensitive}
+              disabled={readOnly}
+              onChange={(event) =>
+                onChange({ answerOrderInsensitive: event.target.checked })
+              }
+            />
+            <span>
+              <strong>順不同</strong>
+              <small>
+                「、」「,」「，」「/」「／」「;」「；」「・」または改行で区切った要素を、重複数も含む完全な組として順序に関係なく判定します。
+              </small>
+            </span>
+          </label>
+          <label className="setting-check">
+            <input
+              type="checkbox"
+              checked={isKanjiRequired(question)}
+              disabled={readOnly}
+              onChange={(event) =>
+                onChange({
+                  allowNonKanji: allowNonKanjiForKanjiRequired(
+                    event.target.checked,
+                  ),
+                })
+              }
+            />
+            <span>
+              <strong>漢字必須</strong>
+              <small>
+                {!question.allowNonKanji
+                  ? hasKanji
+                    ? "正解に漢字がある場合、ひらがな・カタカナだけの同じ読みは不正解です。下の例外欄に登録した読みだけ正解にできます。"
+                    : "正解に漢字がないため、この設定による違いはありません。"
+                  : "登録した読みや採点基準に合えば、漢字以外の表記も正解にできます。"}
+              </small>
+            </span>
+          </label>
+          {!question.allowNonKanji ? (
+            <Field
+              label="漢字必須の例外（読み）"
+              htmlFor="phonetic-exceptions"
+              hint="ひらがな・カタカナでも正解にする読みを、1行に1つ入力します。"
+            >
+              <textarea
+                id="phonetic-exceptions"
+                rows={3}
+                value={phoneticExceptions}
+                disabled={readOnly}
+                onChange={(event) => {
+                  setPhoneticExceptions(event.target.value);
+                  updateAnswers(canonical, variants, event.target.value);
+                }}
+              />
+            </Field>
+          ) : null}
           <label className="setting-check">
             <input
               type="checkbox"
@@ -1564,7 +2088,9 @@ function QuestionProperties({
             />
             <span>
               <strong>採点後に必ず先生が確認する</strong>
-              <small>AIの確信度にかかわらず確認待ちにします。</small>
+              <small>
+                通常はオフです。AIの確信度にかかわらず毎回答を確認したい場合だけオンにします。
+              </small>
             </span>
           </label>
           {question.questionType !== "subjective" &&
@@ -1609,7 +2135,7 @@ function QuestionProperties({
   );
 }
 
-function questionPayload(question: TemplateQuestion, verify = false) {
+export function questionPayload(question: TemplateQuestion, verify = false) {
   return {
     displayLabel: question.displayLabel,
     order: question.order,
@@ -1619,6 +2145,8 @@ function questionPayload(question: TemplateQuestion, verify = false) {
     maxPointsMilli: question.maxPointsMilli,
     pointIncrementMilli: question.pointIncrementMilli,
     allowNonKanji: question.allowNonKanji,
+    requiresCompleteAnswer: question.requiresCompleteAnswer,
+    answerOrderInsensitive: question.answerOrderInsensitive,
     acceptedAnswers: verify
       ? question.acceptedAnswers.map((answer) => ({
           ...answer,
@@ -1630,6 +2158,51 @@ function questionPayload(question: TemplateQuestion, verify = false) {
     teacherNote: question.teacherNote,
     requiresReviewAlways: question.requiresReviewAlways,
     teacherVerified: verify ? true : question.teacherVerified,
+  };
+}
+
+export function validationFromPublishError(
+  reason: unknown,
+  questions: TemplateQuestion[],
+): TemplateValidation | undefined {
+  if (
+    !(reason instanceof ApiError) ||
+    reason.problem.code !== "TEMPLATE_PUBLISH_BLOCKED" ||
+    !reason.problem.errors?.length
+  ) {
+    return undefined;
+  }
+  const ordered = [...questions].sort((a, b) => a.order - b.order);
+  const issues = reason.problem.errors.map((error) => {
+    const extended = error as typeof error & {
+      questionId?: string;
+      blocking?: boolean;
+    };
+    const questionIndex = error.field?.match(/^questions\[(\d+)\]/u)?.[1];
+    return {
+      code: error.code || "TEMPLATE_PUBLISH_BLOCKED",
+      message: error.message,
+      questionId:
+        extended.questionId ||
+        (questionIndex === undefined
+          ? undefined
+          : ordered[Number(questionIndex)]?.id),
+      blocking: extended.blocking ?? true,
+    };
+  });
+  return {
+    valid: false,
+    pageCount: 0,
+    questionCount: questions.length,
+    totalPointsMilli: questions.reduce(
+      (sum, question) => sum + question.maxPointsMilli,
+      0,
+    ),
+    kanjiRequiredCount: questions.filter(isKanjiRequired).length,
+    alwaysReviewCount: questions.filter(
+      (question) => question.requiresReviewAlways,
+    ).length,
+    issues,
   };
 }
 

@@ -18,6 +18,8 @@ using Microsoft.Extensions.Options;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Host.Api;
+using OokiGrader.Host.Jobs;
+using OokiGrader.Host.Services;
 using OokiGrader.Host.Uploads;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
@@ -26,6 +28,10 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class DuplicateSubmissionWorkflowTests
 {
+    private static readonly byte[] DuplicatePdfBytes =
+        System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+
     [Fact]
     public async Task MatchingPageFingerprintsCreateAndResolveVisualDuplicateEvidence()
     {
@@ -144,6 +150,123 @@ public sealed class DuplicateSubmissionWorkflowTests
     }
 
     [Fact]
+    public async Task AssignmentAfterCombinedAnalysisActivatesStagedRunWithoutRegrading()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync();
+        var staged = await application.StageCombinedRunAsync(
+            graph.PendingSubmissionId);
+
+        var response = await application.PostAsync(
+            $"/api/v1/submissions/{graph.PendingSubmissionId}:assignStudent",
+            new
+            {
+                studentId = graph.StudentId,
+                sourceRevision = 1,
+                reasonCode = "teacher_resolved_duplicate",
+                duplicateResolution = "additionalAttempt",
+                attemptNumber = 2,
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var submission = await db.Submissions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == graph.PendingSubmissionId);
+            var run = await db.GradingRuns
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == staged.RunId);
+            var adjudication = await db.BackgroundJobs
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == staged.AdjudicationJobId);
+            Assert.Equal(graph.StudentId, submission.AssignedStudentId);
+            Assert.Equal(run.Id, submission.CurrentGradingRunId);
+            Assert.Equal("needs_grade_review", submission.State);
+            Assert.Equal("needs_grade_review", run.State);
+            Assert.NotNull(run.ActivatedAt);
+            Assert.Equal(TestAuthenticationHandler.StaffId,
+                run.ActivatedByStaffUserId);
+            Assert.Equal("queued", adjudication.State);
+            Assert.Null(adjudication.ErrorCode);
+        });
+    }
+
+    [Fact]
+    public async Task ExplicitUnidentifiedAfterCombinedAnalysisActivatesStagedRun()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync();
+        var staged = await application.StageCombinedRunAsync(
+            graph.PendingSubmissionId);
+
+        var response = await application.PostAsync(
+            $"/api/v1/submissions/{graph.PendingSubmissionId}:markUnidentified",
+            new
+            {
+                sourceRevision = 1,
+                status = "unidentified",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var submission = await db.Submissions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == graph.PendingSubmissionId);
+            var run = await db.GradingRuns
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == staged.RunId);
+            Assert.Null(submission.AssignedStudentId);
+            Assert.Equal(run.Id, submission.CurrentGradingRunId);
+            Assert.Equal("needs_grade_review", submission.State);
+            Assert.Equal("needs_grade_review", run.State);
+            Assert.Equal(
+                "unidentified",
+                JsonDocument.Parse(submission.AssignmentEvidenceJson!)
+                    .RootElement.GetProperty("disposition").GetString());
+        });
+    }
+
+    [Fact]
+    public async Task NonStudentSampleNeverActivatesCombinedStagedRun()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync();
+        var staged = await application.StageCombinedRunAsync(
+            graph.PendingSubmissionId);
+
+        var response = await application.PostAsync(
+            $"/api/v1/submissions/{graph.PendingSubmissionId}:markUnidentified",
+            new
+            {
+                sourceRevision = 1,
+                status = "nonStudentSample",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var submission = await db.Submissions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == graph.PendingSubmissionId);
+            var run = await db.GradingRuns
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == staged.RunId);
+            var adjudication = await db.BackgroundJobs
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == staged.AdjudicationJobId);
+            Assert.Equal("voided", submission.State);
+            Assert.Null(submission.CurrentGradingRunId);
+            Assert.Equal("discarded_non_student", run.State);
+            Assert.Null(run.ActivatedAt);
+            Assert.Equal("cancelled", adjudication.State);
+            Assert.Equal("submission_voided_non_student",
+                adjudication.ErrorCode);
+        });
+    }
+
+    [Fact]
     public async Task ReplacementMovesPreviousCanonicalToNumberedAttempt()
     {
         await using var application = await DuplicateTestApplication.CreateAsync();
@@ -173,6 +296,139 @@ public sealed class DuplicateSubmissionWorkflowTests
             Assert.True(replacement.CanonicalForSession);
             Assert.Equal(1, replacement.AttemptNumber);
         });
+    }
+
+    [Fact]
+    public async Task ArchivedSessionRejectsIdentityAndDuplicateResolution()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync(
+            includeMatchingPageFingerprints: true);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var session = await db.TestSessions.SingleAsync();
+            session.State = "archived";
+            await db.SaveChangesAsync();
+        });
+
+        var response = await application.PostAsync(
+            $"/api/v1/submissions/{graph.PendingSubmissionId}:assignStudent",
+            new
+            {
+                studentId = graph.StudentId,
+                sourceRevision = 1,
+                reasonCode = "teacher_resolved_duplicate",
+                duplicateResolution = "replaceCanonical",
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            problem.GetProperty("code").GetString());
+        await application.WithDatabaseAsync(async db =>
+        {
+            var existing = await db.Submissions.AsNoTracking().SingleAsync(
+                item => item.Id == graph.ExistingSubmissionId);
+            var pending = await db.Submissions.AsNoTracking().SingleAsync(
+                item => item.Id == graph.PendingSubmissionId);
+            Assert.True(existing.CanonicalForSession);
+            Assert.Null(pending.AssignedStudentId);
+            Assert.False(pending.CanonicalForSession);
+            Assert.Empty(await db.VisualDuplicates.AsNoTracking().ToListAsync());
+        });
+    }
+
+    [Fact]
+    public async Task ArchivedSessionRejectsPendingUploadDuplicateResolution()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync(includeDuplicateUpload: true);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var session = await db.TestSessions.SingleAsync();
+            session.State = "archived";
+            await db.SaveChangesAsync();
+        });
+
+        var response = await application.PostAsync(
+            $"/api/v1/uploads/{graph.DuplicateUploadId}:resolveDuplicate",
+            new { action = "createAttempt" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            problem.GetProperty("code").GetString());
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Single(await db.Submissions.AsNoTracking().ToListAsync());
+            var upload = await db.UploadSessions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == graph.DuplicateUploadId);
+            Assert.Equal("duplicate_pending", upload.State);
+            Assert.Equal("duplicate_submission", upload.DestinationType);
+            Assert.Equal(graph.ExistingSubmissionId, upload.DestinationId);
+        });
+    }
+
+    [Fact]
+    public async Task ArchivedSessionWorkIsExcludedFromReviewAndFinalizeQueues()
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync();
+        await application.WithDatabaseAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var session = await db.TestSessions.SingleAsync();
+            var version = await db.TemplateVersions.SingleAsync();
+            var existing = await db.Submissions.SingleAsync(
+                item => item.Id == graph.ExistingSubmissionId);
+            var run = new GradingRunEntity
+            {
+                Id = UlidId.New(now),
+                SubmissionId = existing.Id,
+                RunNumber = 1,
+                TemplateVersionId = version.Id,
+                Reason = "initial",
+                State = "ready_to_finalize",
+                PipelineVersion = "test-v1",
+                CanonicalInputManifestHash = new string('e', 64),
+                PossiblePointsMilli = 1_000,
+                ResultSourceRevision = 1,
+                CreatedAt = now,
+            };
+            existing.State = "ready_to_finalize";
+            existing.CurrentGradingRunId = run.Id;
+            db.GradingRuns.Add(run);
+            session.State = "archived";
+            await db.SaveChangesAsync();
+        });
+
+        var counts = await application.GetAsync("/api/v1/review/counts");
+        var nameQueue = await application.GetAsync("/api/v1/review/name");
+        var finalizeQueue = await application.GetAsync("/api/v1/review/finalize");
+        var finalizeMutation = await application.PostAsync(
+            $"/api/v1/submissions/{graph.ExistingSubmissionId}:finalize",
+            new { sourceRevision = 1 });
+        var historicalSubmission = await application.GetAsync(
+            $"/api/v1/submissions/{graph.ExistingSubmissionId}");
+        Assert.Equal(HttpStatusCode.OK, counts.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, nameQueue.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, finalizeQueue.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, finalizeMutation.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, historicalSubmission.StatusCode);
+        var countsBody = await counts.Content.ReadFromJsonAsync<JsonElement>();
+        var nameBody = await nameQueue.Content.ReadFromJsonAsync<JsonElement>();
+        var finalizeBody = await finalizeQueue.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, countsBody.GetProperty("total").GetInt32());
+        Assert.Empty(nameBody.GetProperty("items").EnumerateArray());
+        Assert.Empty(finalizeBody.GetProperty("items").EnumerateArray());
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            (await finalizeMutation.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("code")
+                .GetString());
     }
 
     [Fact]
@@ -299,7 +555,10 @@ public sealed class DuplicateSubmissionWorkflowTests
                         services.AddSingleton(TimeProvider.System);
                         services.AddSingleton(connection);
                         services.AddSingleton<UploadLockProvider>();
+                        services.AddSingleton<ContentObjectLockProvider>();
                         services.AddSingleton<IContentStore, TestContentStore>();
+                        services.AddSingleton<IPdfPageCountReader,
+                            LocalPdfPageCountReader>();
                         services.AddDbContext<OokiGraderDbContext>(
                             options => options.UseSqlite(connection));
                         services
@@ -335,7 +594,13 @@ public sealed class DuplicateSubmissionWorkflowTests
                                     .RequireRole(
                                         "teacher",
                                         "administrator",
-                                        "scanOperator"));
+                                        "scanOperator"))
+                            .AddPolicy(
+                                "review",
+                                policy => policy
+                                    .AddAuthenticationSchemes(
+                                        TestAuthenticationHandler.SchemeName)
+                                    .RequireRole("teacher", "administrator"));
                     });
                     webBuilder.Configure(application =>
                     {
@@ -346,6 +611,8 @@ public sealed class DuplicateSubmissionWorkflowTests
                         {
                             endpoints.MapSubmissionsEndpoints();
                             endpoints.MapUploadsEndpoints();
+                            endpoints.MapReviewEndpoints();
+                            endpoints.MapResultsEndpoints();
                         });
                     });
                 });
@@ -438,8 +705,11 @@ public sealed class DuplicateSubmissionWorkflowTests
             var fileObject = new FileObjectEntity
             {
                 Id = UlidId.New(now),
-                Sha256 = new string('b', 64),
-                Bytes = 1_024,
+                Sha256 = Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(
+                            DuplicatePdfBytes))
+                    .ToLowerInvariant(),
+                Bytes = DuplicatePdfBytes.LongLength,
                 VerifiedMime = "application/pdf",
                 Extension = "pdf",
                 RelativeObjectPath = "managed/bb/scan.pdf",
@@ -566,16 +836,83 @@ public sealed class DuplicateSubmissionWorkflowTests
                 upload.DestinationId = null;
                 upload.FinalSha256 = null;
                 upload.IncomingRelativePath = $"{upload.Id}.part";
-                var bytes = System.Text.Encoding.ASCII.GetBytes(
-                    "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
-                upload.ExpectedBytes = bytes.Length;
-                upload.CurrentBytes = bytes.Length;
+                upload.ExpectedBytes = DuplicatePdfBytes.Length;
+                upload.CurrentBytes = DuplicatePdfBytes.Length;
                 await File.WriteAllBytesAsync(
                     Path.Combine(_incomingRoot, upload.IncomingRelativePath),
-                    bytes);
+                    DuplicatePdfBytes);
                 await db.SaveChangesAsync();
             });
             return graph;
+        }
+
+        public async Task<SeededStagedRun> StageCombinedRunAsync(
+            string submissionId)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var staged = await WithDatabaseResultAsync(async db =>
+            {
+                var submission = await db.Submissions
+                    .SingleAsync(item => item.Id == submissionId);
+                var version = await db.TemplateVersions.SingleAsync();
+                var question = await db.Questions.SingleAsync();
+                var run = new GradingRunEntity
+                {
+                    Id = UlidId.New(now),
+                    SubmissionId = submission.Id,
+                    RunNumber = 1,
+                    TemplateVersionId = version.Id,
+                    Reason = "gemini_submission_analysis",
+                    State = "awaiting_identity",
+                    Provider = "gemini_direct",
+                    Model = "gemini-3.5-flash-lite",
+                    PromptVersion = "submission-analyze-v2.1.0",
+                    SchemaVersion = "submission_analysis_v2",
+                    PipelineVersion = AiInitialGradingJobWorker.PipelineVersion,
+                    CanonicalInputManifestHash = new string('f', 64),
+                    EarnedPointsMilli = 0,
+                    PossiblePointsMilli = 1_000,
+                    ResultSourceRevision = 1,
+                    CreatedAt = now,
+                    FinishedAt = now,
+                };
+                var result = new QuestionResultEntity
+                {
+                    Id = UlidId.New(now),
+                    GradingRunId = run.Id,
+                    QuestionId = question.Id,
+                    ProposedPointsMilli = 0,
+                    MaximumPointsMilli = 1_000,
+                    Outcome = "review",
+                    Method = "ai_pilot",
+                    ConfidenceBasisPoints = 7_000,
+                    ReviewRequired = true,
+                    ReviewStatus = "pending",
+                    CreatedAt = now,
+                };
+                var adjudication = new BackgroundJobEntity
+                {
+                    Id = UlidId.New(now),
+                    Type = AiAdjudicationJobWorker.JobType,
+                    SchemaVersion = 1,
+                    DeduplicationKey =
+                        $"question-result:{result.Id}:adjudication:fixture",
+                    Priority = 0,
+                    PayloadJson = "{}",
+                    State = "blocked",
+                    ErrorCode = "awaiting_identity",
+                    MaxAttempts = 8,
+                    NextAttemptAt = now,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                db.GradingRuns.Add(run);
+                db.QuestionResults.Add(result);
+                db.BackgroundJobs.Add(adjudication);
+                await db.SaveChangesAsync();
+                return new SeededStagedRun(run.Id, adjudication.Id);
+            });
+            return staged;
         }
 
         public async Task<HttpResponseMessage> PostAsync(
@@ -590,6 +927,15 @@ public sealed class DuplicateSubmissionWorkflowTests
             return await Client.SendAsync(request);
         }
 
+        public async Task<HttpResponseMessage> GetAsync(string path)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, path);
+            request.Headers.Add(
+                TestAuthenticationHandler.RoleHeader,
+                "teacher");
+            return await Client.SendAsync(request);
+        }
+
         public async Task WithDatabaseAsync(
             Func<OokiGraderDbContext, Task> action)
         {
@@ -597,6 +943,15 @@ public sealed class DuplicateSubmissionWorkflowTests
             var db = scope.ServiceProvider
                 .GetRequiredService<OokiGraderDbContext>();
             await action(db);
+        }
+
+        private async Task<T> WithDatabaseResultAsync<T>(
+            Func<OokiGraderDbContext, Task<T>> action)
+        {
+            await using var scope = _host.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider
+                .GetRequiredService<OokiGraderDbContext>();
+            return await action(db);
         }
 
         public async ValueTask DisposeAsync()
@@ -672,6 +1027,10 @@ public sealed class DuplicateSubmissionWorkflowTests
         string DuplicateUploadId,
         string FileObjectId);
 
+    private sealed record SeededStagedRun(
+        string RunId,
+        string AdjudicationJobId);
+
     private sealed class TestContentStore : IContentStore
     {
         public async Task<ContentWriteResult> PutAsync(
@@ -680,14 +1039,19 @@ public sealed class DuplicateSubmissionWorkflowTests
             string verifiedExtension,
             CancellationToken cancellationToken = default)
         {
-            await source.CopyToAsync(Stream.Null, cancellationToken);
+            using var buffered = new MemoryStream();
+            await source.CopyToAsync(buffered, cancellationToken);
+            var bytes = buffered.ToArray();
+            var sha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(bytes))
+                .ToLowerInvariant();
             return new ContentWriteResult(
                 new ContentObjectLocator(
                     storageClass,
-                    new string('b', 64),
-                    source.Length,
+                    sha256,
+                    bytes.LongLength,
                     verifiedExtension),
-                "managed/bb/scan.pdf",
+                $"managed/{sha256[..2]}/scan.pdf",
                 Deduplicated: true);
         }
 

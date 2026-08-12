@@ -41,6 +41,20 @@ internal static class QuestionEntityDomainMapper
             choicePolicy = new ChoiceAnswerPolicy(canonical.AnswerText, choices);
         }
 
+        RubricRule[] rubricRules = entity.GradingMode == "ai_rubric"
+            && !string.IsNullOrWhiteSpace(entity.RubricText)
+                ?
+                [
+                    new RubricRule(
+                        $"rubric-{entity.Id}",
+                        0,
+                        RubricConditionType.ModelAssessed,
+                        entity.RubricText,
+                        new MilliPoints(entity.MaxPointsMilli),
+                        entity.TeacherVerified),
+                ]
+                : [];
+
         return new QuestionDefinition(
             entity.Id,
             entity.LogicalQuestionId,
@@ -55,9 +69,12 @@ internal static class QuestionEntityDomainMapper
             entity.RequiresReviewAlways,
             entity.TeacherVerified,
             acceptedAnswers,
+            rubricRules,
             numericPolicy: numericPolicy,
             choicePolicy: choicePolicy,
-            kanjiPolicyNote: entity.KanjiPolicyNote);
+            kanjiPolicyNote: entity.KanjiPolicyNote,
+            requiresCompleteAnswer: entity.RequiresCompleteAnswer,
+            answerOrderInsensitive: entity.AnswerOrderInsensitive);
     }
 
     private static AcceptedAnswer MapAnswer(

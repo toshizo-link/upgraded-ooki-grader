@@ -3,20 +3,24 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parents[3]
 USER_GUIDE_DIR = ROOT / "tmp" / "pdfs" / "user-guide"
+INSTALL_GUIDE_DIR = ROOT / "tmp" / "pdfs" / "installation-guide"
 sys.path.insert(0, str(USER_GUIDE_DIR))
+sys.path.insert(0, str(INSTALL_GUIDE_DIR))
 
 import build_user_guide as ui  # noqa: E402
+import build_installation_guide as manual  # noqa: E402
 
 
 OUTPUT = ROOT / "output" / "pdf" / "ooki-grader-host-operations-guide-ja.pdf"
 SCREEN_DIR = Path(__file__).resolve().parent / "screens"
+CAPTURE_DIR = ROOT / "output" / "playwright" / "manual-20260810"
+PROCESSED_DIR = Path(__file__).resolve().parent / "processed"
 PAGE_W, PAGE_H = A4
 
 
@@ -28,7 +32,7 @@ def footer(c: canvas.Canvas, page: int) -> None:
         c,
         14,
         7,
-        "Ooki Grader  ホスト・アプリ セットアップ／運用ガイド",
+        "Ooki Grader  ホスト・アプリ運用ガイド",
         size=6.7,
         color=ui.MUTED,
     )
@@ -38,88 +42,26 @@ def footer(c: canvas.Canvas, page: int) -> None:
 def page_header(c: canvas.Canvas, section: str, title: str, page: int) -> None:
     c.setFillColor(ui.PALE)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
-    ui.draw_text(c, 14, 282.5, section, size=8.3, color=ui.GREEN)
-    ui.draw_text(c, 14, 271.5, title, size=19, color=ui.DARK)
+    ui.draw_text(c, 14, 282.5, section, size=8.1, color=ui.GREEN)
+    ui.draw_text(c, 14, 271.5, title, size=18.5, color=ui.DARK)
     c.setStrokeColor(ui.BORDER)
     c.setLineWidth(0.8)
     c.line(ui.mm(14), ui.mm(265.5), ui.mm(196), ui.mm(265.5))
     footer(c, page)
 
 
-def step_box(
-    c: canvas.Canvas,
-    number: int,
-    title: str,
-    body: str,
-    x: float,
-    y: float,
-    width: float,
-    height: float,
-    *,
-    tone: str = "safe",
-) -> None:
-    fill = ui.MINT if tone == "safe" else ui.ORANGE_PALE
-    stroke = ui.GREEN if tone == "safe" else ui.ORANGE
-    ui.rounded_box(c, x, y, width, height, fill=fill, stroke=stroke)
-    c.setFillColor(stroke)
-    c.circle(ui.mm(x + 7), ui.mm(y + height - 9), ui.mm(4), fill=1, stroke=0)
-    c.setFillColor(ui.WHITE)
-    c.setFont(ui.FONT, 9)
-    c.drawCentredString(ui.mm(x + 7), ui.mm(y + height - 10.5), str(number))
-    ui.draw_text(c, x + 14, y + height - 11.5, title, size=9.6, color=ui.DARK)
-    ui.paragraph(
-        c,
-        body,
-        x + 7,
-        y + height - 20,
-        width - 14,
-        size=7.7,
-        leading=4.0,
-        color=ui.INK,
-    )
-
-
-def command_box(c: canvas.Canvas, text: str, x: float, y: float, width: float, height: float) -> None:
-    ui.rounded_box(c, x, y, width, height, fill=colors.HexColor("#1F2B28"), stroke=ui.DARK)
-    cursor = y + height - 8
-    for raw in text.splitlines():
-        for line in ui.wrap_line(raw, 7.0, width - 12):
-            ui.draw_text(c, x + 6, cursor, line, size=7.0, color=colors.HexColor("#E8F3EF"))
-            cursor -= 3.8
-
-
-def checklist(
-    c: canvas.Canvas,
-    items: list[str],
-    x: float,
-    y: float,
-    width: float,
-    *,
-    size: float = 8.0,
-    leading: float = 4.1,
-    gap: float = 1.6,
-) -> float:
-    cursor = y
-    for item in items:
-        c.setFillColor(ui.WHITE)
-        c.setStrokeColor(ui.GREEN)
-        c.setLineWidth(0.8)
-        c.rect(ui.mm(x), ui.mm(cursor - 1.4), ui.mm(3.4), ui.mm(3.4), fill=1, stroke=1)
-        lines = ui.wrap_line(item, size, width - 7)
-        for index, line in enumerate(lines):
-            ui.draw_text(c, x + 6, cursor - index * leading, line, size=size, color=ui.INK)
-        cursor -= leading * len(lines) + gap
-    return cursor
-
-
 def build() -> None:
     ui.register_font()
+    ui.PROCESSED_DIR = PROCESSED_DIR
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(OUTPUT), pagesize=A4, pageCompression=1)
-    c.setTitle("Ooki Grader ホスト・アプリ セットアップ／運用ガイド")
+    c.setTitle("Ooki Grader ホスト・アプリ運用ガイド")
     c.setAuthor("Ooki Grader")
-    c.setSubject("Windowsホストの設置・AI接続設定・運用・復旧")
-    c.setKeywords("Ooki Grader, Windows, セットアップ, Gemini, 運用, 復旧")
+    c.setSubject("Windowsホストの日常管理、AI、職員、帳票、バックアップ、更新、修復、復元")
+    c.setKeywords(
+        "Ooki Grader, Windows, 管理, Gemini, 職員, 帳票, 一括出力, バックアップ, 更新, 復元, 障害対応"
+    )
 
     # 1. Cover
     c.setFillColor(ui.PALE)
@@ -132,413 +74,902 @@ def build() -> None:
     c.setFont(ui.FONT, 19)
     c.drawCentredString(ui.mm(29), ui.mm(264.5), "大")
     ui.draw_text(c, 47, 274, "OOKI GRADER", size=8, color=ui.GREEN)
-    ui.draw_text(c, 18, 248, "ホスト・アプリ", size=27, color=ui.DARK)
-    ui.draw_text(c, 18, 234, "セットアップ／運用ガイド", size=24, color=ui.DARK)
-    ui.draw_text(c, 18, 221, "設置担当・管理者向け", size=11, color=ui.MUTED)
-    ui.place_image(c, SCREEN_DIR / "01-admin-system-current.jpg", 17, 107, 176, 101)
+    ui.draw_text(c, 18, 248, "ホスト・アプリ", size=26, color=ui.DARK)
+    ui.draw_text(c, 18, 233, "運用ガイド", size=27, color=ui.DARK)
+    ui.draw_text(
+        c,
+        18,
+        220,
+        "設置後の管理・バックアップ・保守・復旧",
+        size=10.5,
+        color=ui.MUTED,
+    )
+    ui.place_image(
+        c,
+        SCREEN_DIR / "01-admin-system-current.png",
+        17,
+        102,
+        176,
+        103,
+        border=ui.GREEN,
+    )
     ui.callout(
         c,
         18,
-        53,
+        56,
         84,
-        39,
-        "日常運用の中心",
-        "管理画面の「システム状態」と「AI接続」を確認します。先生は通常、WindowsサービスやAPIキーを操作しません。",
+        34,
+        "毎日の入口",
+        "管理 > システム状態でホスト、AI、バックアップを確認し、保存容量と処理状況へ進みます。",
         tone="safe",
     )
     ui.callout(
         c,
         109,
-        53,
+        56,
         84,
-        39,
-        "対象環境",
-        "Windows 11 Pro x64の校内ホスト。HTTPSで校内LANから利用し、インターネットへ直接公開しません。",
+        34,
+        "対象構成",
+        "Windows 11 Proホスト1台、校内LAN、無料ローカルCA、正式URLはooki-grader.testです。",
         tone="info",
     )
-    ui.draw_text(c, 18, 34, "対象: v0.1 系 / 2026年8月6日", size=8, color=ui.MUTED)
+    ui.draw_text(c, 18, 34, "システム管理者・Windows担当者向け / 2026年8月11日版", size=8, color=ui.MUTED)
     footer(c, 1)
     c.showPage()
 
-    # 2. Scope and architecture
-    page_header(c, "01  全体像", "誰が、どこまで管理するか", 2)
+    # 2. Architecture
+    page_header(c, "01  全体像", "誰が、何を管理するか", 2)
     ui.paragraph(
         c,
-        "Ooki Graderは、1台のWindowsホストでデータとWebアプリを管理します。職員端末はブラウザだけを使い、外部AIへの送信もホスト経由です。",
-        14,
-        256,
-        182,
-        size=9.2,
-        leading=4.8,
-        color=ui.MUTED,
-    )
-    step_box(c, 1, "Windowsホスト", "アプリ、SQLite、答案画像、バックアップ処理、AI接続を管理。常時稼働・有線LAN・BitLocker・UPSを推奨。", 14, 206, 54, 35)
-    step_box(c, 2, "校内LAN", "固定DNS名とHTTPS証明書を使用。ファイアウォールはPrivateプロファイルと学校サブネットだけに限定。", 78, 206, 54, 35)
-    step_box(c, 3, "職員ブラウザ", "Edge / Chromeで同じURLを開く。教員はひな形・採点・確認、管理者は職員・AI接続・保存容量を管理。", 142, 206, 54, 35)
-    c.setStrokeColor(ui.GREEN)
-    c.setLineWidth(1.2)
-    c.line(ui.mm(68), ui.mm(223), ui.mm(78), ui.mm(223))
-    c.line(ui.mm(132), ui.mm(223), ui.mm(142), ui.mm(223))
-    ui.draw_text(c, 14, 189, "担当の分離", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 116, 182, 66, fill=ui.WHITE, stroke=ui.BORDER)
-    roles = [
-        ("設置担当", "署名確認、インストール、DNS/TLS、サービス、ACL、復旧試験"),
-        ("管理者", "最初の職員、AIキー、モデル、予算、状態、バックアップ確認"),
-        ("先生", "テスト画像をアップロードし、AI下書きを原本と比較して公開・採点確認"),
-        ("スキャン担当", "実施へ答案をアップロードし、処理状況と重複だけを確認"),
-    ]
-    row_y = 170
-    for role, body in roles:
-        ui.draw_text(c, 20, row_y, role, size=8.5, color=ui.GREEN)
-        ui.paragraph(c, body, 48, row_y, 140, size=7.8, leading=4.0, color=ui.INK)
-        row_y -= 14
-    ui.callout(
-        c,
-        14,
-        69,
-        88,
-        34,
-        "秘密情報",
-        "AI 接続キーは管理画面から一度だけ入力します。設定ファイル、CLI引数、手順書、スクリーンショット、ログへ書きません。",
-        tone="warn",
-    )
-    ui.callout(
-        c,
-        108,
-        69,
-        88,
-        34,
-        "AIの位置づけ",
-        "AIは下書きと採点候補を作ります。現在は自動公開・自動確定を行わず、先生が原本と結果を確認します。",
-        tone="safe",
-    )
-    c.showPage()
-
-    # 3. Preflight and installer build
-    page_header(c, "02  導入準備", "インストール前に決めること", 3)
-    ui.draw_text(c, 14, 256, "事前記入シート", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 175, 182, 73, fill=ui.WHITE, stroke=ui.BORDER)
-    checklist(
-        c,
-        [
-            "ホスト: Windows 11 Pro x64、管理者権限、現在サポート中の更新",
-            "DNS名: 例 ooki-grader.school.local（導入後は安易に変更しない）",
-            "データ: 例 D:\\OokiGraderData（Program Filesとは別、NTFS、暗号化）",
-            "バックアップ: 別ドライブ／NASの暗号化領域、十分な空き容量",
-            "HTTPS: DNS名を含むサーバー証明書、校内端末が信頼するCA",
-            "ネットワーク: 固定IPまたはDHCP予約、Privateサブネット、443番",
-        ],
-        20,
-        235,
-        168,
-        size=8,
-    )
-    ui.draw_text(c, 14, 160, "インストーラーを作る（リリース担当）", size=11.5, color=ui.DARK)
-    command_box(
-        c,
-        "# Windows 11 / PowerShell 7.4 / Inno Setup 6\n"
-        "dotnet restore OokiGrader.slnx --runtime win-x64\n"
-        "pwsh -File installer/New-OokiGraderReleasePackage.ps1 `\n"
-        "  -Version 0.1.0 -OutputRoot C:\\OokiGrader-Releases `\n"
-        "  -SigningHook C:\\secure\\Sign-Ooki.ps1\n"
-        "pwsh -File installer/New-OokiGraderWindowsInstaller.ps1 `\n"
-        "  -PackageRoot C:\\OokiGrader-Releases\\OokiGrader-0.1.0-win-x64 `\n"
-        "  -Version 0.1.0 -OutputRoot C:\\OokiGrader-Releases `\n"
-        "  -ExpectedSignerThumbprint <証明書サムプリント> `\n"
-        "  -SigningHook C:\\secure\\Sign-Ooki.ps1",
-        14,
-        105,
-        182,
-        51,
-    )
-    ui.callout(
-        c,
-        14,
-        70,
-        88,
-        31,
-        "配布物",
-        "OokiGrader-Setup-<version>-x64.exe と検証用JSON／SHA-256。学校データやAPIキーは含みません。",
-        tone="info",
-    )
-    ui.callout(
-        c,
-        108,
-        70,
-        88,
-        31,
-        "公開前の必須条件",
-        "署名済みEXEを管理経路で配布し、別のWindows 11機で署名・ハッシュ・新規導入・再起動を確認します。",
-        tone="warn",
-    )
-    ui.paragraph(
-        c,
-        "本リポジトリで再現可能なビルドと静的検査は行えますが、実運用用の発行者証明書による署名と、実機での完全な導入試験は別途必要です。",
-        14,
-        57,
-        182,
-        size=7.8,
-        leading=4.1,
-        color=ui.MUTED,
-    )
-    c.showPage()
-
-    # 4. Installation and bootstrap
-    page_header(c, "03  ホスト設定", "インストールから初回ログインまで", 4)
-    ui.draw_text(c, 14, 256, "ホスト側の手順", size=11.5, color=ui.DARK)
-    step_box(c, 1, "署名を確認", "セットアップEXEの発行者、タイムスタンプ、SHA-256を配布元の記録と照合。異なる場合は実行しません。", 14, 218, 87, 28)
-    step_box(c, 2, "管理者として実行", "DNS名、データルート、証明書、学校サブネットを入力。バックアップ先は初回ログイン後に別途設定します。", 109, 218, 87, 28)
-    step_box(c, 3, "事前検査を通す", "OS、x64、NTFS、空き容量、443番、保留中の復旧／移行を確認。blocking failureは解消して再実行。", 14, 178, 87, 28)
-    step_box(c, 4, "HTTPSで確認", "サービス起動後、ホストで /health/live と /health/ready、次に職員端末でログイン画面と証明書を確認。", 109, 178, 87, 28)
-    ui.draw_text(c, 14, 162, "最初の管理者を作る", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 102, 182, 52, fill=ui.WHITE, stroke=ui.BORDER)
-    checklist(
-        c,
-        [
-            "DataRoot直下の bootstrap-token.txt をホスト上で確認（初回・有効期限内のみ）",
-            "ホスト自身のブラウザからセットアップ画面を開く（ループバック限定）",
-            "管理者ユーザー名、表示名、12文字以上の固有パスワードを登録",
-            "成功後、トークンファイルが削除され、通常ログインへ移ることを確認",
-        ],
-        20,
-        141,
-        168,
-        size=8,
-    )
-    ui.callout(
-        c,
-        14,
-        55,
-        88,
-        34,
-        "ログイン制限",
-        "連続失敗すると一時的に制限されます。ユーザー名・時刻・URLを確認し、管理者は状態画面と監査記録を確認します。闇雲に再試行しません。",
-        tone="warn",
-    )
-    ui.callout(
-        c,
-        108,
-        55,
-        88,
-        34,
-        "学校名と製品名",
-        "この学校向けビルドは学校を大木スクールとして登録します。画面上の製品名はシンプルに「Ooki Grader」です。",
-        tone="safe",
-    )
-    c.showPage()
-
-    # 5. AI provider setup
-    page_header(c, "04  AI設定", "既定のGeminiを安全に有効化する", 5)
-    ui.place_image(c, SCREEN_DIR / "02-admin-gemini-current.jpg", 14, 132, 182, 124)
-    ui.draw_text(c, 14, 119, "設定順", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 60, 182, 52, fill=ui.WHITE, stroke=ui.BORDER)
-    checklist(
-        c,
-        [
-            "管理者 → システム管理 → AI設定を開く",
-            "学校管理のAPIキーを画面から入力し、接続テストを実行",
-            "モデルが gemini-3.5-flash-lite であることを確認して保存",
-            "接続先は画像対応モデルを指定し、接続成功時のみ採点運用を開始",
-        ],
-        20,
-        99,
-        168,
-        size=8,
-    )
-    ui.callout(
-        c,
-        14,
-        25,
-        182,
-        25,
-        "重要",
-        "接続成功は精度保証ではありません。実運用では検証済み設定のみを採用し、候補変更時は再評価します。",
-        tone="warn",
-    )
-    c.showPage()
-
-    # 6. Daily operations
-    page_header(c, "05  日常運用", "システム状態を短時間で確認する", 6)
-    ui.place_image(c, SCREEN_DIR / "01-admin-system-current.jpg", 14, 137, 182, 119)
-    ui.draw_text(c, 14, 124, "管理者の確認周期", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 59, 182, 57, fill=ui.WHITE, stroke=ui.BORDER)
-    rows = [
-        ("毎日", "システム状態、AI接続、失敗処理、保存容量、直近バックアップ"),
-        ("毎週", "未完了ジョブ、ログイン／権限変更、証明書期限、バックアップ検証"),
-        ("毎月", "容量傾向、保持処理、職員一覧、AI利用量・予算、更新情報"),
-        ("四半期", "隔離環境で復元訓練。手順・所要時間・欠損・資格情報再設定を記録"),
-    ]
-    row_y = 101
-    for label, body in rows:
-        ui.draw_text(c, 20, row_y, label, size=8.3, color=ui.GREEN)
-        ui.paragraph(c, body, 44, row_y, 144, size=7.6, leading=3.9, color=ui.INK)
-        row_y -= 12
-    ui.callout(
-        c,
-        14,
-        24,
-        182,
-        25,
-        "警告の読み方",
-        "意味のない再試行はしません。表示された項目名・時刻・対処を確認します。開発環境の物理保存先／バックアップ警告を、本番の正常性証明として扱わないでください。",
-        tone="info",
-    )
-    c.showPage()
-
-    # 7. Backup and lifecycle
-    page_header(c, "06  保守", "バックアップ・更新・修復・復元", 7)
-    ui.draw_text(c, 14, 256, "バックアップ", size=11.5, color=ui.DARK)
-    ui.rounded_box(c, 14, 202, 182, 45, fill=ui.WHITE, stroke=ui.BORDER)
-    checklist(
-        c,
-        [
-            "暗号化された別媒体を設定し、最新の成功日時と検証結果を確認",
-            "SQLite／WALを手動コピーせず、アプリのオンラインバックアップを使用",
-            "復元できた記録がないバックアップを、運用可能なバックアップと見なさない",
-        ],
-        20,
-        234,
-        168,
-        size=8,
-    )
-    ui.draw_text(c, 14, 188, "変更作業の共通順序", size=11.5, color=ui.DARK)
-    steps = [
-        (1, "告知・保守時間", "利用を止め、対象バージョンと担当者を記録。"),
-        (2, "検証済みバックアップ", "新しいバックアップと整合性確認を取得。"),
-        (3, "署名・事前検査", "配布物、空き容量、復旧マーカーを確認。"),
-        (4, "実行・再起動", "更新／修復を実行し、サービス再起動を確認。"),
-        (5, "動作確認", "readiness、ログイン、画像表示、選択AIの少量試験。"),
-        (6, "記録・解除", "結果、時刻、版、問題を残し、保守を解除。"),
-    ]
-    y = 154
-    for idx, title, body in steps:
-        x = 14 if idx % 2 == 1 else 109
-        if idx % 2 == 1 and idx > 1:
-            y -= 34
-        step_box(c, idx, title, body, x, y, 87, 27)
-    ui.callout(
-        c,
-        14,
-        47,
-        56,
-        25,
-        "更新",
-        "Upgradeスクリプト／セットアップで版を切替。失敗時は旧版へ戻しreadiness確認。",
-        tone="safe",
-    )
-    ui.callout(
-        c,
-        77,
-        47,
-        56,
-        25,
-        "復元",
-        "必ずオフライン・隔離・明示確認。完了またはロールバック手順まで実施。",
-        tone="warn",
-    )
-    ui.callout(
-        c,
-        140,
-        47,
-        56,
-        25,
-        "削除",
-        "アプリ削除時もデータは既定で保持。データ廃棄は別の承認作業。",
-        tone="info",
-    )
-    c.showPage()
-
-    # 8. Troubleshooting
-    page_header(c, "07  障害対応", "症状から最短で切り分ける", 8)
-    ui.rounded_box(c, 14, 82, 182, 168, fill=ui.WHITE, stroke=ui.BORDER)
-    cases = [
-        ("ログイン試行上限", "URL・利用者名・端末時刻を確認。しばらく待ち、管理者が職員状態と監査を確認。再起動やアカウント作り直しを先に行わない。"),
-        ("AI接続失敗", "AI接続の状態を確認。キー、モデル名、画像対応、時刻、DNS、到達性、予算上限を順に確認。"),
-        ("AI下書きができない", "元画像が表示できるか、ファイル種別が正しいか、処理状況の失敗理由を確認。再実行前に同じ失敗が続く原因を記録。"),
-        ("問題／答案画像が見えない", "ブラウザ更新、別端末、対象ファイルの存在、オブジェクト保存先、容量とreadinessを確認。座標や切り抜き設定は不要。"),
-        ("保存容量の警告", "アップロードを一時停止。Windows物理空き容量、DataRoot、管理上限、保持処理を確認。データを手動削除しない。"),
-        ("処理が止まっている", "処理状況で同一ジョブの重複・保留・失敗を確認。サービス状態と時刻を記録し、保守時間にHealth／Repairを使用。"),
-        ("HTTPS警告", "先へ進まず、DNS名、証明書SAN・期限、校内CA、端末時刻を確認。証明書警告を無視してAPIキーを入力しない。"),
-        ("更新後に起動しない", "復旧マーカーとログを保全。検証済みバックアップを確認し、旧版ロールバックまたはRepair。データを直接編集しない。"),
-    ]
-    y = 235
-    for title, body in cases:
-        ui.draw_text(c, 20, y, title, size=8.5, color=ui.GREEN)
-        y = ui.paragraph(c, body, 55, y, 133, size=7.3, leading=3.7, color=ui.INK)
-        y -= 4.0
-        c.setStrokeColor(ui.BORDER)
-        c.line(ui.mm(20), ui.mm(y + 1.5), ui.mm(188), ui.mm(y + 1.5))
-        y -= 3.0
-    ui.callout(
-        c,
-        14,
-        37,
-        182,
-        33,
-        "問い合わせ時に残す情報",
-        "発生日時、利用者の役割、画面URL、対象ID、表示されたエラーコード、再現手順、直前の更新。APIキー・生徒の答案原本・パスワードは通常の連絡へ貼りません。",
-        tone="warn",
-    )
-    c.showPage()
-
-    # 9. Commissioning checklist
-    page_header(c, "08  引き渡し", "運用開始前の最終チェック", 9)
-    ui.paragraph(
-        c,
-        "すべてにチェックが付くまで、学校データの唯一の保存先・無人自動採点として使いません。結果と担当者を導入記録へ残します。",
+        "1台のWindowsホストがWebアプリ、SQLite、画像、帳票、AI送信、バックアップを管理します。職員PCはブラウザだけを使います。",
         14,
         256,
         182,
         size=9,
-        leading=4.7,
+        leading=4.6,
         color=ui.MUTED,
     )
-    ui.rounded_box(c, 14, 78, 182, 164, fill=ui.WHITE, stroke=ui.BORDER)
-    checklist(
+    manual.steps_grid(
         c,
         [
-            "セットアップEXEの発行者・タイムスタンプ・SHA-256を別経路で確認",
-            "Windowsサービスが再起動・Windows再起動後も正しい版で起動",
-            "アプリ、データ、バックアップが分離され、NTFS ACL／BitLockerを確認",
-            "校内DNS・HTTPS・ファイアウォールをホストと職員端末の両方で確認",
-            "最初の管理者、最小権限の職員、パスワード変更、ログイン制限を確認",
-            "Gemini接続テスト、モデル、利用予算、サンプルひな形、採点確認を実施",
-            "追加AI接続を使う場合は画像対応・精度ゲート合格を証明。自動切替は無効",
-            "問題画像とAI下書きが同じ画面で確認でき、座標入力が不要",
-            "バックアップ成功、整合性検査、隔離復元、復元後ログインを確認",
-            "更新・失敗時ロールバック・Repair・データ保持Uninstallを実機で確認",
-            "停電、低容量、ネット断、外部AI停止時の学校内手順を担当者が実演",
-            "教師向けユーザーガイドと、この運用ガイドを校内の管理場所へ保存",
-            "自動割当・自動確定は無効。学校ゴールデンセットと責任者承認前に有効化しない",
+            ("Windowsホスト", "Service、DataRoot、SQLite、画像、帳票、資格情報、外部AI接続。", "safe"),
+            ("校内LAN", "固定IP、ooki-grader.test、HTTPS 443、許可CIDRだけ。", "info"),
+            ("職員PC", "生成済みショートカットから正式URLを開く。秘密鍵やAPIキーは置かない。", "safe"),
+            ("外部AI", "ホストだけがGemini/OpenRouterへ送信。インターネットからの受信は不可。", "warn"),
         ],
-        20,
-        229,
-        168,
-        size=7.8,
-        leading=4.0,
-        gap=2.1,
+        242,
+        box_height=37,
+        row_gap=9,
+    )
+    ui.draw_text(c, 14, 147, "担当の分離", size=11, color=ui.DARK)
+    ui.rounded_box(c, 14, 72, 182, 66, fill=ui.WHITE, stroke=ui.BORDER)
+    roles = [
+        ("管理者", "職員、AI接続、状態、バックアップ実行、保存容量、処理状況"),
+        ("Windows担当", "サービス、証明書、hosts、Firewall、ACL、更新、修復、復元"),
+        ("バックアップ担当", "暗号化保存先、完全検証、隔離復元訓練、RPO/RTO"),
+        ("先生", "ひな形・採点・確定。AI提案を原本と比較して判断"),
+    ]
+    y = 125
+    for label, body in roles:
+        ui.draw_text(c, 20, y, label, size=8.2, color=ui.GREEN)
+        ui.paragraph(c, body, 50, y, 138, size=7.5, leading=3.8, color=ui.INK)
+        y -= 14
+    ui.callout(
+        c,
+        14,
+        32,
+        88,
+        28,
+        "秘密情報",
+        "APIキー、パスワード、初期トークンを手順書・写真・通常ログへ残しません。",
+        tone="warn",
+    )
+    ui.callout(
+        c,
+        108,
+        32,
+        88,
+        28,
+        "AIの境界",
+        "AIは下書きと候補を作ります。答案受付の開始・採点修正・確定は先生が行います。",
+        tone="safe",
+    )
+    c.showPage()
+
+    # 3. First admin
+    page_header(c, "02  初回管理", "ホスト限定の管理者作成を完了", 3)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "00-first-admin-bootstrap-current.png",
+        14,
+        124,
+        182,
+        128,
+        border=ui.GREEN,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("ホストで開く", "https://ooki-grader.test/ をホスト自身で開きます。", "safe"),
+            ("トークンを確認", "DataRoot/bootstrap-token.txtをホスト上だけで読みます。", "warn"),
+            ("管理者を登録", "固有ユーザー名、表示名、12文字以上のパスワード。", "safe"),
+            ("痕跡を確認", "成功後にtokenファイルが削除され、通常ログインへ移る。", "safe"),
+        ],
+        112,
+        box_height=30,
+        row_gap=7,
     )
     ui.callout(
         c,
         14,
-        36,
+        20,
+        182,
+        23,
+        "副管理者を先に作る",
+        "事故対応のため、異なる担当者の管理者を2名用意します。最後の有効な管理者は無効化できません。",
+        tone="safe",
+    )
+    c.showPage()
+
+    # 4. Daily health
+    page_header(c, "03  システム状態", "毎日、対応が必要な項目から確認", 4)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "01-admin-system-current.png",
+        14,
+        113,
+        182,
+        139,
+        border=ui.GREEN,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("全体状態", "正常／要確認と最終確認時刻を見る。", "safe"),
+            ("対応項目", "警告本文、対象、エラーコードを読む。", "warn"),
+            ("AI接続", "選択接続、モデル、最終確認、画像対応。", "info"),
+            ("バックアップ", "最終成功、完全検証、保存先到達性。", "safe"),
+        ],
+        102,
+        box_height=29,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        19,
+        182,
+        22,
+        "警告を消すためだけに再試行しない",
+        "項目名、時刻、相関IDを記録し、原因を直してから同じ安全な操作経路で再試行します。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 5. AI
+    page_header(c, "04  AI設定", "候補キーを確認し、4機能を一括で利用可能に", 5)
+    ui.place_image(
+        c,
+        CAPTURE_DIR / "41-admin-ai-one-step.png",
+        14,
+        112,
+        182,
+        140,
+        border=ui.BLUE,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("追加・交換", "キーを入力し「接続を確認して有効化」を1回押す。", "warn"),
+            ("保存前確認", "認証、モデル、画像、構造化出力、利用量、画像タスクを確認。", "info"),
+            ("成功時", "キーを暗号化し、ひな形・氏名・採点・再確認を一括設定。", "safe"),
+            ("失敗時", "候補を保存せず、交換時は以前のキーと4機能を維持。", "safe"),
+        ],
+        101,
+        box_height=29,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        18,
+        182,
+        22,
+        "利用可能でも先生確認は省略しない",
+        "AIは通常答案の氏名欄と初回採点を同じ送信で処理します。名簿照合、生徒割当、答案確定は先生が元画像を確認します。OpenRouterは上級者向けで、保存後に手動で「再確認」します。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 6. Staff
+    page_header(c, "05  職員", "追加・再設定・無効化を履歴付きで行う", 6)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "05-admin-staff-current.png",
+        14,
+        124,
+        182,
+        128,
+        border=ui.GREEN,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("追加", "表示名、ユーザー名、最小限の役割、一時パスワード。", "safe"),
+            ("初回変更", "本人へ直接渡し、期限内に固有パスワードへ変更。", "warn"),
+            ("再設定", "本人確認後に一時パスワードを発行。既存セッションを失効。", "info"),
+            ("無効化", "削除せず状態を変更。再有効化後は本人が再ログイン。", "safe"),
+        ],
+        112,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        20,
+        182,
+        23,
+        "毎月の突合",
+        "学校の職員台帳とアプリを照合し、不要な管理者権限、退職者、変更待ちを確認します。",
+        tone="safe",
+    )
+    c.showPage()
+
+    # 7. Backups
+    page_header(c, "06  バックアップ", "作成・完全検証・復元計画を分ける", 7)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "08-admin-backup-current.png",
+        14,
+        119,
+        182,
+        133,
+        border=ui.GREEN,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("保存先", "BackupRootは現地設置で設定。画面から場所は変更しません。", "info"),
+            ("手動作成", "最新成功時刻と対象版を確認し、完了を待ちます。", "safe"),
+            ("完全検証", "integrityがok、verified時刻が更新されたことを確認。", "safe"),
+            ("復元計画", "読取専用。必要ファイル、移行、操作を確認します。", "warn"),
+        ],
+        108,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        19,
+        182,
+        22,
+        "既定では答案画像を含めない",
+        "IncludeManagedScansはfalseです。画像復旧が必要なら容量、保持、個人情報を承認してから構成変更します。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 8. Storage
+    page_header(c, "07  保存容量", "管理対象と物理ディスクを別々に確認", 8)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "06-admin-storage-current.png",
+        14,
+        118,
+        182,
+        134,
+        border=ui.ORANGE,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("管理対象", "答案画像の使用量と150GiB上限を確認します。", "info"),
+            ("物理空き", "DataRootの実ドライブ空きと5GiB保護予備を見る。", "warn"),
+            ("保持処理", "アプリの整理操作だけを使い、対象期間と件数を確認。", "safe"),
+            ("履歴保持", "画像削除後も結果、訂正、得点、帳票、監査が残る。", "safe"),
+        ],
+        107,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        18,
+        182,
+        22,
+        "Explorerから削除しない",
+        "DataRoot/objectsやSQLite/WALを手動で移動・削除すると、参照と監査の整合性が壊れます。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 9. Jobs
+    page_header(c, "08  処理状況", "失敗・確認待ち・長時間待機を切り分ける", 9)
+    ui.place_image(
+        c,
+        SCREEN_DIR / "07-admin-jobs-current.png",
+        14,
+        124,
+        182,
+        128,
+        border=ui.ORANGE,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("優先順位", "failed、manual review、長時間retry waitingから確認。", "warn"),
+            ("記録", "種別、対象ID、開始／更新時刻、コード、相関ID。", "info"),
+            ("原因を直す", "AI接続、容量、入力、予算、外部429/5xxを確認。", "safe"),
+            ("安全に再試行", "連打やDB編集をせず、同じ画面の用意された操作を使う。", "safe"),
+        ],
+        112,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        20,
+        182,
+        23,
+        "同じ失敗が続くとき",
+        "新しい取込を止め、発生時刻と相関IDを保存して技術担当者へ渡します。APIキーや実答案は添付しません。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 10. Windows service
+    page_header(c, "09  Windows", "サービス・Firewall・healthを確認", 10)
+    ui.paragraph(
+        c,
+        "アプリ画面を開けない場合は、データを触る前にサービス、ポート、Firewall、イベントログ、readinessの順で確認します。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    manual.command_box(
+        c,
+        "Get-Service OokiGrader.Host\n"
+        "Get-NetTCPConnection -LocalPort 443 -State Listen\n"
+        "Get-NetFirewallRule -DisplayName 'Ooki Grader HTTPS'\n"
+        "Invoke-WebRequest 'https://ooki-grader.test/health/live' -UseBasicParsing\n"
+        "Invoke-WebRequest 'https://ooki-grader.test/health/ready' -UseBasicParsing\n"
+        "Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='Ooki Grader' } -MaxEvents 50",
+        14,
+        181,
+        182,
+        62,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("Service", "Runningか。再起動後も遅延自動起動するか。", "safe"),
+            ("Port", "443を別プロセスが所有していないか。", "warn"),
+            ("Firewall", "RemoteAddressが承認済み職員CIDRだけか。", "info"),
+            ("health", "liveとreadyを分け、readyの失敗項目を読む。", "safe"),
+        ],
+        166,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        21,
+        182,
+        22,
+        "操作マーカーを削除しない",
+        "restore.in-progressやmigration.in-progressがある場合は、直前の復旧境界に従いRepairで上書きしません。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 11. Certificate and peers
+    page_header(c, "10  HTTPS", "無料ローカルCAと職員PCを保守", 11)
+    ui.paragraph(
+        c,
+        "HTTPS証明書とWindowsコード署名は別です。今回のCA秘密鍵はホストに非エクスポート可能として保存されます。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("正式名", "https://ooki-grader.test/ とSAN、hostsを一致。", "safe"),
+            ("ホスト", "ooki-grader.testは127.0.0.1へ管理対象行で解決。", "info"),
+            ("職員PC", "同じ名前を固定ホストIPへ解決し、公開CAだけを信頼。", "safe"),
+            ("警告時", "URL、時刻、CA、hosts、期限を直し、続行で回避しない。", "warn"),
+            ("PC追加", "既存peer package一式をコピーしCMDを管理者実行。", "safe"),
+            ("ホスト喪失", "同じCAを移せない。新CAを作り全PCで再設定。", "warn"),
+        ],
+        242,
+        box_height=34,
+        row_gap=8,
+    )
+    manual.command_box(
+        c,
+        "# 証明書の期限と拇印を確認\n"
+        "Get-ChildItem Cert:\\LocalMachine\\My | `\n"
+        "  Where-Object FriendlyName -like 'Ooki Grader*' | `\n"
+        "  Select-Object Subject, Thumbprint, NotAfter, HasPrivateKey",
+        14,
+        48,
+        182,
+        43,
+    )
+    ui.callout(
+        c,
+        14,
+        20,
+        182,
+        21,
+        "更新は60日前から",
+        "同じ正式名で証明書を更新し、Repair後にホストと全職員PCで警告なしを確認してから旧証明書を退役します。",
+        tone="info",
+    )
+    c.showPage()
+
+    # 12. Cadence
+    page_header(c, "11  定期運用", "毎日・毎週・毎月の確認を固定", 12)
+    ui.rounded_box(c, 14, 181, 182, 67, fill=ui.MINT, stroke=ui.GREEN)
+    ui.draw_text(c, 20, 235, "毎日", size=11, color=ui.DARK)
+    manual.checklist(
+        c,
+        [
+            "システム状態と対応が必要な項目",
+            "AI接続、失敗ジョブ、保存容量",
+            "最新バックアップの成功・完全検証時刻",
+            "重大警告時は新規取込を止めて連絡",
+        ],
+        20,
+        222,
+        168,
+        size=7.7,
+    )
+    ui.rounded_box(c, 14, 101, 87, 67, fill=ui.BLUE_PALE, stroke=ui.BLUE)
+    ui.draw_text(c, 20, 155, "毎週", size=11, color=ui.DARK)
+    manual.checklist(
+        c,
+        [
+            "完全検証と復元計画確認",
+            "失敗／再試行、予算、クォータ",
+            "Windows Update、Defender、時刻、UPS",
+            "一時パスワードと不要な権限",
+        ],
+        20,
+        142,
+        75,
+        size=7.3,
+    )
+    ui.rounded_box(c, 109, 101, 87, 67, fill=ui.ORANGE_PALE, stroke=ui.ORANGE)
+    ui.draw_text(c, 115, 155, "毎月", size=11, color=ui.DARK)
+    manual.checklist(
+        c,
+        [
+            "バックアップ世代と容量傾向",
+            "証明書期限（60日前から計画）",
+            "職員台帳との突合",
+            "AIモデル・価格・条件・修正傾向",
+        ],
+        115,
+        142,
+        75,
+        size=7.3,
+    )
+    ui.callout(
+        c,
+        14,
+        48,
         88,
-        30,
-        "今回の精度根拠",
-        "実際の日本語穴埋め用紙1枚を2分類×3回。6/6回、66/66欄を通過。難しい1例の回帰根拠です。",
+        34,
+        "四半期",
+        "隔離環境で復元訓練。RPO、RTO、欠損、資格情報再入力、担当者の手順を記録します。",
+        tone="warn",
+    )
+    ui.callout(
+        c,
+        108,
+        48,
+        88,
+        34,
+        "記録",
+        "実施者、日時、版、結果、次回期限を学校の承認済み運用台帳へ残します。秘密値は残しません。",
+        tone="safe",
+    )
+    c.showPage()
+
+    # 13. Upgrade
+    page_header(c, "12  更新", "バックアップ後に別バージョンへ切替", 13)
+    ui.paragraph(
+        c,
+        "現地持込の未署名版では、媒体管理と全チェックサムを再確認し、専用のAllowChecksumVerifiedOnSitePackageを使います。",
+        14,
+        256,
+        182,
+        size=8.7,
+        leading=4.4,
+        color=ui.MUTED,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("告知・停止", "先生の操作を止め、保守時間と対象版を記録。", "warn"),
+            ("バックアップ", "更新直前に作成し、完全検証と戻し方を確認。", "safe"),
+            ("配布物検査", "新PackageRootのinventoryと全SHA-256を検査。", "safe"),
+            ("事前health", "DB、容量、操作マーカー、現行版を確認。", "info"),
+            ("Upgrade", "新しい版を別ディレクトリへ配置して切替。", "safe"),
+            ("受入", "ready、ログイン、画像、AI少量試験、帳票を確認。", "safe"),
+        ],
+        242,
+        box_height=34,
+        row_gap=8,
+    )
+    manual.command_box(
+        c,
+        "$New = 'C:\\OokiGrader-Releases\\OokiGrader-0.2.0-win-x64'\n"
+        "pwsh -File \"$New\\Upgrade-OokiGrader.ps1\" `\n"
+        "  -PackageRoot $New -Version '0.2.0' `\n"
+        "  -CurrentVersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
+        "  -InstallRoot 'C:\\Program Files\\Ooki Grader' `\n"
+        "  -DataRoot 'D:\\OokiGraderData' -BackupDestination 'E:\\OokiGraderBackup' `\n"
+        "  -VerifiedBackupId '<26文字ID>' `\n"
+        "  -VerifiedBackupRelativePath 'sets/2026/08/<同じID>' `\n"
+        "  -VerifiedBackupManifestSha256 '<64桁SHA-256>' `\n"
+        "  -MaintenanceConfirmed -OfflineConfirmed `\n"
+        "  -FreshPreUpgradeBackupConfirmed `\n"
+        "  -ReadyUri 'https://ooki-grader.test/health/ready' `\n"
+        "  -AllowChecksumVerifiedOnSitePackage",
+        14,
+        44,
+        182,
+        75,
+        size=5.4,
+    )
+    ui.callout(
+        c,
+        14,
+        18,
+        182,
+        20,
+        "失敗境界",
+        "スキーマ変更後の失敗では旧版を無理に起動せず、サービス停止と検証済みバックアップの復元計画へ進みます。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 14. Repair
+    page_header(c, "13  修復", "データを消さず構成を再適用", 14)
+    ui.paragraph(
+        c,
+        "Service、ACL、証明書、Firewall、Production設定の破損時だけRepairを使います。通常のアプリ警告には使いません。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    manual.command_box(
+        c,
+        "pwsh -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Repair-OokiGrader.ps1' `\n"
+        "  -VersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
+        "  -DataRoot 'D:\\OokiGraderData' `\n"
+        "  -HostCertificatePath 'D:\\OokiGraderData\\certificates\\ooki-grader-host.pfx' `\n"
+        "  -SchoolSubnet '192.168.10.0/24' -DnsName 'ooki-grader.test' `\n"
+        "  -HttpsPort 443 -AllowChecksumVerifiedOnSitePackage",
+        14,
+        179,
+        182,
+        63,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("対象を固定", "版、DataRoot、証明書、CIDR、正式名をmanifestと照合。", "info"),
+            ("マーカー確認", "restore/migration in-progressがあればRepairを中止。", "warn"),
+            ("再適用", "Service、ACL、証明書、設定、Firewallだけを安全に構成。", "safe"),
+            ("検証", "Toolの読取healthと実HTTPS readinessの両方を確認。", "safe"),
+        ],
+        164,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        19,
+        182,
+        21,
+        "データを直接修復しない",
+        "SQLite、WAL、DataRoot/objects、操作マーカーを手動編集・削除しません。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 15. Restore
+    page_header(c, "14  復元", "必ずオフライン・明示確認・隔離検証", 15)
+    ui.paragraph(
+        c,
+        "画面の復元計画確認は読み取り専用です。実復元は保守時間にWindows担当者がサービスを止めて実行します。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("先生を停止", "新規操作なし、メンテナンス閲覧専用を確認。", "warn"),
+            ("再検証", "Backup ID、相対パス、manifest SHA-256を二者照合。", "safe"),
+            ("Service停止", "復元スクリプトは稼働サービスを暗黙停止しません。", "warn"),
+            ("Restore", "Offline/Maintenance/ConfirmRestoreを明示。", "safe"),
+            ("オフラインhealth", "DB、スキーマ、ロールバックスナップショットを確認。", "info"),
+            ("資格情報", "別ホストならGeminiキーを再入力し、一括確認を完了。", "info"),
+        ],
+        242,
+        box_height=33,
+        row_gap=8,
+    )
+    manual.command_box(
+        c,
+        "$Maint = 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64'\n"
+        "Stop-Service OokiGrader.Host\n"
+        "pwsh -File \"$Maint\\Restore-OokiGrader.ps1\" `\n"
+        "  -VersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
+        "  -DataRoot 'D:\\OokiGraderData' `\n"
+        "  -BackupDestination 'E:\\OokiGraderBackup' `\n"
+        "  -BackupId '<26文字ID>' `\n"
+        "  -BackupRelativePath 'sets/2026/08/<同じID>' `\n"
+        "  -BackupManifestSha256 '<64桁SHA-256>' `\n"
+        "  -MaintenanceConfirmed -OfflineConfirmed `\n"
+        "  -AllowChecksumVerifiedOnSitePackage `\n"
+        "  -ConfirmRestore '<同じID>'",
+        14,
+        43,
+        182,
+        69,
+        size=5.4,
+    )
+    ui.callout(
+        c,
+        14,
+        17,
+        182,
+        20,
+        "成功後も自動再開しない",
+        "サービス停止、復元マーカー、ロールバックスナップショットを保ち、承認済みの復元後ランブックで終結します。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 16. Uninstall
+    page_header(c, "15  アンインストール", "アプリを退避し、学校データは保持", 16)
+    ui.paragraph(
+        c,
+        "UninstallはServiceとFirewallを解除し、アプリを回復領域へ移します。DataRootとBackupRootは削除しません。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("利用停止", "先生がオフラインで新規処理がないことを確認。", "warn"),
+            ("バックアップ", "最新成功と完全検証、保持義務を確認。", "safe"),
+            ("Offline確認", "対象InstallRootとDataRootを記録して実行。", "info"),
+            ("保持確認", "DataRoot、BackupRoot、職員PCのCA信頼は残る。", "safe"),
+        ],
+        242,
+        box_height=36,
+        row_gap=9,
+    )
+    manual.command_box(
+        c,
+        "pwsh -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Uninstall-OokiGrader.ps1' `\n"
+        "  -InstallRoot 'C:\\Program Files\\Ooki Grader' `\n"
+        "  -DataRoot 'D:\\OokiGraderData' `\n"
+        "  -OfflineConfirmed",
+        14,
+        108,
+        182,
+        47,
+    )
+    ui.callout(
+        c,
+        14,
+        65,
+        88,
+        31,
+        "回復可能",
+        "アプリは回復領域へ退避。結果確認前に手動削除しません。",
         tone="safe",
     )
     ui.callout(
         c,
         108,
-        36,
+        65,
         88,
-        30,
-        "残る外部ゲート",
-        "署名済みWindows実機試験、校内LAN、復旧訓練、複数科目のゴールデンセット、担当者教育。",
+        31,
+        "データ廃棄",
+        "学校の記録保持・個人情報廃棄手順で別承認します。",
         tone="warn",
     )
+    ui.callout(
+        c,
+        14,
+        25,
+        182,
+        28,
+        "職員PCの信頼設定",
+        "CAやhosts行の撤去は全端末の利用終了とデータ移行を確認してから、別の管理作業として行います。",
+        tone="info",
+    )
+    c.showPage()
+
+    # 17. Troubleshooting
+    page_header(c, "16  障害対応", "症状から最短の確認へ進む", 17)
+    ui.rounded_box(c, 14, 65, 182, 184, fill=ui.WHITE, stroke=ui.BORDER)
+    cases = [
+        ("ログイン上限", "それ以上試さず15分待つ。ユーザー名・時刻を確認し、別管理者が必要なら再設定。"),
+        ("AI接続失敗", "接続状態、キー、モデル、画像対応、外向きDNS/HTTPS、予算、クォータ。"),
+        ("AI結果が不正", "受付開始・確定を止め、元画像、設定、モデル、プロンプト版、教師期待値を固定。"),
+        ("証明書警告", "正式名、SAN、公開CA、hosts、期限、PC時刻。警告を無視しない。"),
+        ("403 Origin", "IP直打ちや別名をやめ、生成された正式HTTPSショートカットを使用。"),
+        ("容量警告", "新規取込を止め、物理空き、管理対象、保持処理、BackupRootを確認。"),
+        ("Service停止", "イベントログ、証明書、ACL、設定、容量、操作マーカー。マーカー時はRepairしない。"),
+        ("更新後停止", "旧版を無理に起動せず、更新境界と検証済みバックアップの復元計画へ。"),
+        ("backup失敗", "保存先の接続、暗号化、権限、容量。SQLiteを手動コピーしない。"),
+        ("職員PCだけ不可", "peer setup結果、LAN、Firewall CIDR、固定IP、CAとhosts行。"),
+    ]
+    y = 236
+    for title, body in cases:
+        ui.draw_text(c, 20, y, title, size=8.2, color=ui.GREEN)
+        ui.paragraph(c, body, 55, y, 133, size=7.2, leading=3.7, color=ui.INK)
+        y -= 15.7
+        c.setStrokeColor(ui.BORDER)
+        c.line(ui.mm(20), ui.mm(y + 5), ui.mm(188), ui.mm(y + 5))
+    ui.callout(
+        c,
+        14,
+        27,
+        182,
+        27,
+        "問い合わせに残す情報",
+        "日時、役割、PC名、正式URL、対象ID、エラーコード、相関ID、再現手順、直前の更新。秘密値と実答案は通常連絡へ貼りません。",
+        tone="warn",
+    )
+    c.showPage()
+
+    # 18. Handover/acceptance
+    page_header(c, "17  引き渡し", "運用責任者が再現できることを確認", 18)
+    ui.paragraph(
+        c,
+        "設置担当者だけが知る手順を残さず、主管理者・副管理者・Windows担当者・バックアップ担当者の全員が自分の操作を実演します。",
+        14,
+        256,
+        182,
+        size=8.8,
+        leading=4.5,
+        color=ui.MUTED,
+    )
+    ui.rounded_box(c, 14, 74, 182, 168, fill=ui.WHITE, stroke=ui.BORDER)
+    manual.checklist(
+        c,
+        [
+            "版、物理配布元、全件チェックサム検査を記録した",
+            "固定IP、正式URL、CIDR、DataRoot、BackupRoot、CA拇印を記録した",
+            "サービス、Firewall、live、ready、Windows再起動を確認した",
+            "全職員PCでpeer setup、HTTPS検査、ショートカットを確認した",
+            "主管理者と副管理者、最小権限の職員を作った",
+            "Geminiの一括確認と4機能の「利用できます」、予算を確認した",
+            "手動バックアップ、完全検証、復元計画確認を実行した",
+            "保存容量と保持後に残る履歴を確認した",
+            "架空データでひな形、順番取込、確認、確定、帳票PDFを実演した",
+            "隔離復元訓練の担当、期日、RPO、RTOを決めた",
+            "更新、修復、復元でAllowChecksumVerifiedOnSitePackageを使う境界を共有した",
+            "毎日・毎週・毎月の担当者と代行者を決めた",
+            "教師ガイド、現地設置ガイド、本書を校内の管理場所へ保存した",
+        ],
+        20,
+        229,
+        168,
+        size=7.45,
+        leading=3.9,
+        gap=1.8,
+    )
+    ui.callout(
+        c,
+        14,
+        35,
+        88,
+        27,
+        "今回の安全境界",
+        "無料ローカルCA + 管理下の現地持込 + 全件チェックサム。HTTPや警告回避は使いません。",
+        tone="safe",
+    )
+    ui.callout(
+        c,
+        108,
+        35,
+        88,
+        27,
+        "残る訓練",
+        "故障、停電、外部AI停止、低容量、隔離復元を実機で定期的に練習します。",
+        tone="warn",
+    )
+
+    c.showPage()
+
+    # 19. Robust lists and durable bulk result export
+    page_header(c, "18  帳票運用", "検索条件と一括出力ジョブを安全に管理", 19)
+    ui.paragraph(
+        c,
+        "生徒・実施・ひな形・帳票の一覧は、複数語検索、完全一致フィルター、安定した並び替え、カーソルページングを共通で使います。一括出力は画面を閉じても継続する耐久ジョブです。",
+        14,
+        256,
+        182,
+        size=8.5,
+        leading=4.3,
+        color=ui.MUTED,
+    )
+    ui.place_image(
+        c,
+        CAPTURE_DIR / "40-reports-filter-sort.png",
+        14,
+        139,
+        87,
+        103,
+        border=ui.GREEN,
+    )
+    ui.place_image(
+        c,
+        CAPTURE_DIR / "44-reports-bulk-ready.png",
+        109,
+        139,
+        87,
+        103,
+        border=ui.BLUE,
+    )
+    manual.steps_grid(
+        c,
+        [
+            ("対象上限", "1ジョブは100名・500結果・512MiB。超過時は条件を分割します。", "warn"),
+            ("状態", "queued / rendering / verified / failed / superseded を確認します。", "info"),
+            ("耐久性", "同時処理は同一職員2件・全体4件まで。URLの一括出力IDから進捗を復元します。", "safe"),
+            ("配布前", "verifiedだけを取得し、PDF件数・manifest.csv・文字化けを抜き取り確認します。", "safe"),
+        ],
+        126,
+        box_height=30,
+        row_gap=7,
+    )
+    ui.callout(
+        c,
+        14,
+        22,
+        182,
+        27,
+        "失敗・対象更新・未割当",
+        "部分ZIPや古いZIPは配布しません。氏名割当、確定状態、条件、容量、ジョブを確認し、先生に新しいプレビューから再実行してもらいます。ダウンロード済みZIPは共有PCに残しません。",
+        tone="warn",
+    )
+
     c.save()
+    print(OUTPUT)
 
 
 if __name__ == "__main__":

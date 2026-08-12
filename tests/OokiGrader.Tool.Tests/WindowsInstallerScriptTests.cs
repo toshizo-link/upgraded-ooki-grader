@@ -71,6 +71,8 @@ public sealed class WindowsInstallerScriptTests
     [InlineData("Restore-OokiGrader.ps1")]
     [InlineData("Uninstall-OokiGrader.ps1")]
     [InlineData("New-OokiGraderCertificate.ps1")]
+    [InlineData("Install-OokiGraderOnSite.ps1")]
+    [InlineData("New-OokiGraderPeerTrustPackage.ps1")]
     [InlineData("Install-OokiGraderPeerTrust.ps1")]
     [InlineData("New-OokiGraderReleasePackage.ps1")]
     [InlineData("New-OokiGraderWindowsInstaller.ps1")]
@@ -167,6 +169,238 @@ public sealed class WindowsInstallerScriptTests
             "peer",
             install,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OnSiteInstallerOrchestratesPrivateTlsServiceTrustAndHealth()
+    {
+        var script = ReadInstallerFile(
+            "Install-OokiGraderOnSite.ps1");
+
+        Assert.Contains(
+            "[string] $DnsName = 'ooki-grader.test'",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            ".local",
+            script,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "HostAddressReservationConfirmed",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AcceptChecksumVerifiedUnsignedOnSitePackage",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BackupDestinationEncryptionConfirmed",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "New-OokiGraderCertificate.ps1",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-OokiGraderPreflight.ps1",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CreateLocalCa = $true",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Set-OokiManagedHostsEntry",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-IpAddress '127.0.0.1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Install-OokiGrader.ps1",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "New-OokiGraderPeerTrustPackage.ps1",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-OokiGraderHealth.ps1",
+            script,
+            StringComparison.Ordinal);
+        Assert.True(
+            script.IndexOf(
+                "Test-OokiGraderPreflight.ps1",
+                StringComparison.Ordinal)
+            < script.IndexOf(
+                "New-OokiGraderCertificate.ps1",
+                StringComparison.Ordinal),
+            "Blocking preflight must run before certificate issuance.");
+        Assert.Contains(
+            "tlsBypassUsed = $false",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SkipCertificateCheck",
+            script,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "http://",
+            script,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PeerTrustPackageContainsOnlyPublicTrustAndFixedConnectionData()
+    {
+        var builder = ReadInstallerFile(
+            "New-OokiGraderPeerTrustPackage.ps1");
+        var installer = ReadInstallerFile(
+            "Install-OokiGraderPeerTrust.ps1");
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains(
+            "schema = 'ooki-peer-trust/v1'",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "containsPrivateKey = $false",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "caCertificateSha256",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Install-On-This-PC.cmd",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-ExecutionPolicy RemoteSigned",
+            builder,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "-ExecutionPolicy Bypass",
+            builder,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "PackageMode",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "peer trust package checksum manifest",
+            installer,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "contains a missing or unexpected file",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "failed its SHA-256 integrity check",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Set-OokiManagedHostsEntry",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-OokiReadyEndpoint",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Ooki Grader.url",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Peer computers may receive only the public CA certificate",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "function Set-OokiManagedHostsEntry",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "already contains an unmanaged entry",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ooki-grader-before-first-change.bak",
+            module,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SkipCertificateCheck",
+            installer,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LocalCaKeyIsNonExportableAndNeverPlacedInPeerPackage()
+    {
+        var certificate = ReadInstallerFile(
+            "New-OokiGraderCertificate.ps1");
+        var peerPackage = ReadInstallerFile(
+            "New-OokiGraderPeerTrustPackage.ps1");
+
+        Assert.Contains(
+            "-KeyExportPolicy NonExportable",
+            certificate,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "caPrivateKeyExportable = $false",
+            certificate,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if ($certificate.HasPrivateKey)",
+            peerPackage,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "must never contain a CA private key",
+            peerPackage,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnSiteUnsignedModeIsDistinctFromDevelopmentOverride()
+    {
+        var wrapper = ReadInstallerFile(
+            "Install-OokiGraderOnSite.ps1");
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+
+        Assert.Contains(
+            "physically controlled, checksum-verified on-site package",
+            wrapper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[switch] $AllowChecksumVerifiedOnSitePackage",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[switch] $AllowUnsignedDevelopmentBuild",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Choose either the physically controlled on-site package mode",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AllowChecksumVerifiedOnSitePackage",
+            preflight,
+            StringComparison.Ordinal);
+        foreach (var maintenanceScriptName in new[]
+        {
+            "Repair-OokiGrader.ps1",
+            "Upgrade-OokiGrader.ps1",
+            "Restore-OokiGrader.ps1",
+        })
+        {
+            Assert.Contains(
+                "[switch] $AllowChecksumVerifiedOnSitePackage",
+                ReadInstallerFile(maintenanceScriptName),
+                StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -329,6 +563,14 @@ public sealed class WindowsInstallerScriptTests
             script,
             StringComparison.Ordinal);
         Assert.Contains(
+            "'Install-OokiGraderOnSite.ps1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "'New-OokiGraderPeerTrustPackage.ps1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "'release-inventory.json'",
             script,
             StringComparison.Ordinal);
@@ -441,6 +683,22 @@ public sealed class WindowsInstallerScriptTests
             "Install-OokiGraderPeerTrust.ps1",
             setup,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "Install-OokiGraderOnSite.ps1",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "New-OokiGraderPeerTrustPackage.ps1",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ooki-grader.test",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ooki-grader.local",
+            setup,
+            StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
             "{autopf}\\PowerShell\\7\\pwsh.exe",
             setup,

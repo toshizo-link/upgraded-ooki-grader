@@ -44,11 +44,21 @@
 
 ### ADR-006 — Per-task accuracy-validated profiles
 
-**Decision:** Template extraction, name recognition, initial grading, and adjudication can use different provider/model profiles. Only evaluated revisions activate.
+**Decision:** Template extraction, name recognition, initial grading, and
+adjudication use versioned task profiles. The checked-in Gemini defaults are
+selected by formal release evaluation, then a school candidate-key setup may
+activate the four exact-current revisions atomically after the full capability
+and synthetic image-task probe (`approval_state=capability_passed`). OpenRouter,
+custom routing, and backward-compatible manual paths activate only separately
+evaluated revisions.
 
 **Why:** the cheapest model may be suitable for names but not complex answer-key extraction; accuracy is the top priority.
 
-**Consequences:** evaluation tooling and profile provenance are core product features.
+**Consequences:** release evaluation tooling, capability evidence, atomic
+candidate replacement, and immutable profile provenance are core product
+features. Routine Gemini setup does not expose
+pilot/evaluation/manual-activation controls and cannot authorize automatic publication, assignment, or
+finalization.
 
 ### ADR-007 — Batch semantics remain provider-specific
 
@@ -92,9 +102,14 @@ from this role, and a role change requires regeneration.
 
 ### ADR-010 — Hybrid deterministic/AI grading
 
-**Decision:** Local rules grade exact/choice/numeric/Kanji constraints; AI transcribes and evaluates semantic short answers; local code totals.
+**Decision:** AI-rubric judgment is the template-editor default for every
+supported question type. Teachers can opt individual questions into
+exact/variant, numeric, choice, or manual grading. Local code always validates
+point bounds and explicit constraints and computes totals; low-confidence or
+otherwise unsafe proposals still require review.
 
-**Why:** greater accuracy, lower cost, explainable hard rules.
+**Why:** one predictable default reduces setup work, while explicit local
+presets preserve explainable hard rules where the teacher wants them.
 
 **Consequences:** question type/configuration quality matters.
 
@@ -201,7 +216,7 @@ These do not block this specification but affect implementation defaults:
 |---|---|---|---|
 | O-01 | Actual peak students/papers/pages | one-year school estimate | baseline sizing table |
 | O-02 | Primary scanner settings | sample scans | 300 dpi grayscale/color tested |
-| O-03 | Initial active provider profile | side-by-side holdout | highest accuracy, then review time/cost |
+| O-03 | Initial checked-in release-default task profiles | side-by-side holdout | highest accuracy, then review time/cost |
 | O-04 | Adjudication model/profile | ambiguous-answer evaluation | same initial profile + teacher review |
 | O-05 | Subjects/question types in MVP | representative tests | objective/numeric/exact/short semantic |
 | O-06 | Model-answer document formats | sample solved papers/keys | four source roles in spec |
@@ -255,7 +270,7 @@ These do not block this specification but affect implementation defaults:
 | Expedite | 旧優先処理 | Legacy term; disabled for new work and absent from the current UI |
 | Task profile | AI処理プロファイル | Provider/model/prompt/schema/input/strategy revision for one task |
 | Capability probe | 接続・機能テスト | Synthetic check of key/model/features |
-| Accuracy evaluation | 精度評価 | Versioned golden-set result permitting profile activation |
+| Accuracy evaluation | 精度評価 | Versioned golden-set result for release qualification and advanced/manual profile activation; not a routine Gemini key-setup field |
 | Auto-assignment | 自動割り当て | High-confidence local student match from AI transcription |
 | Review queue | 確認待ち | Items requiring teacher/operator action |
 | Kanji policy | 漢字条件 | Whether a non-Kanji answer can receive credit |

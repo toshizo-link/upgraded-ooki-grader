@@ -789,11 +789,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Provider", "State");
-
                     b.HasIndex("Provider")
                         .IsUnique()
                         .HasFilter("\"state\" <> 'disabled'");
+
+                    b.HasIndex("Provider", "State");
 
                     b.ToTable("ai_connection", null, t =>
                         {
@@ -1782,6 +1782,178 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.BulkTranscriptExportEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("BackgroundJobId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("background_job_id")
+                        .IsFixedLength();
+
+                    b.Property<long?>("Bytes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("bytes");
+
+                    b.Property<long?>("CompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_at");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByStaffUserId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_by_staff_user_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_code");
+
+                    b.Property<string>("FileReferenceId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("file_reference_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("PackageFormatVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("package_format_version");
+
+                    b.Property<int>("ProcessedResultCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("processed_result_count");
+
+                    b.Property<string>("RendererVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("renderer_version");
+
+                    b.Property<string>("RequestFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("RequestIdempotencyKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("request_idempotency_key");
+
+                    b.Property<int>("ResultCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("result_count");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SafeErrorDetail")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_error_detail");
+
+                    b.Property<string>("SelectorHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("selector_hash");
+
+                    b.Property<string>("SelectorJson")
+                        .IsRequired()
+                        .HasMaxLength(32000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("selector_json");
+
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("SourceFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_fingerprint");
+
+                    b.Property<string>("SourceSnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(512000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_snapshot_json");
+
+                    b.Property<long?>("StartedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<int>("StudentCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("student_count");
+
+                    b.Property<long?>("SupersededAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("superseded_at");
+
+                    b.Property<string>("SupersededReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("superseded_reason");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BackgroundJobId")
+                        .IsUnique();
+
+                    b.HasIndex("FileReferenceId")
+                        .IsUnique()
+                        .HasFilter("\"file_reference_id\" IS NOT NULL");
+
+                    b.HasIndex("CreatedByStaffUserId", "RequestIdempotencyKey")
+                        .IsUnique()
+                        .HasFilter("\"request_idempotency_key\" IS NOT NULL");
+
+                    b.HasIndex("CreatedByStaffUserId", "State");
+
+                    b.HasIndex("CreatedByStaffUserId", "CreatedAt", "Id");
+
+                    b.HasIndex("State", "CreatedAt", "Id");
+
+                    b.ToTable("bulk_transcript_export", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_bulk_transcript_export_counts", "student_count > 0 AND student_count <= result_count AND result_count > 0 AND processed_result_count >= 0 AND processed_result_count <= result_count");
+
+                            t.HasCheckConstraint("ck_bulk_transcript_export_state", "state IN ('queued','rendering','verified','failed','superseded')");
+
+                            t.HasCheckConstraint("ck_bulk_transcript_export_superseded", "superseded_at IS NULL OR superseded_reason IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_bulk_transcript_export_verified", "state <> 'verified' OR (file_reference_id IS NOT NULL AND sha256 IS NOT NULL AND bytes > 0 AND completed_at IS NOT NULL AND processed_result_count = result_count)");
+                        });
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.DeletionManifestEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -2548,6 +2720,241 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.ToTable("idempotency_record", (string)null);
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AssemblyPolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assembly_policy_version");
+
+                    b.Property<long?>("CompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_at");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByStaffUserId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_by_staff_user_id")
+                        .IsFixedLength();
+
+                    b.Property<int>("ExpectedPageCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expected_page_count");
+
+                    b.Property<long>("ExpiresAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("LastErrorJson")
+                        .HasMaxLength(16000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_json");
+
+                    b.Property<string>("PlanHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("plan_hash");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TestSessionId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_session_id")
+                        .IsFixedLength();
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByStaffUserId");
+
+                    b.HasIndex("Status", "ExpiresAt");
+
+                    b.HasIndex("TestSessionId", "Status", "CreatedAt")
+                        .IsDescending(false, false, true);
+
+                    b.ToTable("ordered_scan_batch", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_ordered_scan_batch_expected_pages", "expected_page_count > 0");
+
+                            t.HasCheckConstraint("ck_ordered_scan_batch_expiry", "expires_at > created_at");
+
+                            t.HasCheckConstraint("ck_ordered_scan_batch_status", "status IN ('draft','processing','completed','needsReview','failed','cancelled','expired')");
+                        });
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanItemEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("BatchId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("batch_id")
+                        .IsFixedLength();
+
+                    b.Property<int?>("ClassificationConfidenceBasisPoints")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("classification_confidence_basis_points");
+
+                    b.Property<string>("ClientItemId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("client_item_id");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<int?>("DetectedTemplatePageNumber")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("detected_template_page_number");
+
+                    b.Property<int?>("GroupOrdinal")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("group_ordinal");
+
+                    b.Property<int>("InputOrdinal")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("input_ordinal");
+
+                    b.Property<string>("IssueCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("issue_code");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("original_file_name");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<long?>("SourceBytes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("source_bytes");
+
+                    b.Property<string>("SourceFileReferenceId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_file_reference_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("SourceSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_sha256");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("SubmissionId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("submission_id")
+                        .IsFixedLength();
+
+                    b.Property<int?>("SubmissionPageNumber")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("submission_page_number");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UploadCompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("upload_completed_at");
+
+                    b.Property<string>("UploadSessionId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("upload_session_id")
+                        .IsFixedLength();
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceFileReferenceId")
+                        .IsUnique()
+                        .HasFilter("\"source_file_reference_id\" IS NOT NULL");
+
+                    b.HasIndex("UploadSessionId")
+                        .IsUnique()
+                        .HasFilter("\"upload_session_id\" IS NOT NULL");
+
+                    b.HasIndex("BatchId", "ClientItemId")
+                        .IsUnique();
+
+                    b.HasIndex("BatchId", "InputOrdinal")
+                        .IsUnique();
+
+                    b.HasIndex("BatchId", "Status");
+
+                    b.HasIndex("SubmissionId", "SubmissionPageNumber")
+                        .IsUnique()
+                        .HasFilter("\"submission_id\" IS NOT NULL");
+
+                    b.ToTable("ordered_scan_item", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_ordered_scan_item_confidence", "classification_confidence_basis_points IS NULL OR classification_confidence_basis_points BETWEEN 0 AND 10000");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_detected_page", "detected_template_page_number IS NULL OR detected_template_page_number > 0");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_grouped", "status <> 'grouped' OR (submission_id IS NOT NULL AND submission_page_number > 0)");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_ordinal", "input_ordinal > 0");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_source_manifest", "(source_sha256 IS NULL OR length(source_sha256) = 64) AND (source_bytes IS NULL OR source_bytes > 0) AND (status NOT IN ('uploaded','classified','grouped','needsReview') OR (upload_session_id IS NOT NULL AND source_sha256 IS NOT NULL AND source_bytes > 0 AND upload_completed_at IS NOT NULL)) AND (status NOT IN ('uploaded','classified','needsReview') OR source_file_reference_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_status", "status IN ('pending','uploaded','classified','grouped','needsReview','rejected')");
+
+                            t.HasCheckConstraint("ck_ordered_scan_item_submission_placement", "(submission_id IS NULL AND submission_page_number IS NULL) OR (submission_id IS NOT NULL AND submission_page_number > 0 AND group_ordinal > 0)");
+                        });
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OutboxEventEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -2682,6 +3089,10 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("allow_non_kanji");
 
+                    b.Property<bool>("AnswerOrderInsensitive")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("answer_order_insensitive");
+
                     b.Property<string>("AnswerRegionId")
                         .HasMaxLength(26)
                         .HasColumnType("TEXT")
@@ -2745,6 +3156,10 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
                         .HasColumnName("question_type");
+
+                    b.Property<bool>("RequiresCompleteAnswer")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("requires_complete_answer");
 
                     b.Property<bool>("RequiresReviewAlways")
                         .HasColumnType("INTEGER")
@@ -3753,6 +4168,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnName("id")
                         .IsFixedLength();
 
+                    b.Property<string>("AssemblyManifestHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assembly_manifest_hash");
+
                     b.Property<string>("AssignedStudentId")
                         .HasMaxLength(26)
                         .HasColumnType("TEXT")
@@ -3802,6 +4222,16 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Property<string>("FinalizedByStaffUserId")
                         .HasColumnType("TEXT")
                         .HasColumnName("finalized_by_staff_user_id");
+
+                    b.Property<string>("OrderedScanBatchId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ordered_scan_batch_id")
+                        .IsFixedLength();
+
+                    b.Property<int?>("OrderedScanGroupOrdinal")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("ordered_scan_group_ordinal");
 
                     b.Property<string>("OriginalFileName")
                         .HasMaxLength(500)
@@ -3911,6 +4341,14 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("UploadCompletedAt");
 
+                    b.HasIndex("OrderedScanBatchId", "AssemblyManifestHash")
+                        .IsUnique()
+                        .HasFilter("\"ordered_scan_batch_id\" IS NOT NULL");
+
+                    b.HasIndex("OrderedScanBatchId", "OrderedScanGroupOrdinal")
+                        .IsUnique()
+                        .HasFilter("\"ordered_scan_batch_id\" IS NOT NULL");
+
                     b.HasIndex("TestSessionId", "AssignedStudentId")
                         .IsUnique()
                         .HasFilter("\"assigned_student_id\" IS NOT NULL AND \"canonical_for_session\" = 1 AND \"voided_at\" IS NULL");
@@ -3926,6 +4364,8 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("ck_submission_attempt", "attempt_number > 0");
 
                             t.HasCheckConstraint("ck_submission_auto_assignment_evidence", "assignment_method <> 'auto' OR (assignment_policy_version IS NOT NULL AND assignment_evidence_json IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_submission_ordered_scan_provenance", "(ordered_scan_batch_id IS NULL AND ordered_scan_group_ordinal IS NULL AND assembly_manifest_hash IS NULL) OR (ordered_scan_batch_id IS NOT NULL AND ordered_scan_group_ordinal > 0 AND assembly_manifest_hash IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_submission_page_count", "page_count IS NULL OR page_count > 0");
 
@@ -4073,6 +4513,519 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.SubmissionSourcePageEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AssemblyPolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assembly_policy_version");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FileReferenceId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("file_reference_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("OrderedScanItemId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ordered_scan_item_id")
+                        .IsFixedLength();
+
+                    b.Property<int>("PageNumber")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("page_number");
+
+                    b.Property<int>("SourcePageNumber")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("source_page_number");
+
+                    b.Property<string>("SourceSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_sha256");
+
+                    b.Property<string>("SubmissionId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("submission_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("UploadSessionId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("upload_session_id")
+                        .IsFixedLength();
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FileReferenceId")
+                        .IsUnique()
+                        .HasFilter("\"file_reference_id\" IS NOT NULL");
+
+                    b.HasIndex("OrderedScanItemId")
+                        .IsUnique();
+
+                    b.HasIndex("UploadSessionId");
+
+                    b.HasIndex("SubmissionId", "PageNumber")
+                        .IsUnique();
+
+                    b.ToTable("submission_source_page", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_submission_source_page_numbers", "page_number > 0 AND source_page_number = 1");
+
+                            t.HasCheckConstraint("ck_submission_source_page_sha256", "length(source_sha256) = 64");
+                        });
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationBatchEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AnswerStyle")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("answer_style");
+
+                    b.Property<long?>("CompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_at");
+
+                    b.Property<int>("CompletedUnitCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_unit_count");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_by_user_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("CurrentOperationId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("current_operation_id");
+
+                    b.Property<int>("ExpectedUnitCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expected_unit_count");
+
+                    b.Property<int>("FailedUnitCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failed_unit_count");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("PlanHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("plan_hash");
+
+                    b.Property<string>("PromptSystem")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt_system");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SourceId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_id")
+                        .IsFixedLength();
+
+                    b.Property<int>("SourcePageCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("source_page_count");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("TestType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_type");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId", "Status");
+
+                    b.HasIndex("SourceId", "CreatedAt");
+
+                    b.ToTable("template_generation_batch", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_template_generation_batch_counts", "source_page_count > 0 AND expected_unit_count > 0 AND completed_unit_count >= 0 AND failed_unit_count >= 0 AND completed_unit_count <= expected_unit_count AND failed_unit_count <= expected_unit_count AND completed_unit_count + failed_unit_count <= expected_unit_count");
+
+                            t.HasCheckConstraint("ck_template_generation_batch_route", "(test_type IN ('Hop','Step') AND answer_style IS NULL AND prompt_system = 'Standard') OR (test_type = 'ClassPlacement' AND answer_style IS NULL AND prompt_system = 'ClassPlacement') OR (test_type = 'Other' AND answer_style = 'Normal' AND prompt_system = 'Standard') OR (test_type = 'Other' AND answer_style = 'FillBlank' AND prompt_system = 'FillBlank')");
+
+                            t.HasCheckConstraint("ck_template_generation_batch_status", "status IN ('Draft','Validating','Generating','NeedsFinalCheck','Confirming','Completed','Failed','Cancelled')");
+                        });
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationDerivedSourceEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AppliedRotationsJson")
+                        .IsRequired()
+                        .HasMaxLength(16000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("applied_rotations_json");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DerivationPolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("derivation_policy_version");
+
+                    b.Property<string>("DerivationType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("derivation_type");
+
+                    b.Property<string>("DerivedContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("derived_content_sha256");
+
+                    b.Property<string>("FileReferenceId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("file_reference_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("OriginalContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("original_content_sha256");
+
+                    b.Property<int>("ParentFirstPage")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("parent_first_page");
+
+                    b.Property<int>("ParentLastPage")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("parent_last_page");
+
+                    b.Property<string>("ParentSourceId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("parent_source_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("UnitId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("unit_id")
+                        .IsFixedLength();
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FileReferenceId");
+
+                    b.HasIndex("UnitId")
+                        .IsUnique();
+
+                    b.HasIndex("ParentSourceId", "ParentFirstPage", "ParentLastPage", "DerivedContentSha256");
+
+                    b.ToTable("template_generation_derived_source", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_template_generation_derived_source_range", "parent_first_page >= 1 AND parent_last_page >= parent_first_page");
+
+                            t.HasCheckConstraint("ck_template_generation_derived_source_type", "derivation_type IN ('pageRange','pageRangeAndRotation')");
+                        });
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationUnitEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AnswerStyle")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("answer_style");
+
+                    b.Property<string>("AppliedRotationsJson")
+                        .IsRequired()
+                        .HasMaxLength(16000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("applied_rotations_json");
+
+                    b.Property<string>("BatchId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("batch_id")
+                        .IsFixedLength();
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedTemplateId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_template_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("CreatedTemplateVersionId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_template_version_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("DerivedSourceObjectKey")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("derived_source_object_key");
+
+                    b.Property<string>("DerivedSourceSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("derived_source_sha256");
+
+                    b.Property<string>("DeterministicSuffix")
+                        .HasMaxLength(2)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("deterministic_suffix");
+
+                    b.Property<string>("ExtractionDraftHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("extraction_draft_hash");
+
+                    b.Property<string>("ExtractionDraftJson")
+                        .HasMaxLength(1000000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("extraction_draft_json");
+
+                    b.Property<string>("ExtractionJobId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("extraction_job_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("FilenameGrade")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("filename_grade");
+
+                    b.Property<string>("FinalTemplateName")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("final_template_name");
+
+                    b.Property<int>("FirstPage")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("first_page");
+
+                    b.Property<string>("GenerationProfileHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generation_profile_hash");
+
+                    b.Property<string>("GenerationProfileJson")
+                        .IsRequired()
+                        .HasMaxLength(64000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generation_profile_json");
+
+                    b.Property<bool>("GradeConfirmedByUser")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("grade_confirmed_by_user");
+
+                    b.Property<string>("GradeEvidence")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("grade_evidence");
+
+                    b.Property<int>("LastPage")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_page");
+
+                    b.Property<int>("OrientationAttemptCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("orientation_attempt_count");
+
+                    b.Property<string>("PaperGrade")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("paper_grade");
+
+                    b.Property<string>("PrintedTestName")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("printed_test_name");
+
+                    b.Property<string>("PromptSystem")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt_system");
+
+                    b.Property<string>("ResolvedGrade")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolved_grade");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("sequence");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<int?>("StepSetIndex")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("step_set_index");
+
+                    b.Property<int?>("StepVariationIndex")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("step_variation_index");
+
+                    b.Property<string>("TeacherNote")
+                        .HasMaxLength(4000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("teacher_note");
+
+                    b.Property<string>("TestType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_type");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("UserConfirmedBaseName")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("user_confirmed_base_name");
+
+                    b.Property<string>("WarningsJson")
+                        .IsRequired()
+                        .HasMaxLength(64000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("warnings_json");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedTemplateId");
+
+                    b.HasIndex("CreatedTemplateVersionId")
+                        .IsUnique()
+                        .HasFilter("\"created_template_version_id\" IS NOT NULL");
+
+                    b.HasIndex("ExtractionJobId")
+                        .IsUnique()
+                        .HasFilter("\"extraction_job_id\" IS NOT NULL");
+
+                    b.HasIndex("BatchId", "Sequence")
+                        .IsUnique();
+
+                    b.HasIndex("BatchId", "Status");
+
+                    b.ToTable("template_generation_unit", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_template_generation_unit_confirmed", "status <> 'Confirmed' OR (created_template_id IS NOT NULL AND created_template_version_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_created_pair", "(created_template_id IS NULL AND created_template_version_id IS NULL) OR (created_template_id IS NOT NULL AND created_template_version_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_hop_range", "test_type <> 'Hop' OR last_page = first_page");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_orientation_attempts", "orientation_attempt_count BETWEEN 0 AND 2");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_range", "sequence > 0 AND first_page >= 1 AND last_page >= first_page");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_route", "(test_type IN ('Hop','Step') AND answer_style IS NULL AND prompt_system = 'Standard') OR (test_type = 'ClassPlacement' AND answer_style IS NULL AND prompt_system = 'ClassPlacement') OR (test_type = 'Other' AND answer_style = 'Normal' AND prompt_system = 'Standard') OR (test_type = 'Other' AND answer_style = 'FillBlank' AND prompt_system = 'FillBlank')");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_status", "status IN ('Pending','Queued','Generating','Rotating','RetryingAfterRotation','Extracted','Failed','Confirmed')");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_step_metadata", "(test_type = 'Step' AND step_set_index > 0 AND step_variation_index BETWEEN 1 AND 3 AND deterministic_suffix = '-' || step_variation_index) OR (test_type <> 'Step' AND step_set_index IS NULL AND step_variation_index IS NULL AND deterministic_suffix IS NULL)");
+
+                            t.HasCheckConstraint("ck_template_generation_unit_step_range", "test_type <> 'Step' OR last_page = first_page + 1");
+                        });
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateSourceEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -4155,6 +5108,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("ai_generation_provenance_id");
 
+                    b.Property<string>("AnswerStyle")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("answer_style");
+
                     b.Property<string>("BasedOnVersionId")
                         .HasMaxLength(26)
                         .HasColumnType("TEXT")
@@ -4180,11 +5138,51 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasDefaultValue(1000L)
                         .HasColumnName("default_points_milli");
 
+                    b.Property<int?>("ExpectedSubmissionPageCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("expected_submission_page_count");
+
+                    b.Property<string>("GenerationProfileHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generation_profile_hash");
+
+                    b.Property<string>("GenerationProfileJson")
+                        .HasMaxLength(64000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generation_profile_json");
+
+                    b.Property<int?>("GenerationProfileVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generation_profile_version");
+
+                    b.Property<string>("OriginatingBatchId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("originating_batch_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("OriginatingUnitId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("originating_unit_id")
+                        .IsFixedLength();
+
                     b.Property<string>("PipelineVersion")
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("TEXT")
                         .HasColumnName("pipeline_version");
+
+                    b.Property<string>("PrintedTestName")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("printed_test_name");
+
+                    b.Property<string>("PromptSystem")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt_system");
 
                     b.Property<long?>("PublishedAt")
                         .HasColumnType("INTEGER")
@@ -4195,6 +5193,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("published_by_staff_user_id")
                         .IsFixedLength();
+
+                    b.Property<string>("ResolvedGrade")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolved_grade");
 
                     b.Property<long>("Revision")
                         .IsConcurrencyToken()
@@ -4207,6 +5210,14 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("state");
 
+                    b.Property<int?>("StepSetIndex")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("step_set_index");
+
+                    b.Property<int?>("StepVariationIndex")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("step_variation_index");
+
                     b.Property<long?>("TargetTotalPointsMilli")
                         .HasColumnType("INTEGER")
                         .HasColumnName("target_total_points_milli");
@@ -4217,6 +5228,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("test_template_id")
                         .IsFixedLength();
+
+                    b.Property<string>("TestType")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_type");
 
                     b.Property<long>("UpdatedAt")
                         .HasColumnType("INTEGER")
@@ -4229,6 +5245,10 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("BasedOnVersionId");
+
+                    b.HasIndex("OriginatingBatchId");
+
+                    b.HasIndex("OriginatingUnitId");
 
                     b.HasIndex("TestTemplateId", "VersionNumber")
                         .IsUnique();
@@ -4274,6 +5294,12 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_by_staff_user_id")
                         .IsFixedLength();
 
+                    b.Property<string>("CreationSource")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("creation_source");
+
                     b.Property<bool>("ExpectedRosterEnabled")
                         .HasColumnType("INTEGER")
                         .HasColumnName("expected_roster_enabled");
@@ -4283,6 +5309,16 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("TEXT")
                         .HasColumnName("priority");
+
+                    b.Property<string>("RequestFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("RequestIdempotencyKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("request_idempotency_key");
 
                     b.Property<long>("Revision")
                         .IsConcurrencyToken()
@@ -4294,6 +5330,27 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("TEXT")
                         .HasColumnName("state");
+
+                    b.Property<string>("TemplateCategorySnapshot")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_category_snapshot");
+
+                    b.Property<string>("TemplateCourseSnapshot")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_course_snapshot");
+
+                    b.Property<string>("TemplateGradeLabelSnapshot")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_grade_label_snapshot");
+
+                    b.Property<string>("TemplateSubjectSnapshot")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_subject_snapshot");
+
+                    b.Property<string>("TemplateTitleSnapshot")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_title_snapshot");
 
                     b.Property<string>("TemplateVersionId")
                         .IsRequired()
@@ -4318,8 +5375,17 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TemplateVersionId");
 
+                    b.HasIndex("CreatedByStaffUserId", "RequestIdempotencyKey")
+                        .IsUnique()
+                        .HasFilter("\"request_idempotency_key\" IS NOT NULL");
+
                     b.HasIndex("TestDate", "State")
                         .IsDescending(true, false);
+
+                    b.HasIndex(new[] { "TemplateVersionId" }, "UX_TestSession_TemplatePublish")
+                        .IsUnique()
+                        .HasDatabaseName("ux_test_session_template_publish")
+                        .HasFilter("\"creation_source\" = 'template_publish'");
 
                     b.ToTable("test_session", null, t =>
                         {
@@ -4491,6 +5557,21 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("incremental_hash_checkpoint_json");
 
+                    b.Property<string>("OrderedScanBatchId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ordered_scan_batch_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("OrderedScanClientItemId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ordered_scan_client_item_id");
+
+                    b.Property<int?>("OrderedScanInputOrdinal")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("ordered_scan_input_ordinal");
+
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -4538,11 +5619,21 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasFilter("\"idempotency_key\" IS NOT NULL");
 
+                    b.HasIndex("OrderedScanBatchId", "OrderedScanClientItemId")
+                        .IsUnique()
+                        .HasFilter("\"ordered_scan_batch_id\" IS NOT NULL AND \"state\" IN ('uploading','finalizing','duplicate_pending','completed')");
+
+                    b.HasIndex("OrderedScanBatchId", "OrderedScanInputOrdinal")
+                        .IsUnique()
+                        .HasFilter("\"ordered_scan_batch_id\" IS NOT NULL AND \"state\" IN ('uploading','finalizing','duplicate_pending','completed')");
+
                     b.ToTable("upload_session", null, t =>
                         {
                             t.HasCheckConstraint("ck_upload_session_bytes", "expected_bytes >= 0 AND current_bytes >= 0 AND current_bytes <= expected_bytes");
 
                             t.HasCheckConstraint("ck_upload_session_destination", "(purpose = 'completed_test' AND test_session_id IS NOT NULL) OR (purpose <> 'completed_test')");
+
+                            t.HasCheckConstraint("ck_upload_session_ordered_scan_binding", "(ordered_scan_batch_id IS NULL AND ordered_scan_input_ordinal IS NULL AND ordered_scan_client_item_id IS NULL) OR (ordered_scan_batch_id IS NOT NULL AND ordered_scan_input_ordinal > 0 AND ordered_scan_client_item_id IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_upload_session_state", "state IN ('uploading','finalizing','duplicate_pending','completed','cancelled','expired','failed')");
                         });
@@ -4759,6 +5850,32 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Navigation("BackupPolicy");
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.BulkTranscriptExportEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.BackgroundJobEntity", "BackgroundJob")
+                        .WithMany()
+                        .HasForeignKey("BackgroundJobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.StaffUserEntity", "CreatedByStaffUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedByStaffUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileReferenceEntity", "FileReference")
+                        .WithMany()
+                        .HasForeignKey("FileReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("BackgroundJob");
+
+                    b.Navigation("CreatedByStaffUser");
+
+                    b.Navigation("FileReference");
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.DeletionManifestEntity", b =>
                 {
                     b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.BackgroundJobEntity", null)
@@ -4868,6 +5985,55 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Navigation("Submission");
 
                     b.Navigation("TemplateVersion");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.StaffUserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedByStaffUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TestSessionEntity", "TestSession")
+                        .WithMany()
+                        .HasForeignKey("TestSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("TestSession");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanItemEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", "Batch")
+                        .WithMany("Items")
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileReferenceEntity", "SourceFileReference")
+                        .WithMany()
+                        .HasForeignKey("SourceFileReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.SubmissionEntity", "Submission")
+                        .WithMany()
+                        .HasForeignKey("SubmissionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.UploadSessionEntity", "UploadSession")
+                        .WithMany()
+                        .HasForeignKey("UploadSessionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("SourceFileReference");
+
+                    b.Navigation("Submission");
+
+                    b.Navigation("UploadSession");
                 });
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.QuestionEntity", b =>
@@ -5056,6 +6222,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasForeignKey("CurrentGradingRunId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", null)
+                        .WithMany()
+                        .HasForeignKey("OrderedScanBatchId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileObjectEntity", null)
                         .WithMany()
                         .HasForeignKey("OriginalFileObjectId")
@@ -5097,6 +6268,115 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Navigation("Submission");
 
                     b.Navigation("ThumbnailFileReference");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.SubmissionSourcePageEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileReferenceEntity", "FileReference")
+                        .WithMany()
+                        .HasForeignKey("FileReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanItemEntity", "OrderedScanItem")
+                        .WithMany()
+                        .HasForeignKey("OrderedScanItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.SubmissionEntity", "Submission")
+                        .WithMany()
+                        .HasForeignKey("SubmissionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.UploadSessionEntity", "UploadSession")
+                        .WithMany()
+                        .HasForeignKey("UploadSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FileReference");
+
+                    b.Navigation("OrderedScanItem");
+
+                    b.Navigation("Submission");
+
+                    b.Navigation("UploadSession");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationBatchEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.StaffUserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.UploadSessionEntity", "Source")
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Source");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationDerivedSourceEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileReferenceEntity", "FileReference")
+                        .WithMany()
+                        .HasForeignKey("FileReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.UploadSessionEntity", "ParentSource")
+                        .WithMany()
+                        .HasForeignKey("ParentSourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationUnitEntity", "Unit")
+                        .WithOne("DerivedSource")
+                        .HasForeignKey("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationDerivedSourceEntity", "UnitId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FileReference");
+
+                    b.Navigation("ParentSource");
+
+                    b.Navigation("Unit");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationUnitEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationBatchEntity", "Batch")
+                        .WithMany("Units")
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TestTemplateEntity", "CreatedTemplate")
+                        .WithMany()
+                        .HasForeignKey("CreatedTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TemplateVersionEntity", "CreatedTemplateVersion")
+                        .WithMany()
+                        .HasForeignKey("CreatedTemplateVersionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.BackgroundJobEntity", "ExtractionJob")
+                        .WithMany()
+                        .HasForeignKey("ExtractionJobId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("CreatedTemplate");
+
+                    b.Navigation("CreatedTemplateVersion");
+
+                    b.Navigation("ExtractionJob");
                 });
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateSourceEntity", b =>
@@ -5155,6 +6435,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.UploadSessionEntity", b =>
                 {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", null)
+                        .WithMany()
+                        .HasForeignKey("OrderedScanBatchId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.TestSessionEntity", "TestSession")
                         .WithMany()
                         .HasForeignKey("TestSessionId")
@@ -5232,6 +6517,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Navigation("QuestionResults");
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.QuestionEntity", b =>
                 {
                     b.Navigation("AcceptedAnswers");
@@ -5266,6 +6556,16 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.SubmissionPageEntity", b =>
                 {
                     b.Navigation("Artifacts");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationBatchEntity", b =>
+                {
+                    b.Navigation("Units");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateGenerationUnitEntity", b =>
+                {
+                    b.Navigation("DerivedSource");
                 });
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TemplateVersionEntity", b =>

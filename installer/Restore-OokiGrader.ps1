@@ -32,6 +32,8 @@ param(
 
     [string] $ServiceName = 'OokiGrader.Host',
 
+    [switch] $AllowChecksumVerifiedOnSitePackage,
+
     [switch] $AllowUnsignedDevelopmentBuild
 )
 
@@ -41,6 +43,12 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+if ($AllowChecksumVerifiedOnSitePackage -and
+    $AllowUnsignedDevelopmentBuild) {
+    throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
+}
+$allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
+    $AllowUnsignedDevelopmentBuild
 if (-not $MaintenanceConfirmed -or -not $OfflineConfirmed) {
     throw 'Restore requires explicit maintenance and offline confirmations.'
 }
@@ -80,7 +88,7 @@ $toolSignature = Assert-OokiAuthenticodeSignature `
     -FilePath $toolExecutable `
     -ExpectedSignerThumbprint (
         [string] $installation.expectedSignerThumbprint) `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $service = Get-Service -Name $ServiceName -ErrorAction Stop
 if ($service.Status -ne 'Stopped') {
     throw 'The Ooki Grader Windows Service must already be stopped; this restore script will not stop a live service implicitly.'

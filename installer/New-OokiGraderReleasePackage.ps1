@@ -166,6 +166,7 @@ if ($PSCmdlet.ShouldProcess(
         }
 
         $technicianFiles = @(
+            'Install-OokiGraderOnSite.ps1',
             'Install-OokiGrader.ps1',
             'Upgrade-OokiGrader.ps1',
             'Repair-OokiGrader.ps1',
@@ -174,6 +175,7 @@ if ($PSCmdlet.ShouldProcess(
             'Test-OokiGraderHealth.ps1',
             'Test-OokiGraderPreflight.ps1',
             'New-OokiGraderCertificate.ps1',
+            'New-OokiGraderPeerTrustPackage.ps1',
             'Install-OokiGraderPeerTrust.ps1',
             'OokiGrader.Windows.psm1'
         )

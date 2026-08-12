@@ -87,6 +87,8 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   query?: Record<string, QueryValue>;
   etag?: string;
   idempotencyKey?: string;
+  /** Set false only for explicitly read-only POST endpoints such as previews. */
+  idempotency?: boolean;
   csrf?: boolean;
 }
 
@@ -114,7 +116,11 @@ export async function requestWithMeta<T>(
   }
 
   if (options.etag) headers.set("If-Match", options.etag);
-  if (isMutation && !path.startsWith("/auth/")) {
+  if (
+    isMutation &&
+    options.idempotency !== false &&
+    !path.startsWith("/auth/")
+  ) {
     headers.set(
       "Idempotency-Key",
       options.idempotencyKey || newIdempotencyKey(),
@@ -213,8 +219,15 @@ export function asPaged<T>(value: PagedResponse<T> | T[]): PagedResponse<T> {
 }
 
 export interface UploadFileOptions {
-  purpose: "completedTest" | "templateSource";
+  purpose: "completedTest" | "completedTestPage" | "templateSource";
   testSessionId?: string;
+  orderedScanBatchId?: string;
+  inputOrdinal?: number;
+  clientItemId?: string;
+  /** Stable across retries of the same logical page. */
+  createIdempotencyKey?: string;
+  /** Stable across retries after the final chunk is already durable. */
+  finalizeIdempotencyKey?: string;
   onProgress?: (uploadedBytes: number, totalBytes: number) => void;
   signal?: AbortSignal;
 }
@@ -223,27 +236,55 @@ export async function uploadFile(
   file: File,
   options: UploadFileOptions,
 ): Promise<UploadFinalizeResponse> {
+  const declaredMimeType =
+    file.type ||
+    (options.purpose === "completedTestPage" && /\.pdf$/i.test(file.name)
+      ? "application/pdf"
+      : "application/octet-stream");
   const created = await api.post<UploadCreateResponse>(
     "/uploads",
     {
       purpose: options.purpose,
       testSessionId: options.testSessionId,
+      orderedScanBatchId: options.orderedScanBatchId,
+      inputOrdinal: options.inputOrdinal,
+      clientItemId: options.clientItemId,
       fileName: file.name,
-      declaredMimeType: file.type || "application/octet-stream",
+      declaredMimeType,
       length: file.size,
     },
     {
-      idempotencyKey: newIdempotencyKey(),
+      idempotencyKey: options.createIdempotencyKey || newIdempotencyKey(),
       signal: options.signal,
     },
   );
 
+  // The create response may be an idempotency replay from before one or more
+  // durable chunks were accepted. Always reload the authoritative offset/state
+  // so a lost PATCH/finalize response resumes instead of re-sending from zero.
+  const status = await api.get<UploadCreateResponse & UploadFinalizeResponse>(
+    `/uploads/${encodeURIComponent(created.uploadId)}`,
+    undefined,
+    options.signal,
+  );
+  if (status.state === "completed") {
+    return status;
+  }
+  if (status.state !== "uploading" && status.state !== "finalizing") {
+    throw new ApiError(409, {
+      status: 409,
+      title: "アップロードを再開できません",
+      detail: "この送信は終了しています。ページを再送してください。",
+      code: "UPLOAD_SESSION_NOT_RESUMABLE",
+    });
+  }
+
   const token = await readCsrfToken(options.signal);
-  let offset = created.offset;
-  const chunkSize = Math.min(created.maxChunkBytes || 8_388_608, 8_388_608);
+  let offset = status.offset;
+  const chunkSize = Math.min(status.maxChunkBytes || 8_388_608, 8_388_608);
   while (offset < file.size) {
     const end = Math.min(offset + chunkSize, file.size);
-    const response = await fetch(created.chunkUrl, {
+    const response = await fetch(status.chunkUrl, {
       method: "PATCH",
       credentials: "include",
       headers: {
@@ -271,7 +312,11 @@ export async function uploadFile(
   return api.post<UploadFinalizeResponse>(
     `/uploads/${encodeURIComponent(created.uploadId)}:finalize`,
     undefined,
-    { idempotencyKey: newIdempotencyKey(), signal: options.signal },
+    {
+      idempotencyKey:
+        options.finalizeIdempotencyKey || newIdempotencyKey(),
+      signal: options.signal,
+    },
   );
 }
 

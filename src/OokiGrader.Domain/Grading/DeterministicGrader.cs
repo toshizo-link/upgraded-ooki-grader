@@ -72,10 +72,11 @@ public static class DeterministicGrader
         {
             var phoneticException = question.AcceptedAnswers.FirstOrDefault(
                 answer => answer.VariantType == AcceptedAnswerVariantType.PhoneticException
-                    && string.Equals(
-                        answer.NormalizedText,
-                        normalized,
-                        StringComparison.Ordinal));
+                    && AnswersMatch(
+                        question,
+                        answer,
+                        observation.Transcription,
+                        normalized));
 
             if (phoneticException is not null)
             {
@@ -112,17 +113,24 @@ public static class DeterministicGrader
         }
 
         var matchingVariant = question.AcceptedAnswers.FirstOrDefault(
-            answer => answer.VariantType is AcceptedAnswerVariantType.Canonical
+            answer => (answer.VariantType is AcceptedAnswerVariantType.Canonical
                 or AcceptedAnswerVariantType.Equivalent
-                or AcceptedAnswerVariantType.PhoneticException
-                && string.Equals(answer.NormalizedText, normalized, StringComparison.Ordinal));
+                or AcceptedAnswerVariantType.PhoneticException)
+                && AnswersMatch(question, answer, observation.Transcription, normalized));
 
         if (matchingVariant is not null)
         {
             return FullCredit(
                 question,
                 GradingStage.ExplicitVariant,
-                matchingVariant.VariantType == AcceptedAnswerVariantType.PhoneticException
+                question.AnswerOrderInsensitive
+                    && !string.Equals(
+                        matchingVariant.NormalizedText,
+                        normalized,
+                        StringComparison.Ordinal)
+                    ? GradeReason.OrderInsensitiveMatch
+                    : matchingVariant.VariantType
+                        == AcceptedAnswerVariantType.PhoneticException
                     ? GradeReason.PhoneticException
                     : GradeReason.ExplicitVariantMatch,
                 normalized);
@@ -337,6 +345,19 @@ public static class DeterministicGrader
                 ? GradeDisposition.Correct
                 : GradeDisposition.Partial;
 
+        if (question.RequiresCompleteAnswer
+            && disposition == GradeDisposition.Partial)
+        {
+            return Result(
+                question,
+                MilliPoints.Zero,
+                GradeDisposition.Incorrect,
+                GradingStage.Rubric,
+                GradeReason.CompleteAnswerRequired,
+                requiresReview: true,
+                normalized);
+        }
+
         return Result(
             question,
             proposed,
@@ -346,6 +367,20 @@ public static class DeterministicGrader
             requiresReview: true,
             normalized);
     }
+
+    private static bool AnswersMatch(
+        QuestionDefinition question,
+        AcceptedAnswer acceptedAnswer,
+        string transcription,
+        string normalizedTranscription) =>
+        question.AnswerOrderInsensitive
+            ? AnswerComponentMultiset.Equals(
+                acceptedAnswer.AnswerText,
+                transcription)
+            : string.Equals(
+                acceptedAnswer.NormalizedText,
+                normalizedTranscription,
+                StringComparison.Ordinal);
 
     private static QuestionGradeResult FullCredit(
         QuestionDefinition question,

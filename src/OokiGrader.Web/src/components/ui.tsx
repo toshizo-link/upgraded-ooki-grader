@@ -148,6 +148,7 @@ const statusMap: Record<string, { label: string; tone: Tone }> = {
   needsNameReview: { label: "生徒名の確認が必要", tone: "warning" },
   needs_grade_review: { label: "採点の確認が必要", tone: "warning" },
   needsGradeReview: { label: "採点の確認が必要", tone: "warning" },
+  needsReview: { label: "確認が必要", tone: "warning" },
   ready_for_review: { label: "確認できます", tone: "accent" },
   readyForReview: { label: "確認できます", tone: "accent" },
   ready_to_finalize: { label: "確定できます", tone: "success" },
@@ -161,10 +162,10 @@ const statusMap: Record<string, { label: string; tone: Tone }> = {
   finalizing: { label: "受信処理中", tone: "info" },
   scan_deleted: { label: "画像削除済み", tone: "neutral" },
   scanDeleted: { label: "画像削除済み", tone: "neutral" },
-  active: { label: "公開中", tone: "success" },
+  active: { label: "利用中", tone: "success" },
   draft: { label: "下書き", tone: "neutral" },
   stale: { label: "旧設定", tone: "warning" },
-  published: { label: "公開済み", tone: "success" },
+  published: { label: "確定済み", tone: "success" },
   retired: { label: "利用終了", tone: "warning" },
   archived: { label: "アーカイブ", tone: "neutral" },
   open: { label: "受付中", tone: "success" },
@@ -189,6 +190,7 @@ const statusMap: Record<string, { label: string; tone: Tone }> = {
   completed: { label: "完了", tone: "success" },
   retrying: { label: "再試行中", tone: "warning" },
   verified: { label: "作成済み", tone: "success" },
+  superseded: { label: "対象更新のため停止", tone: "warning" },
   rendering: { label: "作成中", tone: "info" },
   generating: { label: "作成中", tone: "info" },
   retry_waiting: { label: "再試行待ち", tone: "warning" },
@@ -433,6 +435,11 @@ export function Modal({
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -444,7 +451,39 @@ export function Modal({
       focusable?.focus();
     }, 0);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        panelRef.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+        ) || [],
+      ).filter(
+        (element) =>
+          !element.hasAttribute("hidden") &&
+          element.getAttribute("aria-hidden") !== "true",
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panelRef.current?.focus();
+        return;
+      }
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !panelRef.current?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (active === last || !panelRef.current?.contains(active))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -452,7 +491,7 @@ export function Modal({
       document.removeEventListener("keydown", handleKeyDown);
       previousFocus.current?.focus();
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -465,6 +504,7 @@ export function Modal({
     >
       <div
         ref={panelRef}
+        tabIndex={-1}
         className={classNames("modal", `modal--${size}`)}
         role="dialog"
         aria-modal="true"

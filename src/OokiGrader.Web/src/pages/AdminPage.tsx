@@ -56,8 +56,11 @@ interface AiConnection {
 
 interface AiCapabilityProbeResult {
   state: string;
+  authentication: boolean;
+  modelAvailable: boolean;
   imageInput: boolean;
   structuredOutput: boolean;
+  usageMetadata: boolean;
   safeErrorCode?: string;
   checkedAt?: string;
 }
@@ -78,28 +81,10 @@ interface AiTaskProfile {
   mediaResolution: string;
   maxOutputTokens: number;
   concurrencyLimit: number;
-  approvalState: string;
-  accuracyEvaluationId?: string;
   active: boolean;
   stale?: boolean;
   activatedAt?: string;
   revision: number;
-}
-
-interface AiEvaluationRecord {
-  id: string;
-  profileId: string;
-  profileRevision: number;
-  datasetVersion: string;
-  datasetSha256: string;
-  evidenceSha256: string;
-  sampleCount: number;
-  agreementBasisPoints: number;
-  lowerConfidenceBoundBasisPoints: number;
-  criticalFailureCount: number;
-  teacherReviewOnly: boolean;
-  eligibleForPilotApproval: boolean;
-  createdAt: string;
 }
 
 interface AiBudget {
@@ -932,18 +917,6 @@ function AiConfigurationView({
   const [timeoutSeconds, setTimeoutSeconds] = useState("75");
   const [concurrencyLimit, setConcurrencyLimit] = useState("2");
   const [probingConnectionId, setProbingConnectionId] = useState<string>();
-  const [validatingProfile, setValidatingProfile] =
-    useState<AiTaskProfile>();
-  const [evaluationId, setEvaluationId] = useState("");
-  const [datasetVersion, setDatasetVersion] = useState("");
-  const [datasetSha256, setDatasetSha256] = useState("");
-  const [evidenceSha256, setEvidenceSha256] = useState("");
-  const [sampleCount, setSampleCount] = useState("");
-  const [agreementBasisPoints, setAgreementBasisPoints] = useState("");
-  const [lowerConfidenceBoundBasisPoints, setLowerConfidenceBoundBasisPoints] =
-    useState("");
-  const [criticalFailureCount, setCriticalFailureCount] = useState("0");
-  const [teacherReviewOnly, setTeacherReviewOnly] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
@@ -981,6 +954,7 @@ function AiConfigurationView({
     const provider = connectionEditor.provider;
     const connection = connectionEditor.connection;
     const selectedModelId = modelId.trim();
+    const automaticSetup = provider === "geminiDirect";
     setWorking(true);
     setMessage(undefined);
     setError(undefined);
@@ -992,6 +966,7 @@ function AiConfigurationView({
         timeoutSeconds: Number(timeoutSeconds),
         concurrencyLimit: Number(concurrencyLimit),
         revision: connection?.revision,
+        testAndEnable: automaticSetup,
       };
       if (connection) {
         await api.put(
@@ -1007,11 +982,12 @@ function AiConfigurationView({
       setApiKey("");
       setConnectionEditor(undefined);
       setMessage(
-        connection
-          ? `${aiProviderLabel(provider)} APIキーを交換しました。再度、接続確認を実行してください。`
-          : `${aiProviderLabel(provider)}接続を保存しました。接続確認を実行してください。`,
+        automaticSetup
+          ? "Geminiの接続を確認して保存しました。全てのAI機能を利用できます。"
+          : "OpenRouterのAPIキーを保存しました。「再確認」を押して接続を確認してください。",
       );
       connections.reload();
+      profiles.reload();
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -1036,11 +1012,16 @@ function AiConfigurationView({
       );
       if (
         result.state === "passed" &&
+        result.authentication &&
+        result.modelAvailable &&
         result.imageInput &&
-        result.structuredOutput
+        result.structuredOutput &&
+        result.usageMetadata
       ) {
         setMessage(
-          `${aiProviderLabel(connection.provider)}との接続、画像入力、構造化出力を確認しました。AI機能を利用できます。`,
+          connection.provider === "geminiDirect"
+            ? "Geminiとの接続と必要な機能を確認しました。全てのAI機能を利用できます。"
+            : "OpenRouterとの接続と必要な機能を確認しました。既定のAI機能はGemini設定を使用します。",
         );
       } else if (isDeepSeekV4Flash(connection.modelId)) {
         setError(
@@ -1051,7 +1032,7 @@ function AiConfigurationView({
           ? `（${result.safeErrorCode}）`
           : "";
         setError(
-          `${aiProviderLabel(connection.provider)}には接続しましたが、画像入力と構造化出力の両方を確認できないため利用できません${code}。`,
+          `${aiProviderLabel(connection.provider)}には接続しましたが、認証・モデル・画像入力・構造化出力・使用量情報をすべて確認できないため利用できません${code}。`,
         );
       }
       connections.reload();
@@ -1063,120 +1044,21 @@ function AiConfigurationView({
           : `${aiProviderLabel(connection.provider)}接続を確認できませんでした。`,
       );
       connections.reload();
+      profiles.reload();
     } finally {
       setProbingConnectionId(undefined);
       setWorking(false);
     }
   }
 
-  function openProfileValidation(profile: AiTaskProfile) {
-    setValidatingProfile(profile);
-    setEvaluationId(profile.accuracyEvaluationId || "");
-    setDatasetVersion("");
-    setDatasetSha256("");
-    setEvidenceSha256("");
-    setSampleCount("");
-    setAgreementBasisPoints("");
-    setLowerConfidenceBoundBasisPoints("");
-    setCriticalFailureCount("0");
-    setTeacherReviewOnly(false);
-    setError(undefined);
-  }
-
-  async function createEvaluationRecord() {
-    if (!validatingProfile) return;
-    setWorking(true);
-    setError(undefined);
-    try {
-      const record = await api.post<AiEvaluationRecord>(
-        `/admin/ai-task-profiles/${encodeURIComponent(
-          validatingProfile.id,
-        )}/evaluations`,
-        {
-          datasetVersion: datasetVersion.trim(),
-          datasetSha256: datasetSha256.trim(),
-          evidenceSha256: evidenceSha256.trim(),
-          sampleCount: Number(sampleCount),
-          agreementBasisPoints: Number(agreementBasisPoints),
-          lowerConfidenceBoundBasisPoints: Number(
-            lowerConfidenceBoundBasisPoints,
-          ),
-          criticalFailureCount: Number(criticalFailureCount),
-          teacherReviewOnlyAcknowledged: teacherReviewOnly,
-        },
-        { idempotencyKey: newIdempotencyKey() },
-      );
-      setEvaluationId(record.id);
-      setMessage(
-        `評価証跡 ${record.id} を保存しました。内容を確認してパイロット承認してください。`,
-      );
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "評価証跡を保存できませんでした。",
-      );
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function validateProfile() {
-    if (!validatingProfile) return;
-    setWorking(true);
-    setError(undefined);
-    try {
-      await api.post(
-        `/admin/ai-task-profiles/${encodeURIComponent(
-          validatingProfile.id,
-        )}:validate`,
-        {
-          evaluationId: evaluationId.trim(),
-          teacherReviewOnlyAcknowledged: teacherReviewOnly,
-        },
-        { idempotencyKey: newIdempotencyKey() },
-      );
-      setMessage(
-        `${validatingProfile.name} を先生確認必須のパイロット用として承認しました。`,
-      );
-      setValidatingProfile(undefined);
-      profiles.reload();
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "プロファイルを承認できませんでした。",
-      );
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function activateProfile(profile: AiTaskProfile) {
-    setWorking(true);
-    setError(undefined);
-    try {
-      await api.post(
-        `/admin/ai-task-profiles/${encodeURIComponent(profile.id)}:activate`,
-        {},
-        { idempotencyKey: newIdempotencyKey() },
-      );
-      setMessage(`${profile.name} を有効化しました。`);
-      profiles.reload();
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "プロファイルを有効化できませんでした。",
-      );
-    } finally {
-      setWorking(false);
-    }
-  }
-
   const connectionLoading = connections.status === "loading";
   const profileItems = profiles.data?.items ?? [];
-  const currentProfileItems = profileItems.filter((profile) => !profile.stale);
+  const aiTasks = [
+    "templateExtraction",
+    "nameTranscription",
+    "initialGrading",
+    "adjudication",
+  ];
 
   return (
     <div className="stack">
@@ -1185,14 +1067,14 @@ function AiConfigurationView({
           <p>{message}</p>
         </InlineAlert>
       ) : null}
-      {!connectionEditor && !validatingProfile && error ? (
+      {!connectionEditor && error ? (
         <InlineAlert tone="danger">
           <p>{error}</p>
         </InlineAlert>
       ) : null}
       <InlineAlert tone="info">
         <p>
-          Geminiがひな形作成と採点を補助します。AIの結果は、公開・確定する前に先生が確認できます。
+          Geminiがひな形作成と採点を補助します。AIの結果は、受付開始・答案確定前に先生が確認できます。
         </p>
       </InlineAlert>
 
@@ -1298,72 +1180,47 @@ function AiConfigurationView({
           <LoadingState compact />
         ) : profiles.status === "error" ? (
           <ErrorState error={profiles.error} onRetry={profiles.reload} />
-        ) : currentProfileItems.length ? (
+        ) : (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
                   <th>AI機能</th>
-                  <th>接続・モデル</th>
-                  <th>状態・操作</th>
+                  <th>状態</th>
                 </tr>
               </thead>
               <tbody>
-                {currentProfileItems.map((profile) => (
-                  <tr key={profile.id}>
-                    <td>
-                      <strong>{aiTaskLabel(profile.taskType)}</strong>
-                    </td>
-                    <td>
-                      <strong>
-                        {aiProviderLabel(
-                          connectionItems.find(
-                            (item) => item.id === profile.connectionId,
-                          )?.provider,
-                        )}
-                      </strong>
-                      <br />
-                      <small>{profile.modelId}</small>
-                    </td>
-                    <td>
-                      <div className="button-row">
-                        {!profile.active &&
+                {aiTasks.map((taskType) => {
+                  const available = profileItems.some(
+                    (profile) => {
+                      const owningConnection = connectionItems.find(
+                        (connection) => connection.id === profile.connectionId,
+                      );
+                      return (
+                        profile.taskType === taskType &&
+                        profile.active &&
                         !profile.stale &&
-                        profile.approvalState !== "pilot_approved" &&
-                        profile.approvalState !== "production_approved" ? (
-                          <Button
-                            variant="secondary"
-                            onClick={() => openProfileValidation(profile)}
-                            disabled={working}
-                          >
-                            評価記録を承認
-                          </Button>
-                        ) : null}
-                        {!profile.active &&
-                        !profile.stale &&
-                        (profile.approvalState === "pilot_approved" ||
-                          profile.approvalState === "production_approved") ? (
-                          <Button
-                            onClick={() => activateProfile(profile)}
-                            disabled={working}
-                          >
-                            有効化
-                          </Button>
-                        ) : null}
-                        {profile.active ? <Badge tone="success">利用できます</Badge> : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        owningConnection?.state === "active" &&
+                        owningConnection.lastCapabilityProbe?.state === "passed"
+                      );
+                    },
+                  );
+                  return (
+                    <tr key={taskType}>
+                      <td>
+                        <strong>{aiTaskLabel(taskType)}</strong>
+                      </td>
+                      <td>
+                        <Badge tone={available ? "success" : "warning"}>
+                          {available ? "利用できます" : "APIキーを再設定"}
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        ) : (
-          <EmptyState
-            icon="connection"
-            title="タスクプロファイルがありません"
-            description="画像入力と構造化出力の接続確認に合格すると、安全な既定値で作成されます。"
-          />
         )}
       </Card>
 
@@ -1413,7 +1270,11 @@ function AiConfigurationView({
             ? `${aiProviderLabel(connectionEditor.provider)} APIキーを交換`
             : "AI接続を追加"
         }
-        description="キーは保存時に暗号化され、この画面へ再表示されません。"
+        description={
+          connectionEditor?.provider === "geminiDirect"
+            ? "入力したキーをすぐに接続確認し、成功した場合だけ暗号化して保存します。"
+            : "APIキーを暗号化して保存します。保存後、「再確認」で接続を確認してください。"
+        }
         size="small"
         footer={
           <>
@@ -1437,7 +1298,13 @@ function AiConfigurationView({
                 Number(concurrencyLimit) > 16
               }
             >
-              {working ? "保存中…" : "暗号化して保存"}
+              {working
+                ? connectionEditor?.provider === "geminiDirect"
+                  ? "確認中…"
+                  : "保存中…"
+                : connectionEditor?.provider === "geminiDirect"
+                  ? "接続を確認して有効化"
+                  : "暗号化して保存"}
             </Button>
           </>
         }
@@ -1534,26 +1401,31 @@ function AiConfigurationView({
               onChange={(event) => setApiKey(event.target.value)}
             />
           </Field>
-          <Field label="応答待ち時間（秒）" htmlFor="ai-connection-timeout">
-            <input
-              id="ai-connection-timeout"
-              type="number"
-              min={5}
-              max={300}
-              value={timeoutSeconds}
-              onChange={(event) => setTimeoutSeconds(event.target.value)}
-            />
-          </Field>
-          <Field label="最大同時処理数" htmlFor="ai-connection-concurrency">
-            <input
-              id="ai-connection-concurrency"
-              type="number"
-              min={1}
-              max={16}
-              value={concurrencyLimit}
-              onChange={(event) => setConcurrencyLimit(event.target.value)}
-            />
-          </Field>
+          <details className="admin-advanced-details">
+            <summary>詳細設定</summary>
+            <div className="stack">
+              <Field label="応答待ち時間（秒）" htmlFor="ai-connection-timeout">
+                <input
+                  id="ai-connection-timeout"
+                  type="number"
+                  min={5}
+                  max={300}
+                  value={timeoutSeconds}
+                  onChange={(event) => setTimeoutSeconds(event.target.value)}
+                />
+              </Field>
+              <Field label="最大同時処理数" htmlFor="ai-connection-concurrency">
+                <input
+                  id="ai-connection-concurrency"
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={concurrencyLimit}
+                  onChange={(event) => setConcurrencyLimit(event.target.value)}
+                />
+              </Field>
+            </div>
+          </details>
           {error ? (
             <InlineAlert tone="danger">
               <p>{error}</p>
@@ -1562,178 +1434,6 @@ function AiConfigurationView({
         </div>
       </Modal>
 
-      <Modal
-        open={Boolean(validatingProfile)}
-        onClose={() => !working && setValidatingProfile(undefined)}
-        title="パイロット評価を記録"
-        description="評価データと結果ファイルのハッシュを現行プロファイルへ固定し、管理者の証跡として保存します。自動確定は有効になりません。"
-        size="medium"
-        footer={
-          <>
-            <Button
-              variant="secondary"
-              onClick={() => setValidatingProfile(undefined)}
-              disabled={working}
-            >
-              キャンセル
-            </Button>
-            <Button
-              onClick={validateProfile}
-              disabled={
-                working || !evaluationId.trim() || !teacherReviewOnly
-              }
-            >
-              {working ? "承認中…" : "パイロット承認"}
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <strong>1. 評価証跡を登録</strong>
-          <Field
-            label="データセット版"
-            htmlFor="ai-dataset-version"
-            required
-            hint="同じゴールドセットを再取得できる版名を指定します。"
-          >
-            <input
-              id="ai-dataset-version"
-              value={datasetVersion}
-              onChange={(event) => setDatasetVersion(event.target.value)}
-              placeholder="school-golden-set-2026-07-v1"
-            />
-          </Field>
-          <Field
-            label="データセット SHA-256"
-            htmlFor="ai-dataset-sha256"
-            required
-          >
-            <input
-              id="ai-dataset-sha256"
-              value={datasetSha256}
-              onChange={(event) => setDatasetSha256(event.target.value)}
-              placeholder="64桁の16進数"
-            />
-          </Field>
-          <Field
-            label="評価結果 SHA-256"
-            htmlFor="ai-evidence-sha256"
-            required
-            hint="採点単位の期待値・実測値を含む評価結果ファイルのハッシュです。"
-          >
-            <input
-              id="ai-evidence-sha256"
-              value={evidenceSha256}
-              onChange={(event) => setEvidenceSha256(event.target.value)}
-              placeholder="64桁の16進数"
-            />
-          </Field>
-          <div className="form-grid">
-            <Field label="標本数" htmlFor="ai-sample-count" required>
-              <input
-                id="ai-sample-count"
-                type="number"
-                min={1}
-                max={1_000_000}
-                value={sampleCount}
-                onChange={(event) => setSampleCount(event.target.value)}
-              />
-            </Field>
-            <Field
-              label="一致率（bp）"
-              htmlFor="ai-agreement-basis-points"
-              required
-              hint="9950 = 99.50%"
-            >
-              <input
-                id="ai-agreement-basis-points"
-                type="number"
-                min={0}
-                max={10_000}
-                value={agreementBasisPoints}
-                onChange={(event) =>
-                  setAgreementBasisPoints(event.target.value)
-                }
-              />
-            </Field>
-            <Field
-              label="信頼下限（bp）"
-              htmlFor="ai-lower-bound-basis-points"
-              required
-            >
-              <input
-                id="ai-lower-bound-basis-points"
-                type="number"
-                min={0}
-                max={10_000}
-                value={lowerConfidenceBoundBasisPoints}
-                onChange={(event) =>
-                  setLowerConfidenceBoundBasisPoints(event.target.value)
-                }
-              />
-            </Field>
-            <Field
-              label="重大失敗数"
-              htmlFor="ai-critical-failure-count"
-              required
-            >
-              <input
-                id="ai-critical-failure-count"
-                type="number"
-                min={0}
-                value={criticalFailureCount}
-                onChange={(event) =>
-                  setCriticalFailureCount(event.target.value)
-                }
-              />
-            </Field>
-          </div>
-          <label>
-            <input
-              type="checkbox"
-              checked={teacherReviewOnly}
-              onChange={(event) => setTeacherReviewOnly(event.target.checked)}
-            />{" "}
-            自動確定せず、すべて先生が確認するパイロット運用に限定します
-          </label>
-          <Button
-            variant="secondary"
-            onClick={createEvaluationRecord}
-            disabled={
-              working ||
-              !datasetVersion.trim() ||
-              !datasetSha256.trim() ||
-              !evidenceSha256.trim() ||
-              !sampleCount ||
-              !agreementBasisPoints ||
-              !lowerConfidenceBoundBasisPoints ||
-              !criticalFailureCount ||
-              !teacherReviewOnly
-            }
-          >
-            {working ? "保存中…" : "評価証跡を保存"}
-          </Button>
-          <strong>2. 証跡を使って承認</strong>
-          <Field
-            label="精度評価ID"
-            htmlFor="ai-evaluation-id"
-            required
-            hint="上で保存すると自動入力されます。現行プロファイルと完全一致する証跡だけを使用できます。"
-          >
-            <input
-              id="ai-evaluation-id"
-              value={evaluationId}
-              onChange={(event) => setEvaluationId(event.target.value)}
-              placeholder="01…（評価証跡ID）"
-            />
-          </Field>
-          {error ? (
-            <InlineAlert tone="danger">
-              <p>{error}</p>
-            </InlineAlert>
-          ) : null}
-        </div>
-      </Modal>
     </div>
   );
 }
@@ -1818,7 +1518,7 @@ function AiConnectionCard({
           </div>
           <div className="button-row">
             <Button onClick={() => onProbe(connection)} disabled={working}>
-              {probing ? "確認中…" : "接続を確認"}
+              {probing ? "再確認中…" : "再確認"}
             </Button>
           </div>
           {deepSeekTextOnly ? (

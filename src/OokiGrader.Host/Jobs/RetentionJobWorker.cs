@@ -6,6 +6,7 @@ using OokiGrader.Application.Identifiers;
 using OokiGrader.Domain.Retention;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
+using OokiGrader.Host.Uploads;
 
 namespace OokiGrader.Host.Jobs;
 
@@ -14,7 +15,8 @@ public sealed partial class RetentionJobWorker(
     IWriteCoordinator writeCoordinator,
     IContentStore contentStore,
     TimeProvider timeProvider,
-    ILogger<RetentionJobWorker> logger) : BackgroundService
+    ILogger<RetentionJobWorker> logger,
+    ContentObjectLockProvider contentObjectLocks) : BackgroundService
 {
     public const string JobType = "retention.reconcile";
 
@@ -461,14 +463,13 @@ public sealed partial class RetentionJobWorker(
         var submissionIds = submissions
             .Select(item => item.Id)
             .ToArray();
-        var referenceRows = await (
+        var directReferenceRows = await (
                 from reference in db.FileReferences.AsNoTracking()
                 join fileObject in db.FileObjects.AsNoTracking()
                     on reference.FileObjectId equals fileObject.Id
                 where reference.OwnerType == "submission"
                     && submissionIds.Contains(reference.OwnerId)
                     && fileObject.ManagedScanBytes
-                    && fileObject.State == "available"
                 select new RetentionReference(
                     reference.Id,
                     reference.OwnerId,
@@ -481,6 +482,73 @@ public sealed partial class RetentionJobWorker(
                     fileObject.RelativeObjectPath))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        var normalizedPageReferenceRows = await (
+                from page in db.SubmissionPages.AsNoTracking()
+                join reference in db.FileReferences.AsNoTracking()
+                    on page.NormalizedFileReferenceId equals reference.Id
+                join fileObject in db.FileObjects.AsNoTracking()
+                    on reference.FileObjectId equals fileObject.Id
+                where submissionIds.Contains(page.SubmissionId)
+                    && fileObject.ManagedScanBytes
+                select new RetentionReference(
+                    reference.Id,
+                    page.SubmissionId,
+                    reference.FileObjectId,
+                    reference.Purpose,
+                    fileObject.Sha256,
+                    fileObject.Bytes,
+                    fileObject.StorageClass,
+                    fileObject.Extension,
+                    fileObject.RelativeObjectPath))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var thumbnailPageReferenceRows = await (
+                from page in db.SubmissionPages.AsNoTracking()
+                join reference in db.FileReferences.AsNoTracking()
+                    on page.ThumbnailFileReferenceId equals reference.Id
+                join fileObject in db.FileObjects.AsNoTracking()
+                    on reference.FileObjectId equals fileObject.Id
+                where submissionIds.Contains(page.SubmissionId)
+                    && fileObject.ManagedScanBytes
+                select new RetentionReference(
+                    reference.Id,
+                    page.SubmissionId,
+                    reference.FileObjectId,
+                    reference.Purpose,
+                    fileObject.Sha256,
+                    fileObject.Bytes,
+                    fileObject.StorageClass,
+                    fileObject.Extension,
+                    fileObject.RelativeObjectPath))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var artifactReferenceRows = await (
+                from artifact in db.SubmissionArtifacts.AsNoTracking()
+                join reference in db.FileReferences.AsNoTracking()
+                    on artifact.FileReferenceId equals reference.Id
+                join fileObject in db.FileObjects.AsNoTracking()
+                    on reference.FileObjectId equals fileObject.Id
+                where submissionIds.Contains(artifact.SubmissionId)
+                    && fileObject.ManagedScanBytes
+                select new RetentionReference(
+                    reference.Id,
+                    artifact.SubmissionId,
+                    reference.FileObjectId,
+                    reference.Purpose,
+                    fileObject.Sha256,
+                    fileObject.Bytes,
+                    fileObject.StorageClass,
+                    fileObject.Extension,
+                    fileObject.RelativeObjectPath))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var referenceRows = directReferenceRows
+            .Concat(normalizedPageReferenceRows)
+            .Concat(thumbnailPageReferenceRows)
+            .Concat(artifactReferenceRows)
+            .GroupBy(item => item.FileReferenceId, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
         if (referenceRows.Count == 0)
         {
             return null;
@@ -749,6 +817,10 @@ public sealed partial class RetentionJobWorker(
         CancellationToken cancellationToken)
     {
         var locator = CreateValidatedLocator(item);
+        await using var contentObjectLock = await contentObjectLocks.AcquireAsync(
+            locator.StorageClass,
+            locator.Sha256,
+            cancellationToken);
         if (await HasUnselectedReferenceAsync(item, cancellationToken)
                 .ConfigureAwait(false))
         {
@@ -874,6 +946,54 @@ public sealed partial class RetentionJobWorker(
                 .Where(item => referenceIds.Contains(item.Id))
                 .ToListAsync(token)
                 .ConfigureAwait(false);
+
+            // Ordered-scan lineage deliberately keeps immutable source hashes
+            // after retention, but its live managed-file links must be released
+            // in the same transaction as the references themselves.
+            var sourcePages = await db.SubmissionSourcePages
+                .Where(item => item.FileReferenceId != null
+                    && referenceIds.Contains(item.FileReferenceId))
+                .ToListAsync(token)
+                .ConfigureAwait(false);
+            foreach (var sourcePage in sourcePages)
+            {
+                sourcePage.FileReferenceId = null;
+            }
+
+            var orderedItems = await db.OrderedScanItems
+                .Where(item => item.SourceFileReferenceId != null
+                    && referenceIds.Contains(item.SourceFileReferenceId))
+                .ToListAsync(token)
+                .ConfigureAwait(false);
+            foreach (var orderedItem in orderedItems)
+            {
+                orderedItem.SourceFileReferenceId = null;
+            }
+
+            var questionResults = await db.QuestionResults
+                .Where(item => item.AnswerCropFileReferenceId != null
+                    && referenceIds.Contains(item.AnswerCropFileReferenceId))
+                .ToListAsync(token)
+                .ConfigureAwait(false);
+            foreach (var questionResult in questionResults)
+            {
+                questionResult.AnswerCropFileReferenceId = null;
+            }
+
+            var artifacts = await db.SubmissionArtifacts
+                .Where(item => referenceIds.Contains(item.FileReferenceId))
+                .ToListAsync(token)
+                .ConfigureAwait(false);
+            db.SubmissionArtifacts.RemoveRange(artifacts);
+
+            var pages = await db.SubmissionPages
+                .Where(item => referenceIds.Contains(
+                        item.NormalizedFileReferenceId)
+                    && referenceIds.Contains(item.ThumbnailFileReferenceId))
+                .ToListAsync(token)
+                .ConfigureAwait(false);
+            db.SubmissionPages.RemoveRange(pages);
+
             db.FileReferences.RemoveRange(references);
 
             var submissionIds = manifest.Items

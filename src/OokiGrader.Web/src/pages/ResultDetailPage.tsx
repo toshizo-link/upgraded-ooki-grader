@@ -150,9 +150,7 @@ export function ResultDetailPage() {
         { idempotencyKey: newIdempotencyKey() },
       );
       setReopenOpen(false);
-      navigate(
-        `/review?tab=grading&submission=${encodeURIComponent(submissionId)}`,
-      );
+      navigate(`/submissions/${encodeURIComponent(submissionId)}/grading`);
     } catch (reason) {
       setReopenError(
         reason instanceof Error
@@ -234,6 +232,13 @@ export function ResultDetailPage() {
           <>
             {canCorrect ? (
               <>
+                <Link
+                  className="button button--secondary button--medium"
+                  to={`/submissions/${encodeURIComponent(submissionId)}/grading`}
+                >
+                  <Icon name="file" size={18} />
+                  <span>答案全体を見る</span>
+                </Link>
                 <Button
                   variant="secondary"
                   onClick={() => setAssignmentOpen(true)}

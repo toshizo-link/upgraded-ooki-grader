@@ -29,6 +29,17 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         may support a non-authoritative answer proposal; never use search to
         replace or override an authoritative supplied answer.
 
+        Before extracting anything, inspect every supplied primary page and decide
+        whether its printed content is upright. Ignore small scanner skew; report
+        only the clockwise quarter turn that the host must apply to the currently
+        supplied page: 0, 90, 180, or 270 degrees. If any page needs a non-zero
+        turn, return action=rotate, include every supplied page exactly once in
+        orientation.pages, set metadata to null, and return an empty pages array.
+        Do not return questions, answers, names, grades, or other extraction
+        content in a rotation response. If every page is upright, return
+        action=extract, report zero for every supplied page, and continue with the
+        selected extraction system in this same response.
+
         When the task instruction and source manifest show that no authoritative
         answer source exists, you may use your own subject-matter knowledge only
         to propose a non-authoritative expected answer. Such an answer must be
@@ -52,6 +63,20 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
 
     private const string AnswerGradingSystemInstruction =
         """
+        Read and grade each visible answer directly from the original supplied
+        page pixels in one integrated inspection. The transcription field is an
+        audit record of what is visible; it is not a lossy intermediate and must
+        never be the sole input to the grading decision. Inspect every visible
+        line of the answer before deciding the outcome and points.
+
+        Preserve a visible answer's line boundaries in transcription with \n.
+        A visual line wrap, indentation, or surrounding layout whitespace is not
+        a correctness difference unless the supplied rubric explicitly makes
+        formatting part of the answer. Never mark otherwise identical content
+        incorrect only because the visible answer and an accepted answer serialize
+        line breaks differently. Ignoring layout must never omit, reorder, or merge
+        distinct answer components.
+
         For grading coverage, distinguish an answer that is located but empty
         from a question whose printed question or answer location cannot be
         found anywhere in the supplied media. A located empty answer must be
@@ -73,6 +98,25 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         point increment.
         """;
 
+    private const string SubmissionAnalysisSystemInstruction =
+        AnswerGradingSystemInstruction
+        + """
+
+
+        This task also transcribes the student identity field once, without
+        identifying the student. Only when identity_required=true, inspect the
+        printed identity field on PAGE_1 and return the visibly written name and
+        student number in identity. Never infer a spelling, student identifier,
+        roster entry, class, or other personal data. Ignore names outside PAGE_1's
+        printed identity field. When identity_required=false, identity must be
+        null. The host matches against its roster locally and a teacher confirms
+        the identity.
+
+        Every grading result must include evidence_media_index pointing to the
+        supplied media item containing the answer evidence used for that result.
+        Never return an index outside the supplied media array.
+        """;
+
     private readonly Dictionary<string, BundleState> _bundles;
 
     public ApprovedPromptBundleCatalog()
@@ -81,8 +125,8 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         {
             [AiTaskTypes.TemplateExtraction] = Create(
                 AiTaskTypes.TemplateExtraction,
-                "template-extract-v1.8.3",
-                "template_extract_v4",
+                "template-extract-v2.0.0",
+                "template_extract_v5",
                 TemplateExtractionSchema,
                 systemInstructionOverride: TemplateExtractionSystemInstruction),
             [AiTaskTypes.NameTranscription] = Create(
@@ -92,13 +136,13 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                 NameTranscriptionSchema),
             [AiTaskTypes.InitialGrading] = Create(
                 AiTaskTypes.InitialGrading,
-                "answer-transcribe-grade-v1.2.0",
-                "answer_transcribe_grade_v1",
-                AnswerGradingSchema,
-                AnswerGradingSystemInstruction),
+                "submission-analyze-v2.1.0",
+                "submission_analysis_v2",
+                SubmissionAnalysisSchema,
+                SubmissionAnalysisSystemInstruction),
             [AiTaskTypes.Adjudication] = Create(
                 AiTaskTypes.Adjudication,
-                "answer-recheck-v1.2.0",
+                "answer-recheck-v1.3.0",
                 "answer_transcribe_grade_v1",
                 AnswerGradingSchema,
                 AnswerGradingSystemInstruction),
@@ -211,7 +255,7 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                   "question_id": { "type": "string" },
                   "transcription": {
                     "type": "string",
-                    "description": "Exact visible answer text. Use an empty string only when the located answer field is visibly empty or no characters can safely be transcribed."
+                    "description": "Exact visible answer text with each visible line boundary preserved as \\n. This is audit evidence, not the sole grading input. Use an empty string only when the located answer field is visibly empty or no characters can safely be transcribed."
                   },
                   "legibility": {
                     "type": "string",
@@ -261,12 +305,116 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         }
         """;
 
+    private const string SubmissionAnalysisSchema =
+        """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "enum": ["submission_analysis_v2"]
+            },
+            "request_key": { "type": "string" },
+            "identity": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "transcribed_name": { "type": ["string", "null"] },
+                    "transcribed_student_number": { "type": ["string", "null"] },
+                    "legibility": {
+                      "type": "string",
+                      "enum": ["clear", "ambiguous", "unreadable", "blank", "cropped"]
+                    },
+                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "unexpected_content": { "type": "boolean" }
+                  },
+                  "required": [
+                    "transcribed_name",
+                    "transcribed_student_number",
+                    "legibility",
+                    "confidence",
+                    "unexpected_content"
+                  ]
+                }
+              ]
+            },
+            "results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "question_id": { "type": "string" },
+                  "evidence_media_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based index of the supplied media item containing this answer evidence."
+                  },
+                  "transcription": {
+                    "type": "string",
+                    "description": "Exact visible answer text with each visible line boundary preserved as \\n. This is audit evidence, not the sole grading input. Use an empty string only when the located answer field is visibly empty or no characters can safely be transcribed."
+                  },
+                  "legibility": {
+                    "type": "string",
+                    "enum": ["clear", "ambiguous", "unreadable", "cropped"],
+                    "description": "Visual quality of the located answer. Use clear for a clearly visible empty answer field; empty content is represented separately by blank=true."
+                  },
+                  "blank": {
+                    "type": "boolean",
+                    "description": "True only when the answer location was found and is visibly empty. A blank answer is a result, never a missing question."
+                  },
+                  "proposed_outcome": {
+                    "type": "string",
+                    "enum": ["correct", "incorrect", "partial", "blank", "unreadable", "review"]
+                  },
+                  "proposed_points_milli": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "An integer from zero through the supplied maximum_points_milli, inclusive, and an exact multiple of the supplied point_increment_milli."
+                  },
+                  "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "required": [
+                  "question_id",
+                  "evidence_media_index",
+                  "transcription",
+                  "legibility",
+                  "blank",
+                  "proposed_outcome",
+                  "proposed_points_milli",
+                  "confidence"
+                ]
+              }
+            },
+            "missing_question_ids": {
+              "type": "array",
+              "description": "Only supplied question IDs whose printed question or answer location cannot be found in this page chunk. Do not include located blank, unreadable, cropped, or ambiguous answers.",
+              "items": { "type": "string" }
+            },
+            "unexpected_content": { "type": "boolean" }
+          },
+          "required": [
+            "schema_version",
+            "request_key",
+            "identity",
+            "results",
+            "missing_question_ids",
+            "unexpected_content"
+          ]
+        }
+        """;
+
     private const string TemplateExtractionSchema =
         """
         {
           "$defs": {
             "answer_source": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "source_id": { "type": "string" },
                 "page_number": { "type": "integer" }
@@ -275,38 +423,70 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
             },
             "metadata": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
-                "title": { "type": ["string", "null"] },
-                "subject": { "type": ["string", "null"] },
-                "category": { "type": ["string", "null"] },
-                "grade_label": { "type": ["string", "null"] },
-                "course": { "type": ["string", "null"] },
-                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                "printed_test_name": { "type": ["string", "null"] },
+                "printed_grade_label": { "type": ["string", "null"] },
+                "grade_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                 "warnings": {
                   "type": "array",
                   "items": { "type": "string" }
                 }
               },
               "required": [
-                "title",
-                "subject",
-                "category",
-                "grade_label",
-                "course",
-                "confidence",
+                "printed_test_name",
+                "printed_grade_label",
+                "grade_confidence",
                 "warnings"
               ]
+            },
+            "orientation_page": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "page_id": { "type": "string" },
+                "clockwise_degrees_to_upright": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+              },
+              "required": [
+                "page_id",
+                "clockwise_degrees_to_upright",
+                "confidence"
+              ]
+            },
+            "orientation": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pages": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/orientation_page" }
+                }
+              },
+              "required": ["pages"]
             }
           },
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "schema_version": { "type": "string", "enum": ["template_extract_v4"] },
+            "schema_version": { "type": "string", "enum": ["template_extract_v5"] },
             "request_key": { "type": "string" },
-            "metadata": { "$ref": "#/$defs/metadata" },
+            "action": { "type": "string", "enum": ["rotate", "extract"] },
+            "orientation": { "$ref": "#/$defs/orientation" },
+            "metadata": {
+              "anyOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/metadata" }
+              ]
+            },
             "pages": {
               "type": "array",
               "items": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                   "source_id": { "type": "string" },
                   "page_number": { "type": "integer" },
@@ -320,6 +500,7 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                     "type": "array",
                     "items": {
                       "type": "object",
+                      "additionalProperties": false,
                       "properties": {
                         "source_key": { "type": "string" },
                         "display_label": { "type": "string" },
@@ -374,6 +555,8 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                         },
                         "suggested_points_milli": { "type": "integer" },
                         "allow_non_kanji_suggestion": { "type": "boolean" },
+                        "requires_complete_answer_suggestion": { "type": "boolean" },
+                        "answer_order_insensitive_suggestion": { "type": "boolean" },
                         "requires_teacher_answer": { "type": "boolean" },
                         "confidence": { "type": "number" },
                         "warnings": {
@@ -396,6 +579,8 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                         "accepted_variants",
                         "suggested_points_milli",
                         "allow_non_kanji_suggestion",
+                        "requires_complete_answer_suggestion",
+                        "answer_order_insensitive_suggestion",
                         "requires_teacher_answer",
                         "confidence",
                         "warnings"
@@ -410,18 +595,15 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                   "questions"
                 ]
               }
-            },
-            "global_warnings": {
-              "type": "array",
-              "items": { "type": "string" }
             }
           },
           "required": [
             "schema_version",
             "request_key",
+            "action",
+            "orientation",
             "metadata",
-            "pages",
-            "global_warnings"
+            "pages"
           ]
         }
         """;

@@ -15,7 +15,9 @@ internal static class TestQuestionFactory
         bool teacherVerified = true,
         IEnumerable<AcceptedAnswer>? additionalAnswers = null,
         MilliPoints? maximum = null,
-        MilliPoints? increment = null)
+        MilliPoints? increment = null,
+        bool requiresCompleteAnswer = false,
+        bool answerOrderInsensitive = false)
     {
         var answers = new List<AcceptedAnswer>
         {
@@ -42,7 +44,9 @@ internal static class TestQuestionFactory
             allowNonKanji,
             requiresReviewAlways,
             teacherVerified,
-            answers);
+            answers,
+            requiresCompleteAnswer: requiresCompleteAnswer,
+            answerOrderInsensitive: answerOrderInsensitive);
     }
 
     public static QuestionDefinition Numeric(

@@ -123,6 +123,11 @@ Index `normalized_value`; warn on collisions across active students.
 - `active_version_id`;
 - `created_by`, `created_at`, `updated_at`, `revision`.
 
+`archived` is the user-facing deletion lifecycle, not physical erasure. It is
+reversible and retains every version and historical reference. New sessions
+and draft mutations reject an archived template. Archival is rejected while a
+child version still has active automatic extraction.
+
 ### 3.7 `template_version`
 
 - `id`, `test_template_id`;
@@ -182,12 +187,19 @@ Normalized coordinates make regions independent of raster DPI. A region must rem
 - `grading_mode`: `deterministic`, `transcribe_then_rules`, `ai_rubric`, `manual`;
 - `max_points_milli`;
 - `allow_non_kanji`;
+- `requires_complete_answer`, `answer_order_insensitive`;
 - `kanji_policy_note`;
 - `question_region_id`, `answer_region_id`;
 - `requires_review_always`;
 - `ai_confidence`, `teacher_verified`.
 
 Unique order and label rules apply within a version.
+
+The two new policy booleans are non-null with a legacy-compatible default of
+`false`. The existing `allow_non_kanji` field remains the durable compatibility
+representation of the positive `漢字必須` editor control. All three values
+participate in the published version content hash and are copied when a draft
+version is cloned.
 
 ### 3.11 `accepted_answer`
 
@@ -218,13 +230,22 @@ Rubric totals cannot exceed question maximum.
 ### 3.13 `test_session`
 
 - `id`, `template_version_id`;
-- `title_override` nullable;
+- legacy `title_override` nullable and not used by the normal teacher flow;
+- `creation_source`: `manual` or `template_publish`;
+- immutable template title, subject, grade, category, and course snapshots;
+- nullable durable request idempotency key and canonical request fingerprint;
 - `test_date` as local calendar date;
-- `course`, `class_label`;
+- legacy `course` compatibility value and optional administration-specific
+  `class_label`;
 - `priority`: `economy`, `expedite`;
 - `state`: `draft`, `open`, `closed`, `archived`;
 - `expected_roster_enabled`;
 - `created_by`, `created_at`, `closed_at`, `revision`.
+
+Only one `template_publish` session may be created for a template version.
+Additional administrations of an already immutable version use `manual` and a
+staff-scoped unique idempotency key. The normal UI derives name/course metadata
+from the snapshots rather than accepting duplicate free text.
 
 ### 3.14 `session_roster_member`
 
@@ -360,6 +381,13 @@ The current revision is the highest valid revision or an explicit pointer update
 - capability-probe outcome/time;
 - active state.
 
+For Gemini one-step create/replace, this durable row and its encrypted secret
+reference are written or revised only after the supplied candidate completes
+the full capability and image-task probe. A failed, timed-out, or ambiguous
+candidate produces no secret/reference revision and cannot change the prior
+connection/profile state. Audit and error records contain only safe capability
+outcomes/codes, never the candidate secret.
+
 ### 3.24 `ai_task_profile`
 
 - `id`, name and revision;
@@ -369,10 +397,21 @@ The current revision is the highest valid revision or an explicit pointer update
 - processing strategy: `gemini_batch`, `queued_standard`, `expedite_standard`;
 - prompt bundle and structured-schema versions;
 - reasoning/media/input configuration;
-- accuracy evaluation record and approval state;
+- optional accuracy evaluation record and approval state, including
+  `capability_passed` for the checked-in Gemini one-step profiles;
 - estimated price snapshot;
 - optional validated fallback profile ID;
 - active state and activation audit.
+
+One successful Gemini setup transaction creates or reuses exactly one current
+active revision for each of template extraction, name transcription, initial
+grading, and adjudication. It records the exact prompt, schema, pipeline, and
+configuration hashes. Startup and a successful manual connection test may
+append corrected current revisions and switch the active pointers atomically;
+jobs already created retain their immutable profile revision. Accuracy records
+and manual approval/activation fields remain readable for OpenRouter, formal
+release evaluation, and backward-compatible administration, but they are not a
+required normal-UI step for current Gemini setup.
 
 ### 3.25 `ai_batch_job`
 
@@ -438,7 +477,27 @@ An OpenRouter dispatch group is not represented as a provider batch and has no c
 - created by/time;
 - superseded time/reason.
 
-### 3.30 `file_object`
+### 3.30 `bulk_transcript_export`
+
+- `id`, background job ID;
+- creating-staff-scoped request idempotency key and immutable request
+  fingerprint;
+- normalized selector JSON/hash (explicit submission IDs or report filter);
+- frozen source snapshot and SHA-256 fingerprint;
+- renderer/package-format versions;
+- state: `queued`, `rendering`, `verified`, `failed`, `superseded`;
+- student/result/processed-result counts;
+- verified ZIP file reference, SHA-256, and bytes;
+- bounded safe error code/detail;
+- creating staff and created/started/completed/updated timestamps;
+- superseded time/reason and revision.
+
+The source snapshot stores only immutable IDs/revisions/hashes needed to prove
+the package. Display names and free-text search values are not copied into safe
+audit metadata. One package contains canonical child PDFs plus a UTF-8 manifest;
+it does not replace each child's `export_record` semantics.
+
+### 3.31 `file_object`
 
 - `id`;
 - SHA-256 unique within storage class;
@@ -453,7 +512,7 @@ An OpenRouter dispatch group is not represented as a provider batch and has no c
 - reference count cache;
 - encryption flag where applicable.
 
-### 3.31 `file_reference`
+### 3.32 `file_reference`
 
 - `id`, file object ID;
 - owner type/ID;
@@ -463,7 +522,7 @@ An OpenRouter dispatch group is not represented as a provider batch and has no c
 
 A file object is deletable only when all owning references allow deletion. Content deduplication must not let one old submission delete a file still referenced by a newer submission.
 
-### 3.32 Operational tables
+### 3.33 Operational tables
 
 - `background_job`;
 - `outbox_event`;
@@ -513,7 +572,7 @@ D:\OokiGraderData\
     template\
       ab\cd\<sha256>.bin
     report\
-      ab\cd\<sha256>.pdf
+      ab\cd\<sha256>.<pdf-or-zip>
     diagnostic\
       ab\cd\<sha256>.json.enc
   incoming\
@@ -545,10 +604,16 @@ Rules:
 | `managed_scan_derived` | normalized page, thumbnail, answer/name crop, grading rendition | Yes | tied to owning scan; delete no later than original |
 | `template_source` | blank PDF/image | No | until template administrative deletion |
 | `template_derived` | normalized blank pages/thumbnails | No | tied to template |
-| `result_report` | per-student PDF | No | school record policy, configurable |
+| `result_report` | per-student PDF or verified bulk-result ZIP | No | school record policy, configurable |
 | `ai_diagnostic` | bounded redacted response/error | No | 7 days default, max 30 |
 | `temporary` | chunks, raster temp, JSONL | No, separately measured | 24 hours or immediately after job |
 | `backup` | database/config/report backup | No | backup policy; never bypass scan retention |
+
+Bulk-result ZIP assembly uses a worker-owned, bounded temporary namespace.
+Each worker start/hourly pass examines at most 256 validated `.part` entries
+and removes at most 64 entries older than 24 hours; it never follows links or
+deletes files outside that namespace. Successful, failed, cancelled, and
+exhausted jobs also remove their own temporary archive immediately.
 
 “Not counted” does not mean unlimited. Operations health separately tracks every class and physical disk.
 
@@ -680,6 +745,7 @@ Missing managed scans do not invalidate otherwise valid score records.
 | Audit | every sensitive event | never | append-only | long policy retention, admin cannot edit |
 | Provider file/payload | AI job | until output reconciliation | none | direct Gemini files are explicitly deleted; OpenRouter uses request-scoped base64 payloads in v1 |
 | Report | export | none; regenerate revision | immutable | report-record policy |
+| Bulk result package | server preview + durable export job | progress/state only | immutable verified ZIP | report-record policy |
 
 ## 11. Data integrity invariants
 
@@ -697,6 +763,7 @@ Automated checks MUST enforce:
 - every deleted scan route returns `410 Gone`, not `404`, when an authorized tombstone exists;
 - no provider resource is considered a durable file;
 - a report references one exact result and template revision;
+- a verified bulk package references one frozen set of current finalized result/template revisions and has a matching unique ZIP manifest;
 - a published template content hash remains unchanged.
 
 ## 12. Database migration policy

@@ -4,11 +4,13 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Host.Middleware;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
@@ -24,6 +26,13 @@ public static class AiAdminEndpoints
     private const int DefaultMetricsDays = 30;
     private const int MaximumMetricsDays = 90;
     private const int MaximumLatencySamples = 50_000;
+    private static readonly string[] DefaultTaskTypes =
+    [
+        AiTaskTypes.TemplateExtraction,
+        AiTaskTypes.NameTranscription,
+        AiTaskTypes.InitialGrading,
+        AiTaskTypes.Adjudication,
+    ];
 
     public static IEndpointRouteBuilder MapAiAdminEndpoints(
         this IEndpointRouteBuilder endpoints)
@@ -91,6 +100,8 @@ public static class AiAdminEndpoints
         [FromBody] SaveAiConnectionRequest request,
         OokiGraderDbContext db,
         IAiSecretStore secretStore,
+        IAiProviderClientResolver providerResolver,
+        IAiPromptBundleCatalog promptCatalog,
         [FromServices] IAiProviderFeaturePolicy providerFeaturePolicy,
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
@@ -109,6 +120,12 @@ public static class AiAdminEndpoints
         if (!providerFeaturePolicy.IsEnabled(provider))
         {
             return ProviderFeatureDisabled(context);
+        }
+
+        if (request.TestAndEnable == true
+            && provider != AiProviders.GeminiDirect)
+        {
+            return AutomaticSetupRequiresGemini(context);
         }
 
         if (await db.AiConnections.AnyAsync(
@@ -139,37 +156,104 @@ public static class AiAdminEndpoints
             UpdatedAt = now,
         };
         connection.KeyFingerprint = Fingerprint(request.ApiKey);
-        var secretReference = await secretStore.WriteAsync(
-            connection.Id,
-            connection.CredentialRevision,
-            request.ApiKey.AsMemory(),
-            cancellationToken);
-        connection.SecretReference = secretReference.Value;
-        db.AiConnections.Add(connection);
-        AddAudit(
-            db,
-            context,
-            principal,
-            now,
-            "ai.connection_created",
-            connection.Id,
-            new
+
+        AiCapabilityProbeResult? automaticProbe = null;
+        if (request.TestAndEnable == true)
+        {
+            automaticProbe = await ProbeSuppliedCredentialAsync(
+                connection,
+                request.ApiKey,
+                providerResolver,
+                cancellationToken);
+            if (!IsSuccessfulImageProbe(connection, automaticProbe))
             {
-                connection.Provider,
-                connection.ModelId,
-                connection.KeyFingerprint,
-            });
+                return AutomaticProbeFailed(context, automaticProbe);
+            }
+
+            ApplyProbeResult(connection, automaticProbe, now);
+        }
+
+        await using var transaction = automaticProbe is null
+            ? null
+            : await db.Database.BeginTransactionAsync(cancellationToken);
+        AiSecretReference? secretReference = null;
+        AiCapabilityProbeEntity? probe = null;
         try
         {
-            await db.SaveChangesAsync(cancellationToken);
+            secretReference = await secretStore.WriteAsync(
+                connection.Id,
+                connection.CredentialRevision,
+                request.ApiKey.AsMemory(),
+                cancellationToken);
+            connection.SecretReference = secretReference.Value;
+            db.AiConnections.Add(connection);
+            if (automaticProbe is not null)
+            {
+                probe = BuildProbe(connection, automaticProbe, now);
+                db.AiCapabilityProbes.Add(probe);
+            }
+
+            AddAudit(
+                db,
+                context,
+                principal,
+                now,
+                "ai.connection_created",
+                connection.Id,
+                new
+                {
+                    connection.Provider,
+                    connection.ModelId,
+                    connection.KeyFingerprint,
+                    automaticSetup = automaticProbe is not null,
+                });
+            if (automaticProbe is null)
+            {
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                await ReconcileCurrentProfilesAsync(
+                    db,
+                    connection,
+                    ApiHelpers.StaffId(principal),
+                    promptCatalog,
+                    now,
+                    replaceOtherProviders: true,
+                    cancellationToken: cancellationToken);
+                AddAudit(
+                    db,
+                    context,
+                    principal,
+                    now,
+                    "ai.profiles_auto_enabled",
+                    connection.Id,
+                    new
+                    {
+                        connection.Provider,
+                        connection.CredentialRevision,
+                        taskTypes = DefaultTaskTypes,
+                    });
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction!.CommitAsync(cancellationToken);
+            }
         }
         catch (DbUpdateException exception) when (
             exception.InnerException is SqliteException
             {
                 SqliteErrorCode: 19,
-            })
+        })
         {
-            await secretStore.DeleteAsync(secretReference, cancellationToken);
+            if (transaction is not null)
+            {
+                await TryRollbackAsync(transaction);
+            }
+
+            if (secretReference is not null)
+            {
+                await TryDeleteSecretAsync(secretStore, secretReference);
+            }
+
             return ApiHelpers.Problem(
                 context,
                 StatusCodes.Status409Conflict,
@@ -179,14 +263,23 @@ public static class AiAdminEndpoints
         }
         catch
         {
-            await secretStore.DeleteAsync(secretReference, cancellationToken);
+            if (transaction is not null)
+            {
+                await TryRollbackAsync(transaction);
+            }
+
+            if (secretReference is not null)
+            {
+                await TryDeleteSecretAsync(secretStore, secretReference);
+            }
+
             throw;
         }
 
         ApiHelpers.SetRevisionEtag(context.Response, connection.Revision);
         return Results.Created(
             $"/api/v1/admin/ai-connections/{connection.Id}",
-            ToConnectionResponse(connection));
+            ToConnectionResponse(connection, probe));
     }
 
     private static async Task<IResult> ReplaceConnectionAsync(
@@ -196,6 +289,8 @@ public static class AiAdminEndpoints
         [FromBody] SaveAiConnectionRequest request,
         OokiGraderDbContext db,
         IAiSecretStore secretStore,
+        IAiProviderClientResolver providerResolver,
+        IAiPromptBundleCatalog promptCatalog,
         [FromServices] IAiProviderFeaturePolicy providerFeaturePolicy,
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
@@ -238,6 +333,12 @@ public static class AiAdminEndpoints
             return ProviderFeatureDisabled(context);
         }
 
+        if (request.TestAndEnable == true
+            && connection.Provider != AiProviders.GeminiDirect)
+        {
+            return AutomaticSetupRequiresGemini(context);
+        }
+
         if (!ApiHelpers.TryReadExpectedRevision(
                 context.Request,
                 request.Revision,
@@ -277,6 +378,46 @@ public static class AiAdminEndpoints
                 "AI_KEY_ROTATION_BATCH_IN_PROGRESS",
                 "AI APIキーを交換できません",
                 "送信済みの Gemini Batch を照合し、リモートファイルの消去が完了してから交換してください。");
+        }
+
+        if (request.TestAndEnable == true)
+        {
+            var candidate = new AiConnectionEntity
+            {
+                Id = connection.Id,
+                Provider = connection.Provider,
+                EndpointProfile = AiProviderCatalog.GetEndpointProfile(provider),
+                ModelId = modelId,
+                CredentialRevision = checked(connection.CredentialRevision + 1),
+                TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300),
+                ConcurrencyLimit = Math.Clamp(
+                    request.ConcurrencyLimit ?? 2,
+                    1,
+                    16),
+            };
+            var automaticProbe = await ProbeSuppliedCredentialAsync(
+                candidate,
+                request.ApiKey,
+                providerResolver,
+                cancellationToken);
+            if (!IsSuccessfulImageProbe(candidate, automaticProbe))
+            {
+                return AutomaticProbeFailed(context, automaticProbe);
+            }
+
+            return await ReplaceAndEnableConnectionAsync(
+                connection,
+                candidate,
+                automaticProbe,
+                expectedRevision,
+                request.ApiKey,
+                context,
+                principal,
+                db,
+                secretStore,
+                promptCatalog,
+                timeProvider,
+                cancellationToken);
         }
 
         var previousReference = new AiSecretReference(connection.SecretReference);
@@ -331,13 +472,131 @@ public static class AiAdminEndpoints
         }
         catch
         {
-            await secretStore.DeleteAsync(nextReference, cancellationToken);
+            await TryDeleteSecretAsync(secretStore, nextReference);
             throw;
         }
 
-        _ = await secretStore.DeleteAsync(previousReference, cancellationToken);
+        await TryDeleteSecretAsync(secretStore, previousReference);
         ApiHelpers.SetRevisionEtag(context.Response, connection.Revision);
         return Results.Ok(ToConnectionResponse(connection));
+    }
+
+    private static async Task<IResult> ReplaceAndEnableConnectionAsync(
+        AiConnectionEntity connection,
+        AiConnectionEntity candidate,
+        AiCapabilityProbeResult probeResult,
+        long expectedRevision,
+        string apiKey,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        OokiGraderDbContext db,
+        IAiSecretStore secretStore,
+        IAiPromptBundleCatalog promptCatalog,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            cancellationToken);
+        await db.Entry(connection).ReloadAsync(cancellationToken);
+        if (connection.Revision != expectedRevision)
+        {
+            return RevisionMismatch(context);
+        }
+
+        if (await HasRemoteBatchInProgressAsync(
+                db,
+                connection.Id,
+                connection.CredentialRevision,
+                cancellationToken))
+        {
+            return KeyRotationBatchInProgress(context);
+        }
+
+        var previousReference = new AiSecretReference(
+            connection.SecretReference);
+        var nextCredentialRevision = checked(
+            connection.CredentialRevision + 1);
+        if (candidate.CredentialRevision != nextCredentialRevision)
+        {
+            return RevisionMismatch(context);
+        }
+
+        AiSecretReference? nextReference = null;
+        AiCapabilityProbeEntity? persistedProbe = null;
+        try
+        {
+            nextReference = await secretStore.WriteAsync(
+                connection.Id,
+                nextCredentialRevision,
+                apiKey.AsMemory(),
+                cancellationToken);
+            var now = timeProvider.GetUtcNow();
+            connection.SecretReference = nextReference.Value;
+            connection.KeyFingerprint = Fingerprint(apiKey);
+            connection.CredentialRevision = nextCredentialRevision;
+            connection.TimeoutSeconds = candidate.TimeoutSeconds;
+            connection.ConcurrencyLimit = candidate.ConcurrencyLimit;
+            connection.EndpointProfile = candidate.EndpointProfile;
+            connection.ModelId = candidate.ModelId;
+            ApplyProbeResult(connection, probeResult, now);
+            persistedProbe = BuildProbe(connection, probeResult, now);
+            db.AiCapabilityProbes.Add(persistedProbe);
+
+            AddAudit(
+                db,
+                context,
+                principal,
+                now,
+                "ai.connection_key_replaced",
+                connection.Id,
+                new
+                {
+                    connection.CredentialRevision,
+                    connection.KeyFingerprint,
+                    automaticSetup = true,
+                });
+            await ReconcileCurrentProfilesAsync(
+                db,
+                connection,
+                ApiHelpers.StaffId(principal),
+                promptCatalog,
+                now,
+                replaceOtherProviders: true,
+                cancellationToken: cancellationToken);
+            AddAudit(
+                db,
+                context,
+                principal,
+                now,
+                "ai.profiles_auto_enabled",
+                connection.Id,
+                new
+                {
+                    connection.Provider,
+                    connection.CredentialRevision,
+                    taskTypes = DefaultTaskTypes,
+                });
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await TryRollbackAsync(transaction);
+
+            if (nextReference is not null)
+            {
+                await TryDeleteSecretAsync(secretStore, nextReference);
+            }
+
+            throw;
+        }
+
+        await TryDeleteSecretAsync(secretStore, previousReference);
+
+        ApiHelpers.SetRevisionEtag(
+            context.Response,
+            connection.Revision);
+        return Results.Ok(ToConnectionResponse(connection, persistedProbe));
     }
 
     private static async Task<IResult> ProbeConnectionAsync(
@@ -367,9 +626,24 @@ public static class AiAdminEndpoints
 
         var settings = ToSettings(connection);
         AiCapabilityProbeResult result;
-        using (var secret = await secretStore.ReadAsync(
-                   new AiSecretReference(connection.SecretReference),
-                   cancellationToken))
+        AiSecretLease secret;
+        try
+        {
+            secret = await secretStore.ReadAsync(
+                new AiSecretReference(connection.SecretReference),
+                cancellationToken);
+        }
+        catch (KeyNotFoundException)
+        {
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status409Conflict,
+                "AI_CONNECTION_SECRET_MISSING",
+                "保存済みのAI APIキーを読み込めません",
+                "「APIキーを交換」からAPIキーを再登録し、もう一度接続を確認してください。");
+        }
+
+        using (secret)
         {
             result = await providerResolver
                 .GetRequired(connection.Provider)
@@ -380,53 +654,50 @@ public static class AiAdminEndpoints
         }
 
         var now = timeProvider.GetUtcNow();
-        var probe = new AiCapabilityProbeEntity
-        {
-            Id = UlidId.New(now),
-            AiConnectionId = connection.Id,
-            ConnectionRevision = connection.CredentialRevision,
-            State = result.State,
-            Authentication = result.Authentication,
-            ModelAvailable = result.ModelAvailable,
-            ImageInput = result.ImageInput,
-            StructuredOutput = result.StructuredOutput,
-            UsageMetadata = result.UsageMetadata,
-            BatchState = "not_run",
-            BatchAvailable = false,
-            BatchCleanupSucceeded = true,
-            SafeErrorCode = result.SafeErrorCode,
-            LatencyMilliseconds = result.Latency is null
-                ? null
-                : checked((long)Math.Round(result.Latency.Value.TotalMilliseconds)),
-            CreatedAt = now,
-            CompletedAt = now,
-        };
+        var probe = BuildProbe(connection, result, now);
         db.AiCapabilityProbes.Add(probe);
-        connection.LastCapabilityProbeState = result.State;
-        connection.LastCapabilityProbeErrorCode = result.SafeErrorCode;
-        connection.LastCapabilityProbeAt = now;
-        connection.LastBatchCapabilityProbeState = "not_run";
-        connection.LastBatchCapabilityProbeErrorCode = null;
-        connection.LastBatchCapabilityProbeAt = null;
-        connection.LastBatchCapabilityProbeCredentialRevision = null;
-        var imageTasksReady = result.State == "passed"
-            && result.ImageInput
-            && result.StructuredOutput
-            && result.UsageMetadata
-            && AiProviderCatalog.SupportsImageTasks(
-                connection.Provider,
-                connection.ModelId);
-        connection.State = imageTasksReady ? "active" : "blocked";
-        connection.UpdatedAt = now;
+        ApplyProbeResult(connection, result, now);
+        var imageTasksReady = IsSuccessfulImageProbe(connection, result);
+        await using var transaction = imageTasksReady
+            && connection.Provider == AiProviders.GeminiDirect
+                ? await db.Database.BeginTransactionAsync(cancellationToken)
+                : null;
         if (imageTasksReady)
         {
-            await EnsureDefaultProfilesAsync(
-                db,
-                connection,
-                ApiHelpers.StaffId(principal),
-                promptCatalog,
-                now,
-                cancellationToken);
+            if (connection.Provider == AiProviders.GeminiDirect)
+            {
+                await ReconcileCurrentProfilesAsync(
+                    db,
+                    connection,
+                    ApiHelpers.StaffId(principal),
+                    promptCatalog,
+                    now,
+                    replaceOtherProviders: true,
+                    cancellationToken: cancellationToken);
+                AddAudit(
+                    db,
+                    context,
+                    principal,
+                    now,
+                    "ai.profiles_auto_enabled",
+                    connection.Id,
+                    new
+                    {
+                        connection.Provider,
+                        connection.CredentialRevision,
+                        taskTypes = DefaultTaskTypes,
+                    });
+            }
+            else
+            {
+                await EnsureDefaultProfilesAsync(
+                    db,
+                    connection,
+                    ApiHelpers.StaffId(principal),
+                    promptCatalog,
+                    now,
+                    cancellationToken);
+            }
         }
 
         AddAudit(
@@ -448,6 +719,11 @@ public static class AiAdminEndpoints
                 processingMode = "standard_api",
             });
         await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+
         ApiHelpers.SetRevisionEtag(context.Response, connection.Revision);
         return Results.Ok(new
         {
@@ -1786,6 +2062,185 @@ public static class AiAdminEndpoints
             });
     }
 
+    private static async Task<AiCapabilityProbeResult>
+        ProbeSuppliedCredentialAsync(
+            AiConnectionEntity connection,
+            string apiKey,
+            IAiProviderClientResolver providerResolver,
+            CancellationToken cancellationToken)
+    {
+        var credentialBytes = Encoding.UTF8.GetBytes(apiKey);
+        try
+        {
+            return await providerResolver
+                .GetRequired(connection.Provider)
+                .ProbeAsync(
+                    ToSettings(connection),
+                    credentialBytes,
+                    cancellationToken);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(credentialBytes);
+        }
+    }
+
+    private static bool IsSuccessfulImageProbe(
+        AiConnectionEntity connection,
+        AiCapabilityProbeResult result) =>
+        result.State == "passed"
+        && result.Authentication
+        && result.ModelAvailable
+        && result.ImageInput
+        && result.StructuredOutput
+        && result.UsageMetadata
+        && AiProviderCatalog.IsConnectionShapeValid(
+            connection.Provider,
+            connection.EndpointProfile,
+            connection.ModelId)
+        && AiProviderCatalog.SupportsImageTasks(
+            connection.Provider,
+            connection.ModelId);
+
+    private static AiCapabilityProbeEntity BuildProbe(
+        AiConnectionEntity connection,
+        AiCapabilityProbeResult result,
+        DateTimeOffset now) =>
+        new()
+        {
+            Id = UlidId.New(now),
+            AiConnectionId = connection.Id,
+            ConnectionRevision = connection.CredentialRevision,
+            State = result.State,
+            Authentication = result.Authentication,
+            ModelAvailable = result.ModelAvailable,
+            ImageInput = result.ImageInput,
+            StructuredOutput = result.StructuredOutput,
+            UsageMetadata = result.UsageMetadata,
+            BatchState = "not_run",
+            BatchAvailable = false,
+            BatchCleanupSucceeded = true,
+            SafeErrorCode = result.SafeErrorCode,
+            LatencyMilliseconds = result.Latency is null
+                ? null
+                : checked((long)Math.Round(
+                    result.Latency.Value.TotalMilliseconds)),
+            CreatedAt = now,
+            CompletedAt = now,
+        };
+
+    private static void ApplyProbeResult(
+        AiConnectionEntity connection,
+        AiCapabilityProbeResult result,
+        DateTimeOffset now)
+    {
+        connection.LastCapabilityProbeState = result.State;
+        connection.LastCapabilityProbeErrorCode = result.SafeErrorCode;
+        connection.LastCapabilityProbeAt = now;
+        connection.LastBatchCapabilityProbeState = "not_run";
+        connection.LastBatchCapabilityProbeErrorCode = null;
+        connection.LastBatchCapabilityProbeAt = null;
+        connection.LastBatchCapabilityProbeCredentialRevision = null;
+        connection.State = IsSuccessfulImageProbe(connection, result)
+            ? "active"
+            : "blocked";
+        connection.UpdatedAt = now;
+    }
+
+    private static Task<bool> HasRemoteBatchInProgressAsync(
+        OokiGraderDbContext db,
+        string connectionId,
+        long credentialRevision,
+        CancellationToken cancellationToken) =>
+        db.AiBatches
+            .AsNoTracking()
+            .AnyAsync(
+                batch =>
+                    batch.AiConnectionId == connectionId
+                    && batch.ConnectionRevision == credentialRevision
+                    && (batch.State == "uploading"
+                        || batch.State == "submitting"
+                        || batch.State == "submitted"
+                        || batch.State == "reconcile_required"
+                        || batch.State == "pending"
+                        || batch.State == "running"
+                        || batch.State == "delayed"
+                        || batch.State == "manual_review"
+                        || batch.CleanupState == "pending"),
+                cancellationToken);
+
+    private static async Task TryRollbackAsync(
+        IDbContextTransaction transaction)
+    {
+        try
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // Preserve the exception that caused the rollback attempt.
+        }
+    }
+
+    private static async Task TryDeleteSecretAsync(
+        IAiSecretStore secretStore,
+        AiSecretReference reference)
+    {
+        try
+        {
+            _ = await secretStore.DeleteAsync(
+                reference,
+                CancellationToken.None);
+        }
+        catch
+        {
+            // The opaque envelope is now orphaned but is not referenced by
+            // application metadata. Cleanup must not hide the primary result.
+        }
+    }
+
+    private static IResult AutomaticSetupRequiresGemini(
+        HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status422UnprocessableEntity,
+            "AI_AUTOMATIC_SETUP_REQUIRES_GEMINI",
+            "自動設定にはGeminiを使用してください",
+            "OpenRouterは詳細設定として保存し、個別に接続確認してください。");
+
+    private static IResult AutomaticProbeFailed(
+        HttpContext context,
+        AiCapabilityProbeResult result)
+    {
+        var safeCode = string.IsNullOrWhiteSpace(result.SafeErrorCode)
+            ? "unknown"
+            : result.SafeErrorCode;
+        return ApiHelpers.Problem(
+            context,
+            StatusCodes.Status422UnprocessableEntity,
+            "AI_CONNECTION_TEST_FAILED",
+            "AI APIキーを確認できません",
+            "APIキー、モデル、インターネット接続を確認してください。" +
+            $" 保存内容は変更されていません（{safeCode}）。");
+    }
+
+    private static IResult RevisionMismatch(HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status412PreconditionFailed,
+            "REVISION_MISMATCH",
+            "接続設定が更新されています",
+            "最新の設定を読み込み直してから、もう一度保存してください。");
+
+    private static IResult KeyRotationBatchInProgress(
+        HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status409Conflict,
+            "AI_KEY_ROTATION_BATCH_IN_PROGRESS",
+            "AI APIキーを交換できません",
+            "送信済みの Gemini Batch を照合し、リモートファイルの消去が完了してから交換してください。");
+
     internal static async Task<int> EnsureCurrentProfilesAsync(
         OokiGraderDbContext db,
         IAiPromptBundleCatalog catalog,
@@ -1793,41 +2248,142 @@ public static class AiAdminEndpoints
         IAiProviderFeaturePolicy providerFeaturePolicy,
         CancellationToken cancellationToken = default)
     {
-        var connections = await db.AiConnections
-            .Where(connection =>
-                connection.State == "active"
-                && connection.LastCapabilityProbeState == "passed")
-            .ToArrayAsync(cancellationToken);
-        var before = db.ChangeTracker
-            .Entries<AiTaskProfileEntity>()
-            .Count(entry => entry.State == EntityState.Added);
-        var now = timeProvider.GetUtcNow();
-        foreach (var connection in connections)
-        {
-            if (!providerFeaturePolicy.IsEnabled(connection.Provider)
-                || !IsImageTaskConnectionReady(connection))
-            {
-                continue;
-            }
-
-            await EnsureDefaultProfilesAsync(
-                db,
-                connection,
-                connection.CreatedByStaffUserId,
-                catalog,
-                now,
+        var connection = await db.AiConnections
+            .SingleOrDefaultAsync(connection =>
+                connection.Provider == AiProviders.GeminiDirect
+                && connection.State == "active"
+                && connection.LastCapabilityProbeState == "passed",
                 cancellationToken);
+        if (connection is null
+            || !providerFeaturePolicy.IsEnabled(connection.Provider)
+            || !IsImageTaskConnectionReady(connection))
+        {
+            return 0;
         }
 
-        var added = db.ChangeTracker
-            .Entries<AiTaskProfileEntity>()
-            .Count(entry => entry.State == EntityState.Added)
-            - before;
-        if (added > 0)
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            cancellationToken);
+        var added = await ReconcileCurrentProfilesAsync(
+            db,
+            connection,
+            connection.CreatedByStaffUserId,
+            catalog,
+            timeProvider.GetUtcNow(),
+            replaceOtherProviders: false,
+            cancellationToken: cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return added;
+    }
+
+    private static async Task<int> ReconcileCurrentProfilesAsync(
+        OokiGraderDbContext db,
+        AiConnectionEntity connection,
+        string staffId,
+        IAiPromptBundleCatalog catalog,
+        DateTimeOffset now,
+        bool replaceOtherProviders,
+        CancellationToken cancellationToken)
+    {
+        var activeProfiles = await db.AiTaskProfiles
+            .Where(profile =>
+                profile.Active
+                && DefaultTaskTypes.Contains(profile.TaskType))
+            .ToArrayAsync(cancellationToken);
+        var activeByTask = activeProfiles.ToDictionary(
+            profile => profile.TaskType,
+            StringComparer.Ordinal);
+        var managedTaskTypes = DefaultTaskTypes
+            .Where(taskType =>
+                replaceOtherProviders
+                || !activeByTask.TryGetValue(taskType, out var active)
+                || active.AiConnectionId == connection.Id)
+            .ToArray();
+        var targets = new List<AiTaskProfileEntity>(managedTaskTypes.Length);
+        var added = 0;
+        foreach (var taskType in managedTaskTypes)
+        {
+            var bundle = catalog.GetRequired(taskType);
+            var processingStrategy = DefaultProcessingStrategy(taskType);
+            var defaultName = DefaultProfileName(
+                connection.Provider,
+                taskType);
+            var target = await db.AiTaskProfiles
+                .Where(profile =>
+                    profile.AiConnectionId == connection.Id
+                    && profile.TaskType == taskType
+                    && profile.ProcessingStrategy == processingStrategy
+                    && profile.ConnectionRevision
+                        == connection.CredentialRevision
+                    && profile.ModelId == connection.ModelId
+                    && profile.PromptVersion == bundle.PromptVersion
+                    && profile.SchemaVersion == bundle.SchemaVersion
+                    && profile.PromptContentHash == bundle.ContentHash)
+                .OrderByDescending(profile => profile.Active)
+                .ThenByDescending(profile => profile.Name == defaultName)
+                .ThenByDescending(profile => profile.CreatedAt)
+                .ThenByDescending(profile => profile.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (target is null)
+            {
+                target = BuildProfile(
+                    connection,
+                    taskType,
+                    defaultName,
+                    processingStrategy,
+                    taskType == AiTaskTypes.TemplateExtraction
+                        ? 16_384
+                        : 8_192,
+                    connection.ConcurrencyLimit,
+                    staffId,
+                    bundle,
+                    now);
+                db.AiTaskProfiles.Add(target);
+                added++;
+            }
+
+            targets.Add(target);
+        }
+
+        var targetIds = targets.Select(profile => profile.Id).ToArray();
+        var profilesToDeactivate = activeProfiles
+            .Where(profile =>
+                managedTaskTypes.Contains(profile.TaskType)
+                && !targetIds.Contains(profile.Id))
+            .ToArray();
+        foreach (var profile in profilesToDeactivate)
+        {
+            profile.Active = false;
+            profile.UpdatedAt = now;
+        }
+
+        // Persist deactivation (and any new profiles while still inactive)
+        // before activation because SQLite enforces the filtered unique index
+        // immediately for each statement.
+        if (profilesToDeactivate.Length > 0 || added > 0)
         {
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        foreach (var target in targets)
+        {
+            if (!AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                    target.ApprovalState))
+            {
+                target.ApprovalState = "capability_passed";
+                target.AccuracyEvaluationId = null;
+            }
+
+            if (!target.Active)
+            {
+                target.ActivatedAt = now;
+                target.ActivatedByStaffUserId = staffId;
+            }
+
+            target.Active = true;
+            target.UpdatedAt = now;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
         return added;
     }
 
@@ -1839,13 +2395,7 @@ public static class AiAdminEndpoints
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        foreach (var taskType in new[]
-                 {
-                     AiTaskTypes.TemplateExtraction,
-                     AiTaskTypes.NameTranscription,
-                     AiTaskTypes.InitialGrading,
-                     AiTaskTypes.Adjudication,
-                 })
+        foreach (var taskType in DefaultTaskTypes)
         {
             var bundle = catalog.GetRequired(taskType);
             var processingStrategy = DefaultProcessingStrategy(taskType);
@@ -1962,6 +2512,8 @@ public static class AiAdminEndpoints
         var stale = profile.AiConnection is not null
             && (profile.ConnectionRevision
                     != profile.AiConnection.CredentialRevision
+                || profile.AiConnection.State != "active"
+                || profile.AiConnection.LastCapabilityProbeState != "passed"
                 || !HasCurrentBatchCapability(profile)
                 || (bundle is not null
                     && !MatchesBundle(profile, bundle)));
@@ -2269,7 +2821,8 @@ public static class AiAdminEndpoints
         string? ModelId,
         int? TimeoutSeconds,
         int? ConcurrencyLimit,
-        long? Revision);
+        long? Revision,
+        bool? TestAndEnable);
 
     private sealed record SaveAiTaskProfileRequest(
         string ConnectionId,

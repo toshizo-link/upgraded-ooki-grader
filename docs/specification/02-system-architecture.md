@@ -261,11 +261,18 @@ It MUST NOT perform rasterization, AI inference, report rendering, or large file
 
 - provider capability probe;
 - encrypted per-connection key access;
+- candidate-first Gemini create/replace requiring full authentication,
+  exact-model, image, strict-structured-output, usage, and representative
+  image-task success before one atomic secret/connection/four-profile commit;
+- zero commit and prior-working-state preservation on candidate failure,
+  timeout, cancellation, or ambiguity;
+- stored-key-test and startup reconciliation of exact-current active Gemini
+  profile revisions while in-flight jobs remain pinned;
 - direct Gemini Files/Batch/standard inference;
 - OpenRouter multimodal Chat Completions with base64 private images, strict structured output, parameter-required routing, and usage/cost capture;
 - direct-Gemini batch assembly/submission/reconciliation;
 - OpenRouter durable queued parallel dispatch;
-- per-task provider/model profiles and approved failover;
+- exact-current capability-passed Gemini task profiles and advanced approved provider/model profiles/failover;
 - schema and usage parsing;
 - provider retries/circuit breaker;
 - pricing-snapshot/cost ledger;

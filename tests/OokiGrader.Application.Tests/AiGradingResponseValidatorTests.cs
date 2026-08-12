@@ -148,6 +148,256 @@ public sealed class AiGradingResponseValidatorTests
         Assert.Equal("ai_invalid_point_award", observation.ProviderReasonCode);
     }
 
+    [Theory]
+    [InlineData("correct", 1_000)]
+    [InlineData("incorrect", 0)]
+    public void ValidateAllowsClearHighConfidenceAiRubricWithoutMandatoryReview(
+        string outcome,
+        long points)
+    {
+        var question = RubricQuestion(requiresReviewAlways: false);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "説明",
+            proposedOutcome: outcome,
+            proposedPointsMilli: points,
+            reviewRecommended: false);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(outcome, observation.ProposedOutcome);
+        Assert.Equal(points, observation.ProposedPointsMilli);
+        Assert.False(observation.ProviderReviewRecommended);
+    }
+
+    [Fact]
+    public void ValidateRepairsAiRubricFalseNegativeCausedOnlyByVisibleLineWrapping()
+    {
+        var question = AiRubricQuestionWithAnswer("おしべの先\n(やく)");
+        using var response = ParseSubmissionAnalysisResponse(
+            question.Id,
+            transcription: "おしべの先(やく)",
+            proposedOutcome: "incorrect",
+            proposedPointsMilli: 0);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            },
+            mediaPartCount: 1);
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(1_000, observation.ProposedPointsMilli);
+        Assert.Equal("correct", observation.ProposedOutcome);
+        Assert.False(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            "ai_layout_line_wrap_reconciled",
+            observation.ProviderReasonCode);
+    }
+
+    [Theory]
+    [InlineData("New York", "NewYork", false)]
+    [InlineData("赤\n青", "赤青", true)]
+    public void ValidateDoesNotBroadenLineWrapRepairBeyondSafeAiRubricCase(
+        string acceptedAnswer,
+        string transcription,
+        bool answerOrderInsensitive)
+    {
+        var question = AiRubricQuestionWithAnswer(
+            acceptedAnswer,
+            answerOrderInsensitive);
+        using var response = ParseSubmissionAnalysisResponse(
+            question.Id,
+            transcription,
+            proposedOutcome: "incorrect",
+            proposedPointsMilli: 0);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            },
+            mediaPartCount: 1);
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.Equal("incorrect", observation.ProposedOutcome);
+        Assert.Null(observation.ProviderReasonCode);
+    }
+
+    [Fact]
+    public void ValidateHonorsPermanentReviewForAiRubric()
+    {
+        var question = RubricQuestion(requiresReviewAlways: true);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "説明",
+            proposedOutcome: "correct",
+            proposedPointsMilli: 1_000,
+            reviewRecommended: false);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        Assert.True(Assert.Single(validated.Observations)
+            .ProviderReviewRecommended);
+    }
+
+    [Fact]
+    public void ValidateRoutesLowConfidenceAiRubricToReview()
+    {
+        var question = RubricQuestion(requiresReviewAlways: false);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "説明",
+            proposedOutcome: "correct",
+            proposedPointsMilli: 1_000,
+            reviewRecommended: false,
+            confidence: 0.79);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        Assert.True(Assert.Single(validated.Observations)
+            .ProviderReviewRecommended);
+    }
+
+    [Fact]
+    public void ValidateCoercesCompleteAnswerPartialAwardToZero()
+    {
+        var question = RubricQuestion(requiresCompleteAnswer: true);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "要素Aのみ",
+            proposedOutcome: "partial",
+            proposedPointsMilli: 500,
+            reviewRecommended: true);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.Equal("incorrect", observation.ProposedOutcome);
+        Assert.True(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            "ai_complete_answer_required",
+            observation.ProviderReasonCode);
+    }
+
+    [Fact]
+    public void ValidateLetsLocalCorrectAnswerOverrideCompleteAnswerPartialProposal()
+    {
+        var question = ExactQuestion(requiresCompleteAnswer: true);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "漢字",
+            proposedOutcome: "partial",
+            proposedPointsMilli: 500,
+            reviewRecommended: true);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(1_000, observation.ProposedPointsMilli);
+        Assert.Equal("correct", observation.ProposedOutcome);
+        Assert.True(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            "ai_deterministic_recomputed",
+            observation.ProviderReasonCode);
+    }
+
+    [Fact]
+    public void ValidatePreservesUnreadableReviewForCompleteAnswerQuestion()
+    {
+        var question = RubricQuestion(requiresCompleteAnswer: true);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "判読不能",
+            proposedOutcome: "unreadable",
+            proposedPointsMilli: 0,
+            reviewRecommended: true,
+            legibility: "unreadable");
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.Equal("unreadable", observation.ProposedOutcome);
+        Assert.True(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            "ai_deterministic_review_required",
+            observation.ProviderReasonCode);
+    }
+
+    [Fact]
+    public void ValidatePreservesAmbiguousReviewDespiteCompleteAnswerPartialProposal()
+    {
+        var question = RubricQuestion(requiresCompleteAnswer: true);
+        using var response = ParseResponse(
+            question.Id,
+            transcription: "要素Aかもしれない",
+            proposedOutcome: "partial",
+            proposedPointsMilli: 500,
+            reviewRecommended: true,
+            legibility: "ambiguous");
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.Equal("review", observation.ProposedOutcome);
+        Assert.True(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            "ai_deterministic_review_required",
+            observation.ProviderReasonCode);
+    }
+
     [Fact]
     public void ValidatePreservesGoodItemWhenAnotherAwardIsQuarantined()
     {
@@ -264,7 +514,8 @@ public sealed class AiGradingResponseValidatorTests
         Assert.Single(validated.Observations);
     }
 
-    private static DomainQuestionDefinition ExactQuestion() =>
+    private static DomainQuestionDefinition ExactQuestion(
+        bool requiresCompleteAnswer = false) =>
         new(
             "q-exact",
             "logical-q-exact",
@@ -286,7 +537,8 @@ public sealed class AiGradingResponseValidatorTests
                     AcceptedAnswerVariantType.Canonical,
                     AnswerProvenance.TeacherEntered,
                     teacherVerified: true),
-            ]);
+            ],
+            requiresCompleteAnswer: requiresCompleteAnswer);
 
     private static DomainQuestionDefinition ChoiceQuestion() =>
         new(
@@ -313,7 +565,9 @@ public sealed class AiGradingResponseValidatorTests
             ],
             choicePolicy: new ChoiceAnswerPolicy("A", ["A", "B", "C"]));
 
-    private static DomainQuestionDefinition RubricQuestion() =>
+    private static DomainQuestionDefinition RubricQuestion(
+        bool requiresCompleteAnswer = false,
+        bool requiresReviewAlways = true) =>
         new(
             "q-rubric",
             "logical-q-rubric",
@@ -325,8 +579,65 @@ public sealed class AiGradingResponseValidatorTests
             new MilliPoints(1_000),
             new MilliPoints(500),
             allowNonKanji: true,
-            requiresReviewAlways: true,
-            teacherVerified: true);
+            requiresReviewAlways,
+            teacherVerified: true,
+            requiresCompleteAnswer: requiresCompleteAnswer);
+
+    private static DomainQuestionDefinition AiRubricQuestionWithAnswer(
+        string answerText,
+        bool answerOrderInsensitive = false) =>
+        new(
+            "q-ai-layout",
+            "logical-q-ai-layout",
+            2,
+            "問3",
+            "答えを書きなさい。",
+            QuestionType.ExactShortText,
+            GradingMode.AiRubric,
+            new MilliPoints(1_000),
+            new MilliPoints(1_000),
+            allowNonKanji: true,
+            requiresReviewAlways: false,
+            teacherVerified: true,
+            acceptedAnswers:
+            [
+                new AcceptedAnswer(
+                    "answer-ai-layout",
+                    answerText,
+                    AcceptedAnswerVariantType.Canonical,
+                    AnswerProvenance.TeacherEntered,
+                    teacherVerified: true),
+            ],
+            answerOrderInsensitive: answerOrderInsensitive);
+
+    private static JsonDocument ParseSubmissionAnalysisResponse(
+        string questionId,
+        string transcription,
+        string proposedOutcome,
+        long proposedPointsMilli) =>
+        JsonDocument.Parse(
+            JsonSerializer.Serialize(new
+            {
+                schema_version = "submission_analysis_v2",
+                request_key = "grade-request-1",
+                identity = (object?)null,
+                results = new[]
+                {
+                    new
+                    {
+                        question_id = questionId,
+                        evidence_media_index = 0,
+                        transcription,
+                        legibility = "clear",
+                        blank = false,
+                        proposed_outcome = proposedOutcome,
+                        proposed_points_milli = proposedPointsMilli,
+                        confidence = 0.98,
+                    },
+                },
+                missing_question_ids = Array.Empty<string>(),
+                unexpected_content = false,
+            }));
 
     private static JsonDocument ParseResponse(
         string questionId,
@@ -334,7 +645,9 @@ public sealed class AiGradingResponseValidatorTests
         string proposedOutcome,
         long proposedPointsMilli,
         bool reviewRecommended,
-        bool blank = false) =>
+        bool blank = false,
+        string legibility = "clear",
+        double confidence = 0.98) =>
         JsonDocument.Parse(
             $$"""
             {
@@ -344,11 +657,11 @@ public sealed class AiGradingResponseValidatorTests
                 {
                   "question_id": "{{questionId}}",
                   "transcription": "{{transcription}}",
-                  "legibility": "clear",
+                  "legibility": "{{legibility}}",
                   "blank": {{blank.ToString().ToLowerInvariant()}},
                   "proposed_outcome": "{{proposedOutcome}}",
                   "proposed_points_milli": {{proposedPointsMilli}},
-                  "confidence": 0.98
+                  "confidence": {{confidence.ToString(System.Globalization.CultureInfo.InvariantCulture)}}
                 }
               ],
               "missing_question_ids": [],

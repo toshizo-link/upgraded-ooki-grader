@@ -9,14 +9,17 @@ using Microsoft.EntityFrameworkCore;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Application.Templates;
 using OokiGrader.Domain.Common;
 using OokiGrader.Domain.Grading;
 using OokiGrader.Domain.Scoring;
 using OokiGrader.Domain.Templates;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Host.Middleware;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
+using OokiGrader.Preprocessing;
 using DomainTemplateVersion = OokiGrader.Domain.Templates.TemplateVersion;
 
 namespace OokiGrader.Host.Api;
@@ -27,6 +30,12 @@ public static class TemplatesEndpoints
     private const int MaximumTemplatePageSize = 200;
     private const int MinimumProposalVerificationConfidenceBasisPoints = 9_500;
     private const string TemplatesListRoute = "GET:/api/v1/templates";
+
+    private static readonly JsonSerializerOptions GenerationJsonOptions = new(
+        JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+    };
 
     private static readonly HashSet<string> AcknowledgementOnlyAiNotices =
     [
@@ -79,10 +88,14 @@ public static class TemplatesEndpoints
             .WithTags("Templates")
             .RequireAuthorization("teacher");
 
-        group.MapGet("/", ListTemplates);
+        group.MapGet("/", ListTemplates).RequireRateLimiting("search");
         group.MapPost("/", CreateTemplate)
             .RequireAuthorization("teacher");
         group.MapGet("/{templateId}", GetTemplate);
+        group.MapDelete("/{templateId}", ArchiveTemplate)
+            .RequireAuthorization("teacher");
+        group.MapPost("/{templateId}:restore", RestoreTemplate)
+            .RequireAuthorization("teacher");
         group.MapPost("/{templateId}/versions", CreateTemplateVersion)
             .RequireAuthorization("teacher");
         group.MapGet("/{templateId}/versions/{versionId}", GetTemplateVersion);
@@ -135,7 +148,8 @@ public static class TemplatesEndpoints
         group.MapPost(
                 "/{templateId}/versions/{versionId}:publish",
                 PublishTemplateVersion)
-            .RequireAuthorization("teacher");
+            .RequireAuthorization("teacher")
+            .RequireIdempotency();
 
         return endpoints;
     }
@@ -151,6 +165,12 @@ public static class TemplatesEndpoints
         string? q,
         string? state,
         string? subject,
+        string? category,
+        string? course,
+        string? grade,
+        string? testType,
+        string? sort,
+        bool? includeFacets,
         string? cursor,
         int? pageSize,
         int? limit,
@@ -158,13 +178,26 @@ public static class TemplatesEndpoints
         ProtectedCursorCodec cursorCodec,
         CancellationToken cancellationToken)
     {
-        var requestedPageSize = pageSize ?? limit ?? 50;
-        var take = Math.Clamp(requestedPageSize, 1, MaximumTemplatePageSize);
-        var term = CursorPagination.TrimToNull(search)
-            ?? CursorPagination.TrimToNull(q);
-        if (term?.Length > 500)
+        if (!ListQuery.TryPageSize(
+                context,
+                pageSize,
+                limit,
+                out var take,
+                out var pageSizeError))
         {
-            return Results.BadRequest();
+            return pageSizeError!;
+        }
+
+        var requestedSearch = CursorPagination.TrimToNull(search)
+            ?? CursorPagination.TrimToNull(q);
+        if (!ListQuery.TryNormalizeSearch(
+                context,
+                requestedSearch,
+                out var normalizedSearch,
+                out var searchTokens,
+                out var searchError))
+        {
+            return searchError!;
         }
 
         var query = db.TestTemplates
@@ -173,33 +206,146 @@ public static class TemplatesEndpoints
             .ThenInclude(version => version.Questions)
             .AsSplitQuery();
 
-        if (!string.IsNullOrWhiteSpace(term))
+        foreach (var token in searchTokens)
         {
+            var pattern = ListQuery.ContainsPattern(token);
             query = query.Where(template =>
-                template.Title.Contains(term)
-                || (template.Subject != null && template.Subject.Contains(term))
-                || (template.Category != null && template.Category.Contains(term)));
+                EF.Functions.Like(template.Title, pattern, "\\")
+                || (template.Subject != null
+                    && EF.Functions.Like(template.Subject, pattern, "\\"))
+                || (template.Category != null
+                    && EF.Functions.Like(template.Category, pattern, "\\"))
+                || (template.Course != null
+                    && EF.Functions.Like(template.Course, pattern, "\\"))
+                || (template.GradeLabel != null
+                    && EF.Functions.Like(template.GradeLabel, pattern, "\\")));
         }
 
-        var normalizedState = state is "draft" or "active" or "retired" or "archived"
-            ? state
-            : null;
+        var normalizedState = CursorPagination.TrimToNull(state);
+        if (normalizedState is not null
+            && normalizedState is not ("draft" or "active" or "retired" or "archived"))
+        {
+            return ListQuery.Invalid(
+                context,
+                "state は draft、active、retired、archived のいずれかを指定してください。");
+        }
+
         if (normalizedState is not null)
         {
             query = query.Where(template => template.State == normalizedState);
         }
+        else
+        {
+            // Archived templates are a recoverable deletion and stay out of the
+            // ordinary working set. They remain discoverable through the explicit
+            // archived filter so an administrator can restore them.
+            query = query.Where(template => template.State != "archived");
+        }
 
-        var normalizedSubject = CursorPagination.TrimToNull(subject);
+        if (!ListQuery.TryTrimFilter(
+                context,
+                subject,
+                "subject",
+                out var normalizedSubject,
+                out var filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                category,
+                "category",
+                out var normalizedCategory,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                course,
+                "course",
+                out var normalizedCourse,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                grade,
+                "grade",
+                out var normalizedGrade,
+                out filterError))
+        {
+            return filterError!;
+        }
+
         if (normalizedSubject is not null)
         {
             query = query.Where(template => template.Subject == normalizedSubject);
         }
 
+        if (normalizedCategory is not null)
+        {
+            query = query.Where(template => template.Category == normalizedCategory);
+        }
+
+        if (normalizedCourse is not null)
+        {
+            query = query.Where(template => template.Course == normalizedCourse);
+        }
+
+        if (normalizedGrade is not null)
+        {
+            query = query.Where(template => template.GradeLabel == normalizedGrade);
+        }
+
+        var normalizedTestTypeText = CursorPagination.TrimToNull(testType);
+        TestType? normalizedTestType = normalizedTestTypeText switch
+        {
+            null => null,
+            "hop" => TestType.Hop,
+            "step" => TestType.Step,
+            "classPlacement" => TestType.ClassPlacement,
+            "other" => TestType.Other,
+            _ => null,
+        };
+        if (normalizedTestTypeText is not null && normalizedTestType is null)
+        {
+            return ListQuery.Invalid(
+                context,
+                "testType は hop、step、classPlacement、other のいずれかを指定してください。");
+        }
+
+        if (normalizedTestType.HasValue)
+        {
+            query = FilterByPreferredTestType(
+                query,
+                normalizedTestType.Value);
+        }
+
+        var normalizedSort = CursorPagination.TrimToNull(sort) ?? "-updatedAt";
+        if (normalizedSort is not (
+            "-updatedAt"
+            or "updatedAt"
+            or "name"
+            or "-name"
+            or "subject"
+            or "-subject"))
+        {
+            return ListQuery.Invalid(
+                context,
+                "sort は updatedAt、name、subject のいずれかに、必要なら先頭の - を付けて指定してください。");
+        }
+
+        var cursorSort = normalizedSort switch
+        {
+            "-updatedAt" => "-updatedAt,id",
+            "updatedAt" => "updatedAt,id",
+            "name" => "name,id",
+            "-name" => "-name,id",
+            "subject" => "subject,id",
+            _ => "-subject,id",
+        };
         var filterBinding = CursorPagination.Bind(
-            ("search", term),
-            ("sort", "-updatedAt,id"),
+            ("category", normalizedCategory),
+            ("course", normalizedCourse),
+            ("grade", normalizedGrade),
+            ("search", normalizedSearch),
+            ("sort", cursorSort),
             ("state", normalizedState),
-            ("subject", normalizedSubject));
+            ("subject", normalizedSubject),
+            ("testType", normalizedTestTypeText));
         if (!CursorPagination.TryRead(
                 context,
                 cursorCodec,
@@ -214,7 +360,10 @@ public static class TemplatesEndpoints
 
         if (position is not null
             && (string.IsNullOrEmpty(position.Id)
-                || position.Id.Length > 128))
+                || position.Id.Length > ListQuery.MaximumIdLength
+                || (normalizedSort is "-updatedAt" or "updatedAt"
+                    ? position.Timestamp is null
+                    : position.Text is null || position.Text.Length > 1_000)))
         {
             return CursorPagination.Invalid(context);
         }
@@ -222,14 +371,47 @@ public static class TemplatesEndpoints
         var total = await query.CountAsync(cancellationToken);
         if (position is not null)
         {
-            query = query.Where(template =>
-                template.UpdatedAt < position.UpdatedAt
-                || (template.UpdatedAt == position.UpdatedAt
-                    && string.Compare(template.Id, position.Id) > 0));
+            query = normalizedSort switch
+            {
+                "-updatedAt" => query.Where(template =>
+                    template.UpdatedAt < position.Timestamp
+                    || (template.UpdatedAt == position.Timestamp
+                        && string.Compare(template.Id, position.Id) > 0)),
+                "updatedAt" => query.Where(template =>
+                    template.UpdatedAt > position.Timestamp
+                    || (template.UpdatedAt == position.Timestamp
+                        && string.Compare(template.Id, position.Id) > 0)),
+                "name" => query.Where(template =>
+                    string.Compare(template.Title, position.Text) > 0
+                    || (template.Title == position.Text
+                        && string.Compare(template.Id, position.Id) > 0)),
+                "-name" => query.Where(template =>
+                    string.Compare(template.Title, position.Text) < 0
+                    || (template.Title == position.Text
+                        && string.Compare(template.Id, position.Id) > 0)),
+                "subject" => query.Where(template =>
+                    string.Compare(template.Subject ?? string.Empty, position.Text) > 0
+                    || ((template.Subject ?? string.Empty) == position.Text
+                        && string.Compare(template.Id, position.Id) > 0)),
+                _ => query.Where(template =>
+                    string.Compare(template.Subject ?? string.Empty, position.Text) < 0
+                    || ((template.Subject ?? string.Empty) == position.Text
+                        && string.Compare(template.Id, position.Id) > 0)),
+            };
         }
 
-        var templates = await query
-            .OrderByDescending(template => template.UpdatedAt)
+        IOrderedQueryable<TestTemplateEntity> ordered = normalizedSort switch
+        {
+            "-updatedAt" => query.OrderByDescending(
+                template => template.UpdatedAt),
+            "updatedAt" => query.OrderBy(template => template.UpdatedAt),
+            "name" => query.OrderBy(template => template.Title),
+            "-name" => query.OrderByDescending(template => template.Title),
+            "subject" => query.OrderBy(template => template.Subject ?? string.Empty),
+            _ => query.OrderByDescending(
+                template => template.Subject ?? string.Empty),
+        };
+        var templates = await ordered
             .ThenBy(template => template.Id)
             .Take(take + 1)
             .ToListAsync(cancellationToken);
@@ -248,16 +430,138 @@ public static class TemplatesEndpoints
                 filterBinding,
                 hasMore,
                 new TemplateCursorPosition(
-                    templates[^1].UpdatedAt,
+                    normalizedSort is "-updatedAt" or "updatedAt"
+                        ? templates[^1].UpdatedAt
+                        : null,
+                    normalizedSort switch
+                    {
+                        "name" or "-name" => templates[^1].Title,
+                        "subject" or "-subject" =>
+                            templates[^1].Subject ?? string.Empty,
+                        _ => null,
+                    },
                     templates[^1].Id));
+        var facets = includeFacets == true
+            ? await LoadTemplateFacetsAsync(db, cancellationToken)
+            : null;
 
         return Results.Ok(new
         {
             items,
             nextCursor,
             totalApproximate = total,
+            facets,
         });
     }
+
+    private static async Task<object> LoadTemplateFacetsAsync(
+        OokiGraderDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var subjectRows = await db.TestTemplates
+            .AsNoTracking()
+            .Where(template => template.Subject != null
+                && template.Subject != string.Empty
+                && template.Subject.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(template => template.Subject!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var subjects = subjectRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var categoryRows = await db.TestTemplates
+            .AsNoTracking()
+            .Where(template => template.Category != null
+                && template.Category != string.Empty
+                && template.Category.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(template => template.Category!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var categories = categoryRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var gradeRows = await db.TestTemplates
+            .AsNoTracking()
+            .Where(template => template.GradeLabel != null
+                && template.GradeLabel != string.Empty
+                && template.GradeLabel.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(template => template.GradeLabel!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var grades = gradeRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var courseRows = await db.TestTemplates
+            .AsNoTracking()
+            .Where(template => template.Course != null
+                && template.Course != string.Empty
+                && template.Course.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(template => template.Course!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var courses = courseRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var testTypes = new List<FacetValue>(4);
+        foreach (var value in new[]
+        {
+            TestType.Hop,
+            TestType.Step,
+            TestType.ClassPlacement,
+            TestType.Other,
+        })
+        {
+            var count = await FilterByPreferredTestType(
+                    db.TestTemplates.AsNoTracking(),
+                    value)
+                .CountAsync(cancellationToken);
+            if (count > 0)
+            {
+                testTypes.Add(new FacetValue(
+                    TestTypeValue(value),
+                    TestTypeLabel(value),
+                    count));
+            }
+        }
+
+        return new { subjects, categories, grades, courses, testTypes };
+    }
+
+    private static IQueryable<TestTemplateEntity> FilterByPreferredTestType(
+        IQueryable<TestTemplateEntity> query,
+        TestType value) =>
+        query.Where(template => template.Versions.Any(version =>
+            version.TestType == value
+            && (template.ActiveVersionId == version.Id
+                || (template.ActiveVersionId == null
+                    && !template.Versions.Any(other =>
+                        other.VersionNumber > version.VersionNumber)))));
+
+    private static string TestTypeValue(TestType value) => value switch
+    {
+        TestType.Hop => "hop",
+        TestType.Step => "step",
+        TestType.ClassPlacement => "classPlacement",
+        _ => "other",
+    };
+
+    private static string TestTypeLabel(TestType value) => value switch
+    {
+        TestType.Hop => "HOP",
+        TestType.Step => "STEP",
+        TestType.ClassPlacement => "クラス分け",
+        _ => "その他",
+    };
+
+    private sealed record FacetValue(string Value, string Label, int Count);
 
     private static async Task<IResult> CreateTemplate(
         HttpContext context,
@@ -334,6 +638,156 @@ public static class TemplatesEndpoints
         return Results.Ok(ToTemplateSummary(template));
     }
 
+    private static async Task<IResult> ArchiveTemplate(
+        string templateId,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        OokiGraderDbContext db,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        var template = await db.TestTemplates
+            .Include(item => item.Versions)
+            .SingleOrDefaultAsync(item => item.Id == templateId, cancellationToken);
+        if (template is null)
+        {
+            return Results.NotFound();
+        }
+
+        // A lost response can be retried safely without requiring the caller to
+        // retain the pre-archive revision. No additional audit event is emitted.
+        if (template.State == "archived")
+        {
+            ApiHelpers.SetRevisionEtag(context.Response, template.Revision);
+            return Results.NoContent();
+        }
+
+        if (template.Versions.Any(version => version.State == "generating"))
+        {
+            return Conflict(
+                context,
+                "TEMPLATE_EXTRACTION_IN_PROGRESS",
+                "自動下書きの作成中は削除できません",
+                "自動下書きの処理が完了または失敗してから、もう一度削除してください。");
+        }
+
+        if (!ApiHelpers.TryReadExpectedRevision(
+                context.Request,
+                bodyRevision: null,
+                out var expectedRevision))
+        {
+            return RevisionRequired(context);
+        }
+
+        if (template.Revision != expectedRevision)
+        {
+            return Stale(context, template.Revision);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var previousState = template.State;
+        template.State = "archived";
+        AddAudit(
+            db,
+            now,
+            principal,
+            context,
+            "template.archived",
+            "template",
+            template.Id,
+            new { previousState, previousRevision = expectedRevision });
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            var currentRevision = await db.TestTemplates
+                .AsNoTracking()
+                .Where(item => item.Id == template.Id)
+                .Select(item => (long?)item.Revision)
+                .SingleOrDefaultAsync(cancellationToken);
+            return Stale(context, currentRevision ?? template.Revision);
+        }
+
+        ApiHelpers.SetRevisionEtag(context.Response, template.Revision);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> RestoreTemplate(
+        string templateId,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        [FromBody] TemplateLifecycleApiRequest? request,
+        OokiGraderDbContext db,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        var template = await db.TestTemplates
+            .Include(item => item.Versions)
+            .ThenInclude(version => version.Questions)
+            .AsSplitQuery()
+            .SingleOrDefaultAsync(item => item.Id == templateId, cancellationToken);
+        if (template is null)
+        {
+            return Results.NotFound();
+        }
+
+        // Restore is idempotent once the archived state has already been left.
+        if (template.State != "archived")
+        {
+            ApiHelpers.SetRevisionEtag(context.Response, template.Revision);
+            return Results.Ok(ToTemplateSummary(template));
+        }
+
+        if (!ApiHelpers.TryReadExpectedRevision(
+                context.Request,
+                request?.Revision,
+                out var expectedRevision))
+        {
+            return RevisionRequired(context);
+        }
+
+        if (template.Revision != expectedRevision)
+        {
+            return Stale(context, template.Revision);
+        }
+
+        var restoredState = template.Versions.Any(
+            version => version.State == "published")
+                ? "active"
+                : "draft";
+        var now = timeProvider.GetUtcNow();
+        template.State = restoredState;
+        AddAudit(
+            db,
+            now,
+            principal,
+            context,
+            "template.restored",
+            "template",
+            template.Id,
+            new { restoredState, previousRevision = expectedRevision });
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            var currentRevision = await db.TestTemplates
+                .AsNoTracking()
+                .Where(item => item.Id == template.Id)
+                .Select(item => (long?)item.Revision)
+                .SingleOrDefaultAsync(cancellationToken);
+            return Stale(context, currentRevision ?? template.Revision);
+        }
+
+        ApiHelpers.SetRevisionEtag(context.Response, template.Revision);
+        return Results.Ok(ToTemplateSummary(template));
+    }
+
     private static async Task<IResult> CreateTemplateVersion(
         string templateId,
         HttpContext context,
@@ -402,6 +856,19 @@ public static class TemplatesEndpoints
                 ?? source?.DefaultAllowNonKanji
                 ?? false,
             PipelineVersion = ManualPipelineVersion,
+            ExpectedSubmissionPageCount = source?.ExpectedSubmissionPageCount,
+            TestType = source?.TestType,
+            AnswerStyle = source?.AnswerStyle,
+            PromptSystem = source?.PromptSystem,
+            OriginatingBatchId = source?.OriginatingBatchId,
+            OriginatingUnitId = source?.OriginatingUnitId,
+            GenerationProfileVersion = source?.GenerationProfileVersion,
+            GenerationProfileJson = source?.GenerationProfileJson,
+            GenerationProfileHash = source?.GenerationProfileHash,
+            StepSetIndex = source?.StepSetIndex,
+            StepVariationIndex = source?.StepVariationIndex,
+            PrintedTestName = source?.PrintedTestName,
+            ResolvedGrade = source?.ResolvedGrade,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -509,6 +976,11 @@ public static class TemplatesEndpoints
         if (version is null)
         {
             return Results.NotFound();
+        }
+
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
         }
 
         if (version.State != "draft")
@@ -658,6 +1130,7 @@ public static class TemplatesEndpoints
     {
         var source = await db.TemplateSources
             .AsNoTracking()
+            .Include(item => item.TemplateVersion)
             .SingleOrDefaultAsync(
                 item => item.Id == sourceId
                     && item.TemplateVersionId == versionId
@@ -679,14 +1152,22 @@ public static class TemplatesEndpoints
                     cancellationToken)
                 .ConfigureAwait(false);
         var fileObject = reference?.FileObject;
+        var isUploadedSource = reference is not null
+            && reference.OwnerType == "upload_session"
+            && reference.OwnerId == source.UploadSessionId
+            && reference.Purpose == "template_source"
+            && fileObject?.StorageClass
+                == ContentStorageClass.TemplateSource.ToString();
+        var isDeterministicDerivedSource = reference is not null
+            && reference.OwnerType == "template_generation_unit"
+            && reference.OwnerId == source.TemplateVersion.OriginatingUnitId
+            && reference.Purpose == "derived_source"
+            && fileObject?.StorageClass
+                == ContentStorageClass.TemplateDerived.ToString();
         if (reference is null
             || fileObject is null
-            || reference.OwnerType != "upload_session"
-            || reference.OwnerId != source.UploadSessionId
-            || reference.Purpose != "template_source"
+            || (!isUploadedSource && !isDeterministicDerivedSource)
             || fileObject.State != "available"
-            || fileObject.StorageClass
-                != ContentStorageClass.TemplateSource.ToString()
             || fileObject.VerifiedMime is not (
                 "application/pdf"
                 or "image/png"
@@ -704,7 +1185,9 @@ public static class TemplatesEndpoints
         }
 
         var locator = new ContentObjectLocator(
-            ContentStorageClass.TemplateSource,
+            isDeterministicDerivedSource
+                ? ContentStorageClass.TemplateDerived
+                : ContentStorageClass.TemplateSource,
             fileObject.Sha256,
             fileObject.Bytes,
             fileObject.Extension);
@@ -803,6 +1286,11 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
         if (version.State != "draft")
         {
             return Immutable(context);
@@ -841,8 +1329,8 @@ public static class TemplatesEndpoints
                     && item.Active,
                 cancellationToken);
         if (profile is null
-            || profile.ApprovalState is not (
-                "pilot_approved" or "production_approved")
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
             || profile.ModelId != profile.AiConnection.ModelId
             || profile.ConnectionRevision
                 != profile.AiConnection.CredentialRevision
@@ -1163,7 +1651,8 @@ public static class TemplatesEndpoints
     }
 
     private sealed record TemplateCursorPosition(
-        DateTimeOffset UpdatedAt,
+        DateTimeOffset? Timestamp,
+        string? Text,
         string Id);
 
     private sealed record QuestionCursorPosition(
@@ -1181,7 +1670,7 @@ public static class TemplatesEndpoints
         CancellationToken cancellationToken)
     {
         if (request?.SelectionMode is not (
-                null or "allNonBlocking"))
+                null or "allNonBlocking" or "all"))
         {
             return ValidationProblem(
                 context,
@@ -1191,7 +1680,7 @@ public static class TemplatesEndpoints
                     FieldError(
                         "selectionMode",
                         "INVALID",
-                        "確認方式は allNonBlocking を指定してください。"),
+                        "確認方式は all または allNonBlocking を指定してください。"),
                 ]);
         }
 
@@ -1219,6 +1708,11 @@ public static class TemplatesEndpoints
             return Stale(context, version.Revision);
         }
 
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
         if (version.State != "draft")
         {
             return Immutable(context);
@@ -1233,7 +1727,10 @@ public static class TemplatesEndpoints
                 "Gemini で下書きを生成してから一括確認してください。");
         }
 
-        var assessment = AssessProposalVerification(version);
+        var selectionMode = request?.SelectionMode ?? "allNonBlocking";
+        var assessment = AssessProposalVerification(
+            version,
+            acknowledgeReviewableIssues: selectionMode == "all");
         if (assessment.EligibleQuestions.Count > 0)
         {
             var confirmableDraft = DomainTemplateVersion.CreateDraft(
@@ -1290,7 +1787,7 @@ public static class TemplatesEndpoints
             version.Id,
             new
             {
-                selectionMode = "allNonBlocking",
+                selectionMode,
                 verifiedQuestionCount,
                 verifiedAnswerCount,
                 skippedQuestionCount = assessment.BlockedQuestionCount,
@@ -1349,6 +1846,11 @@ public static class TemplatesEndpoints
         if (version is null)
         {
             return Results.NotFound();
+        }
+
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
         }
 
         if (version.State != "draft")
@@ -1454,6 +1956,11 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
         if (version.State != "draft")
         {
             return Immutable(context);
@@ -1476,7 +1983,9 @@ public static class TemplatesEndpoints
 
         var maximumPoints =
             request.MaxPointsMilli ?? version.DefaultPointsMilli;
-        var pointIncrement = request.PointIncrementMilli ?? 1;
+        var pointIncrement = request.PointIncrementMilli
+            ?? QuestionGradingDefaultPolicy.PointIncrementMilliFor(
+                maximumPoints);
         if (pointIncrement > maximumPoints
             || maximumPoints % pointIncrement != 0)
         {
@@ -1515,6 +2024,20 @@ public static class TemplatesEndpoints
         }
 
         var now = timeProvider.GetUtcNow();
+        var questionType = request.QuestionType ?? "exact_short_text";
+        var gradingMode = request.GradingMode
+            ?? QuestionGradingDefaultPolicy.GradingModeFor(questionType);
+        var canonicalAnswer = answerInputs
+            .FirstOrDefault(answer => answer.VariantType == "canonical")
+            ?.Text;
+        var rubricText = TrimOrNull(request.Rubric);
+        if (gradingMode == "ai_rubric" && rubricText is null)
+        {
+            rubricText = QuestionGradingDefaultPolicy.BuildDefaultRubric(
+                questionType,
+                canonicalAnswer);
+        }
+
         var question = new QuestionEntity
         {
             Id = UlidId.New(now),
@@ -1523,15 +2046,19 @@ public static class TemplatesEndpoints
             OrderIndex = order,
             DisplayLabel = request.DisplayLabel!.Trim(),
             QuestionText = request.QuestionText?.Trim() ?? string.Empty,
-            QuestionType = request.QuestionType ?? "exact_short_text",
-            GradingMode = request.GradingMode ?? "transcribe_then_rules",
+            QuestionType = questionType,
+            GradingMode = gradingMode,
             MaxPointsMilli = maximumPoints,
             PointIncrementMilli = pointIncrement,
             AllowNonKanji = request.AllowNonKanji ?? version.DefaultAllowNonKanji,
+            RequiresCompleteAnswer = request.RequiresCompleteAnswer ?? false,
+            AnswerOrderInsensitive = request.AnswerOrderInsensitive ?? false,
             KanjiPolicyNote = TrimOrNull(request.KanjiPolicyNote),
-            RubricText = TrimOrNull(request.Rubric),
+            RubricText = rubricText,
             TeacherNote = TrimOrNull(request.TeacherNote),
-            RequiresReviewAlways = request.RequiresReviewAlways ?? false,
+            RequiresReviewAlways = request.RequiresReviewAlways
+                ?? QuestionGradingDefaultPolicy.RequiresReviewAlwaysFor(
+                    questionType),
             TeacherVerified = request.TeacherVerified ?? true,
             CreatedAt = now,
             UpdatedAt = now,
@@ -1624,6 +2151,11 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
         if (version.State != "draft")
         {
             return Immutable(context);
@@ -1682,11 +2214,22 @@ public static class TemplatesEndpoints
         }
 
         var now = timeProvider.GetUtcNow();
+        var previousQuestionType = question.QuestionType;
+        var nextQuestionType = request.QuestionType ?? previousQuestionType;
+        var questionTypeChanged = request.QuestionType is not null
+            && !string.Equals(
+                request.QuestionType,
+                previousQuestionType,
+                StringComparison.Ordinal);
+        var nextGradingMode = request.GradingMode
+            ?? (questionTypeChanged
+                ? QuestionGradingDefaultPolicy.GradingModeFor(nextQuestionType)
+                : question.GradingMode);
         question.OrderIndex = order;
         question.DisplayLabel = (request.DisplayLabel ?? question.DisplayLabel).Trim();
         question.QuestionText = (request.QuestionText ?? question.QuestionText).Trim();
-        question.QuestionType = request.QuestionType ?? question.QuestionType;
-        question.GradingMode = request.GradingMode ?? question.GradingMode;
+        question.QuestionType = nextQuestionType;
+        question.GradingMode = nextGradingMode;
         var nextMaximum = request.MaxPointsMilli ?? question.MaxPointsMilli;
         var nextIncrement =
             request.PointIncrementMilli ?? question.PointIncrementMilli;
@@ -1709,9 +2252,28 @@ public static class TemplatesEndpoints
         question.MaxPointsMilli = nextMaximum;
         question.PointIncrementMilli = nextIncrement;
         question.AllowNonKanji = request.AllowNonKanji ?? question.AllowNonKanji;
+        question.RequiresCompleteAnswer = request.RequiresCompleteAnswer
+            ?? question.RequiresCompleteAnswer;
+        question.AnswerOrderInsensitive = request.AnswerOrderInsensitive
+            ?? question.AnswerOrderInsensitive;
         if (request.Rubric is not null)
         {
             question.RubricText = TrimOrNull(request.Rubric);
+        }
+        else if (question.GradingMode == "ai_rubric"
+                 && string.IsNullOrWhiteSpace(question.RubricText)
+                 && (questionTypeChanged || request.GradingMode == "ai_rubric"))
+        {
+            var canonicalAnswer = answerInputs?
+                .FirstOrDefault(answer => answer.VariantType == "canonical")
+                ?.Text
+                ?? question.AcceptedAnswers
+                    .FirstOrDefault(answer => answer.VariantType == "canonical")
+                    ?.AnswerText;
+            question.RubricText =
+                QuestionGradingDefaultPolicy.BuildDefaultRubric(
+                    question.QuestionType,
+                    canonicalAnswer);
         }
 
         if (request.TeacherNote is not null)
@@ -1724,8 +2286,11 @@ public static class TemplatesEndpoints
             question.KanjiPolicyNote = TrimOrNull(request.KanjiPolicyNote);
         }
 
-        question.RequiresReviewAlways =
-            request.RequiresReviewAlways ?? question.RequiresReviewAlways;
+        question.RequiresReviewAlways = request.RequiresReviewAlways
+            ?? (questionTypeChanged
+                ? QuestionGradingDefaultPolicy.RequiresReviewAlwaysFor(
+                    question.QuestionType)
+                : question.RequiresReviewAlways);
         question.TeacherVerified = request.TeacherVerified ?? true;
         if (request.QuestionRegion is not null)
         {
@@ -1819,6 +2384,11 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
         if (version.State != "draft")
         {
             return Immutable(context);
@@ -1895,7 +2465,10 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
-        var report = BuildValidationReport(version);
+        var report = await BuildValidationReportAsync(
+            version,
+            db,
+            cancellationToken);
         ApiHelpers.SetRevisionEtag(context.Response, version.Revision);
         return Results.Ok(report);
     }
@@ -1907,6 +2480,8 @@ public static class TemplatesEndpoints
         ClaimsPrincipal principal,
         [FromBody] PublishTemplateApiRequest? request,
         OokiGraderDbContext db,
+        [FromServices] IContentStore contentStore,
+        [FromServices] IPdfPageCountReader pdfPageCountReader,
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
@@ -1916,6 +2491,21 @@ public static class TemplatesEndpoints
                 out var expectedRevision))
         {
             return RevisionRequired(context);
+        }
+
+        var classLabel = string.IsNullOrWhiteSpace(request?.ClassLabel)
+            ? null
+            : request.ClassLabel.Trim();
+        if ((request?.TestDate is { } suppliedTestDate
+                && suppliedTestDate == default)
+            || classLabel?.Length > 500)
+        {
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status422UnprocessableEntity,
+                "TEST_SESSION_INVALID",
+                "受付を開始できません",
+                "実施日とクラス名を確認してください。");
         }
 
         var version = await FindVersionAsync(
@@ -1929,9 +2519,33 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        var existingSession = await db.TestSessions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.TemplateVersionId == version.Id
+                    && item.CreationSource == "template_publish",
+                cancellationToken);
+        if (existingSession is not null
+            && TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(
+                version.State))
+        {
+            ApiHelpers.SetRevisionEtag(context.Response, version.Revision);
+            return Results.Ok(ToVersionDetail(version) with
+            {
+                TestSession = ToPublishTestSessionResponse(
+                    existingSession,
+                    version),
+            });
+        }
+
         if (version.Revision != expectedRevision)
         {
             return Stale(context, version.Revision);
+        }
+
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
         }
 
         if (version.State != "draft")
@@ -1939,15 +2553,43 @@ public static class TemplatesEndpoints
             return Immutable(context);
         }
 
-        var report = BuildValidationReport(version);
+        var report = await BuildValidationReportAsync(
+            version,
+            db,
+            cancellationToken);
         if (!report.Valid)
         {
             return ValidationProblem(
                 context,
                 "TEMPLATE_PUBLISH_BLOCKED",
-                "公開前の確認が必要です",
+                "受付開始前の確認が必要です",
                 report.Issues.Cast<object>().ToArray());
         }
+
+        if (version.ExpectedSubmissionPageCount is null)
+        {
+            try
+            {
+                version.ExpectedSubmissionPageCount =
+                    await ResolveExpectedSubmissionPageCountAsync(
+                        version,
+                        db,
+                        contentStore,
+                        pdfPageCountReader,
+                        cancellationToken);
+            }
+            catch (OrderedScanBatchServiceException exception)
+            {
+                return ApiHelpers.Problem(
+                    context,
+                    exception.StatusCode,
+                    exception.Code,
+                    exception.Title,
+                    exception.Detail);
+            }
+        }
+
+        var expectedSubmissionPageCount = version.ExpectedSubmissionPageCount;
 
         DomainTemplateVersion domainVersion;
         try
@@ -1959,67 +2601,318 @@ public static class TemplatesEndpoints
             return ValidationProblem(
                 context,
                 "TEMPLATE_PUBLISH_BLOCKED",
-                "公開前の確認が必要です",
+                "受付開始前の確認が必要です",
                 exception.Errors.Select(ToProblemError).ToArray());
         }
 
         var now = timeProvider.GetUtcNow();
+        var testDate = request?.TestDate
+            ?? await ResolveSiteLocalDateAsync(db, now, cancellationToken);
         var published = domainVersion.Publish(ApiHelpers.StaffId(principal), now);
-        var template = version.TestTemplate;
-        if (!string.IsNullOrWhiteSpace(template.ActiveVersionId)
-            && template.ActiveVersionId != version.Id)
-        {
-            var prior = await db.TemplateVersions.SingleOrDefaultAsync(
-                item => item.Id == template.ActiveVersionId,
-                cancellationToken);
-            if (prior?.State == "published")
-            {
-                prior.State = "superseded";
-            }
-        }
-
-        version.State = "published";
-        version.PublishedByStaffUserId = ApiHelpers.StaffId(principal);
-        version.PublishedAt = now;
-        version.ContentHash = ComputePublishedContentHash(
-            version,
-            published.ContentHash
-                ?? throw new InvalidOperationException(
-                    "A published template must have a content hash."));
-        template.ActiveVersionId = version.Id;
-        template.State = "active";
-        AddAudit(
-            db,
-            now,
-            principal,
-            context,
-            "template_version.published",
-            "template_version",
-            version.Id,
-            new
-            {
-                templateId,
-                version.VersionNumber,
-                contentHash = version.ContentHash,
-                previousRevision = expectedRevision,
-            });
-
+        var sessionId = UlidId.New(now.AddTicks(1));
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            cancellationToken);
         try
         {
+            // PDF inspection happens before the write transaction. Re-read the
+            // two optimistic-lock owners after the transaction starts so a
+            // concurrent editor cannot be published from a stale validation.
+            await db.Entry(version).ReloadAsync(cancellationToken);
+            await db.Entry(version.TestTemplate).ReloadAsync(cancellationToken);
+            if (version.Revision != expectedRevision)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Stale(context, version.Revision);
+            }
+
+            if (version.TestTemplate.State == "archived")
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Archived(context);
+            }
+
+            if (version.State != "draft")
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Immutable(context);
+            }
+
+            version.ExpectedSubmissionPageCount = expectedSubmissionPageCount;
+            var template = version.TestTemplate;
+            if (!string.IsNullOrWhiteSpace(template.ActiveVersionId)
+                && template.ActiveVersionId != version.Id)
+            {
+                var prior = await db.TemplateVersions.SingleOrDefaultAsync(
+                    item => item.Id == template.ActiveVersionId,
+                    cancellationToken);
+                if (prior?.State == "published")
+                {
+                    prior.State = "superseded";
+                }
+            }
+
+            version.State = "published";
+            version.PublishedByStaffUserId = ApiHelpers.StaffId(principal);
+            version.PublishedAt = now;
+            version.ContentHash = ComputePublishedContentHash(
+                version,
+                published.ContentHash
+                    ?? throw new InvalidOperationException(
+                        "A published template must have a content hash."));
+            template.ActiveVersionId = version.Id;
+            template.State = "active";
+            AddAudit(
+                db,
+                now,
+                principal,
+                context,
+                "template_version.published",
+                "template_version",
+                version.Id,
+                new
+                {
+                    templateId,
+                    version.VersionNumber,
+                    contentHash = version.ContentHash,
+                    previousRevision = expectedRevision,
+                    testSessionId = sessionId,
+                    testDate,
+                    classLabel,
+                });
+
+            // Persist the published state first because SQLite integrity
+            // triggers require an immutable version before a session may pin it.
+            // The surrounding transaction still rolls this write back if the
+            // following session insert fails.
             await db.SaveChangesAsync(cancellationToken);
+
+            var session = new TestSessionEntity
+            {
+                Id = sessionId,
+                TemplateVersionId = version.Id,
+                CreationSource = "template_publish",
+                TitleOverride = null,
+                TemplateTitleSnapshot = template.Title,
+                TemplateSubjectSnapshot = template.Subject,
+                TemplateGradeLabelSnapshot = template.GradeLabel,
+                TemplateCategorySnapshot = template.Category,
+                TemplateCourseSnapshot = template.Course,
+                TestDate = testDate,
+                Course = template.Course,
+                ClassLabel = classLabel,
+                Priority = "expedite",
+                State = "open",
+                CreatedByStaffUserId = ApiHelpers.StaffId(principal),
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.TestSessions.Add(session);
+            AddAudit(
+                db,
+                now.AddTicks(1),
+                principal,
+                context,
+                "test_session.created",
+                "test_session",
+                session.Id,
+                new
+                {
+                    templateId,
+                    templateVersionId = version.Id,
+                    source = "template_publish",
+                });
+            AddAudit(
+                db,
+                now.AddTicks(2),
+                principal,
+                context,
+                "test_session.opened",
+                "test_session",
+                session.Id,
+                new { source = "template_publish" });
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            ApiHelpers.SetRevisionEtag(context.Response, version.Revision);
+            return Results.Ok(ToVersionDetail(version) with
+            {
+                TestSession = ToPublishTestSessionResponse(session, version),
+            });
         }
         catch (DbUpdateConcurrencyException)
         {
-            var currentRevision = await db.TemplateVersions
+            await transaction.RollbackAsync(cancellationToken);
+            db.ChangeTracker.Clear();
+            var currentVersion = await FindVersionAsync(
+                db,
+                templateId,
+                versionId,
+                tracking: false,
+                cancellationToken);
+            var completedSession = await db.TestSessions
                 .AsNoTracking()
-                .Where(item => item.Id == version.Id)
-                .Select(item => (long?)item.Revision)
-                .SingleOrDefaultAsync(cancellationToken);
-            return Stale(context, currentRevision ?? version.Revision);
+                .SingleOrDefaultAsync(
+                    item => item.TemplateVersionId == versionId
+                        && item.CreationSource == "template_publish",
+                    cancellationToken);
+            if (currentVersion is not null
+                && completedSession is not null
+                && TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(
+                    currentVersion.State))
+            {
+                ApiHelpers.SetRevisionEtag(
+                    context.Response,
+                    currentVersion.Revision);
+                return Results.Ok(ToVersionDetail(currentVersion) with
+                {
+                    TestSession = ToPublishTestSessionResponse(
+                        completedSession,
+                        currentVersion),
+                });
+            }
+
+            return Stale(
+                context,
+                currentVersion?.Revision ?? version.Revision);
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                "TEST_SESSION_START_FAILED",
+                "受付を開始できませんでした",
+                "ひな形を確定できませんでした。しばらく待ってから同じ操作をやり直してください。");
+        }
+    }
+
+    private static async Task<int> ResolveExpectedSubmissionPageCountAsync(
+        TemplateVersionEntity version,
+        OokiGraderDbContext db,
+        IContentStore contentStore,
+        IPdfPageCountReader pdfPageCountReader,
+        CancellationToken cancellationToken)
+    {
+        var candidates = version.Sources
+            .Where(item => item.SourceRole is
+                "blank_test"
+                or "contains_model_answers"
+                or "contains_non_model_answers")
+            .OrderBy(item => item.Ordinal)
+            .ThenBy(item => item.Id)
+            .ToArray();
+        var selectedRole = candidates.Any(item => item.SourceRole == "blank_test")
+            ? "blank_test"
+            : candidates.Any(item => item.SourceRole == "contains_model_answers")
+                ? "contains_model_answers"
+                : "contains_non_model_answers";
+        var selected = candidates
+            .Where(item => item.SourceRole == selectedRole)
+            .ToArray();
+        if (selected.Length == 0
+            || selected.Any(item => item.FileReferenceId is null))
+        {
+            throw PageCountUnavailable();
         }
 
-        ApiHelpers.SetRevisionEtag(context.Response, version.Revision);
-        return Results.Ok(ToVersionDetail(version));
+        var referenceIds = selected.Select(item => item.FileReferenceId!).ToArray();
+        var references = await db.FileReferences
+            .AsNoTracking()
+            .Include(item => item.FileObject)
+            .Where(item => referenceIds.Contains(item.Id))
+            .ToDictionaryAsync(item => item.Id, cancellationToken);
+        var totalPages = 0;
+        foreach (var source in selected)
+        {
+            if (!references.TryGetValue(source.FileReferenceId!, out var reference)
+                || reference.FileObject.State != "available")
+            {
+                throw PageCountUnavailable();
+            }
+
+            var uploadedSource = reference.OwnerType == "upload_session"
+                && reference.OwnerId == source.UploadSessionId
+                && reference.Purpose == "template_source"
+                && reference.FileObject.StorageClass
+                    == nameof(ContentStorageClass.TemplateSource);
+            var derivedSource = version.OriginatingUnitId is { } unitId
+                && reference.OwnerType == "template_generation_unit"
+                && reference.OwnerId == unitId
+                && reference.Purpose == "derived_source"
+                && reference.FileObject.StorageClass
+                    == nameof(ContentStorageClass.TemplateDerived);
+            if (!uploadedSource && !derivedSource)
+            {
+                throw PageCountUnavailable();
+            }
+
+            var fileObject = reference.FileObject;
+            int sourcePages;
+            if (fileObject.VerifiedMime == "application/pdf")
+            {
+                await using var stream = await contentStore.OpenReadAsync(
+                    new ContentObjectLocator(
+                        Enum.Parse<ContentStorageClass>(
+                            fileObject.StorageClass,
+                            ignoreCase: false),
+                        fileObject.Sha256,
+                        fileObject.Bytes,
+                        fileObject.Extension),
+                    cancellationToken);
+                try
+                {
+                    sourcePages = await pdfPageCountReader.GetPageCountAsync(
+                        stream,
+                        OrderedScanBatchService.MaximumSubmissionPages + 1,
+                        cancellationToken);
+                }
+                catch (PdfPageCountException)
+                {
+                    throw PageCountUnavailable();
+                }
+            }
+            else if (fileObject.VerifiedMime is
+                "image/png" or "image/jpeg" or "image/webp")
+            {
+                sourcePages = 1;
+            }
+            else
+            {
+                throw PageCountUnavailable();
+            }
+
+            totalPages = checked(totalPages + sourcePages);
+            if (totalPages > OrderedScanBatchService.MaximumSubmissionPages)
+            {
+                throw new OrderedScanBatchServiceException(
+                    StatusCodes.Status422UnprocessableEntity,
+                    "TEMPLATE_SUBMISSION_PAGE_COUNT_UNSUPPORTED",
+                    "答案のページ数が上限を超えています",
+                    $"1答案は{OrderedScanBatchService.MaximumSubmissionPages}ページ以下にしてください。");
+            }
+        }
+
+        var resolved = OrderedScanPageCountPolicy.Resolve(
+            version.TestType ?? TestType.Other,
+            totalPages);
+        if (resolved != totalPages)
+        {
+            throw new OrderedScanBatchServiceException(
+                StatusCodes.Status409Conflict,
+                "TEMPLATE_SUBMISSION_PAGE_COUNT_INCONSISTENT",
+                "答案のページ数がテスト種別と一致しません",
+                "問題用紙とテスト種別を確認してください。");
+        }
+
+        return resolved;
+
+        static OrderedScanBatchServiceException PageCountUnavailable() =>
+            new(
+                StatusCodes.Status409Conflict,
+                "TEMPLATE_SUBMISSION_PAGE_COUNT_MISSING",
+                "答案のページ数を確認できません",
+                "暗号化されていない問題用紙PDFをひな形に追加してください。");
     }
 
     private static IQueryable<TemplateVersionEntity> VersionGraph(
@@ -2139,6 +3032,68 @@ public static class TemplatesEndpoints
             version.Revision);
     }
 
+    private static PublishTestSessionResponse ToPublishTestSessionResponse(
+        TestSessionEntity session,
+        TemplateVersionEntity version)
+    {
+        var title = session.TitleOverride
+            ?? session.TemplateTitleSnapshot
+            ?? version.TestTemplate.Title;
+        return new PublishTestSessionResponse(
+            session.Id,
+            title,
+            title,
+            title,
+            version.TestTemplateId,
+            version.Id,
+            session.TemplateTitleSnapshot ?? version.TestTemplate.Title,
+            version.VersionNumber,
+            session.TemplateSubjectSnapshot ?? version.TestTemplate.Subject,
+            session.TemplateGradeLabelSnapshot ?? version.TestTemplate.GradeLabel,
+            session.TemplateCategorySnapshot ?? version.TestTemplate.Category,
+            version.ExpectedSubmissionPageCount,
+            session.Course
+                ?? session.TemplateCourseSnapshot
+                ?? version.TestTemplate.Course,
+            session.TemplateCourseSnapshot ?? version.TestTemplate.Course,
+            session.TestDate,
+            session.ClassLabel,
+            session.Priority,
+            session.State,
+            session.CreationSource,
+            session.Revision);
+    }
+
+    private static async Task<DateOnly> ResolveSiteLocalDateAsync(
+        OokiGraderDbContext db,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var timeZoneId = await db.SiteSettings
+            .AsNoTracking()
+            .Where(item => item.Id == "site")
+            .Select(item => item.TimeZone)
+            .SingleOrDefaultAsync(cancellationToken);
+        TimeZoneInfo timeZone;
+        try
+        {
+            timeZone = string.IsNullOrWhiteSpace(timeZoneId)
+                ? TimeZoneInfo.Utc
+                : TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            timeZone = TimeZoneInfo.Utc;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            timeZone = TimeZoneInfo.Utc;
+        }
+
+        return DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTime(now, timeZone).DateTime);
+    }
+
     private static TemplateSourceApiResponse ToTemplateSourceResponse(
         TemplateSourceEntity source,
         TemplateSourceRoleResolution? inference = null,
@@ -2201,6 +3156,8 @@ public static class TemplatesEndpoints
             question.MaxPointsMilli,
             question.PointIncrementMilli,
             question.AllowNonKanji,
+            question.RequiresCompleteAnswer,
+            question.AnswerOrderInsensitive,
             answers,
             canonical?.AnswerText,
             question.RubricText,
@@ -2217,7 +3174,8 @@ public static class TemplatesEndpoints
     }
 
     private static ProposalVerificationAssessment AssessProposalVerification(
-        TemplateVersionEntity version)
+        TemplateVersionEntity version,
+        bool acknowledgeReviewableIssues)
     {
         var issues = new List<TemplateValidationIssue>();
         var eligible = new List<QuestionEntity>();
@@ -2227,7 +3185,8 @@ public static class TemplatesEndpoints
             .ToArray();
         issues.AddRange(consistencyBlockers);
         var consistencyBlockedQuestionIds = consistencyBlockers
-            .Where(issue => issue.QuestionId is not null)
+            .Where(issue => !acknowledgeReviewableIssues
+                && issue.QuestionId is not null)
             .Select(issue => issue.QuestionId!)
             .ToHashSet(StringComparer.Ordinal);
         if (consistencyBlockers.Any(issue => issue.QuestionId is null))
@@ -2285,6 +3244,8 @@ public static class TemplatesEndpoints
             source.SourceRole is
                 "contains_model_answers"
                 or "separate_answer_key");
+        var requiresDocumentGlobalAuthoritativeAnswers =
+            version.OriginatingUnitId is null && hasAuthoritativeSource;
         foreach (var question in version.Questions
                      .OrderBy(item => item.OrderIndex)
                      .ThenBy(item => item.Id))
@@ -2292,7 +3253,8 @@ public static class TemplatesEndpoints
             var questionIssues = AssessQuestionProposal(
                 question,
                 version,
-                hasAuthoritativeSource);
+                requiresDocumentGlobalAuthoritativeAnswers,
+                acknowledgeReviewableIssues);
             issues.AddRange(questionIssues);
             if (!globalBlocker
                 && questionIssues.Count == 0
@@ -2316,7 +3278,8 @@ public static class TemplatesEndpoints
     private static List<TemplateValidationIssue> AssessQuestionProposal(
         QuestionEntity question,
         TemplateVersionEntity version,
-        bool hasAuthoritativeSource)
+        bool requiresDocumentGlobalAuthoritativeAnswers,
+        bool acknowledgeReviewableIssues)
     {
         if (question.TeacherVerified
             && question.AcceptedAnswers.All(answer => answer.TeacherVerified))
@@ -2340,34 +3303,32 @@ public static class TemplatesEndpoints
                 $"{question.DisplayLabel}の問題文を確認してください。");
         }
 
-        if (question.QuestionType is not (
-                "multiple_choice"
-                or "boolean"
-                or "numeric"
-                or "exact_short_text"))
+        if (question.QuestionType == "unsupported")
         {
             AddIssue(
                 "question.individual_review_required",
                 $"{question.DisplayLabel}の問題形式は先生による個別確認が必要です。");
         }
 
-        if (question.RequiresReviewAlways)
+        if (!acknowledgeReviewableIssues && question.RequiresReviewAlways)
         {
             AddIssue(
                 "question.review_always",
                 $"{question.DisplayLabel}は先生による個別確認が必要です。");
         }
 
-        if (question.AiConfidenceBasisPoints is null
-            || question.AiConfidenceBasisPoints.Value
-                < MinimumProposalVerificationConfidenceBasisPoints)
+        if (!acknowledgeReviewableIssues
+            && (question.AiConfidenceBasisPoints is null
+                || question.AiConfidenceBasisPoints.Value
+                    < MinimumProposalVerificationConfidenceBasisPoints))
         {
             AddIssue(
                 "question.low_confidence",
                 $"{question.DisplayLabel}は認識の信頼度が低いため個別確認が必要です。");
         }
 
-        if (HasBlockingProposalNotice(question.TeacherNote))
+        if (!acknowledgeReviewableIssues
+            && HasBlockingProposalNotice(question.TeacherNote))
         {
             AddIssue(
                 "question.ai_warning",
@@ -2389,7 +3350,7 @@ public static class TemplatesEndpoints
         var answerRequired = question.GradingMode is
             "deterministic"
             or "transcribe_then_rules";
-        if ((answerRequired || hasAuthoritativeSource)
+        if ((answerRequired || requiresDocumentGlobalAuthoritativeAnswers)
             && canonicalAnswers.Length != 1)
         {
             AddIssue(
@@ -2419,7 +3380,7 @@ public static class TemplatesEndpoints
                 $"{question.DisplayLabel}に重複した解答候補があります。");
         }
 
-        if (hasAuthoritativeSource
+        if (requiresDocumentGlobalAuthoritativeAnswers
             && canonicalAnswers.Length == 1
             && canonicalAnswers[0].AnswerProvenance
                 != "provided_model_answer")
@@ -2535,11 +3496,14 @@ public static class TemplatesEndpoints
 
         foreach (var question in version.Questions)
         {
-            // Structural extraction findings describe the source inventory, not
-            // merely an unconfirmed answer. Keep them in validation even after a
-            // teacher checks the surviving question, otherwise a missing physical
-            // answer slot could disappear from the publish gate.
-            issues.AddRange(ParseExtractionReviewNotes(question));
+            var extractionNotes = ParseExtractionReviewNotes(question).ToArray();
+            // A teacher confirmation resolves question/answer-scoped extraction
+            // findings. Template-scoped inventory findings remain global publish
+            // gates, and duplicate labels / point totals are recomputed below
+            // from the current persisted graph.
+            issues.AddRange(question.TeacherVerified
+                ? extractionNotes.Where(issue => issue.QuestionId is null)
+                : extractionNotes);
             if (question.TeacherVerified)
             {
                 continue;
@@ -2735,18 +3699,33 @@ public static class TemplatesEndpoints
             ? property.GetString()
             : null;
 
+    private static async Task<TemplateValidationResponse>
+        BuildValidationReportAsync(
+            TemplateVersionEntity version,
+            OokiGraderDbContext db,
+            CancellationToken cancellationToken)
+    {
+        var generationIssues = await BuildGenerationPublicationIssuesAsync(
+            version,
+            db,
+            cancellationToken);
+        return BuildValidationReport(version, generationIssues);
+    }
+
     private static TemplateValidationResponse BuildValidationReport(
-        TemplateVersionEntity version)
+        TemplateVersionEntity version,
+        IEnumerable<TemplateValidationIssue> generationIssues)
     {
         var issues = new List<TemplateValidationIssue>();
         issues.AddRange(BuildExtractionConsistencyIssues(version));
+        issues.AddRange(generationIssues);
 
         if (version.Sources.Count == 0)
         {
             issues.Add(
                 new TemplateValidationIssue(
                     "template.source_required",
-                    "公開前に問題用紙または模範解答のファイルを追加してください。",
+                    "受付開始前に問題用紙または模範解答のファイルを追加してください。",
                     null,
                     true));
         }
@@ -2756,7 +3735,7 @@ public static class TemplatesEndpoints
             issues.Add(
                 new TemplateValidationIssue(
                     "template.not_draft",
-                    "公開済みまたは処理中の版は検証・公開できません。",
+                    "確定済みまたは処理中の版は再確認できません。",
                     null,
                     true));
         }
@@ -2841,6 +3820,547 @@ public static class TemplatesEndpoints
             issues);
     }
 
+    private static async Task<IReadOnlyList<TemplateValidationIssue>>
+        BuildGenerationPublicationIssuesAsync(
+            TemplateVersionEntity version,
+            OokiGraderDbContext db,
+            CancellationToken cancellationToken)
+    {
+        if (version.GenerationProfileJson is null)
+        {
+            return [];
+        }
+
+        var issues = new List<TemplateValidationIssue>();
+        if (string.IsNullOrWhiteSpace(version.OriginatingUnitId))
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.origin_missing",
+                "生成元の単位を確認できません。");
+            return issues;
+        }
+
+        var unit = await db.TemplateGenerationUnits
+            .AsNoTracking()
+            .Include(item => item.Batch)
+            .ThenInclude(item => item.Source)
+            .SingleOrDefaultAsync(
+                item => item.Id == version.OriginatingUnitId,
+                cancellationToken);
+        if (unit is null)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.origin_missing",
+                "生成元の単位を確認できません。");
+            return issues;
+        }
+
+        var derived = await db.TemplateGenerationDerivedSources
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.UnitId == unit.Id,
+                cancellationToken);
+        FileReferenceEntity? fileReference = null;
+        if (!string.IsNullOrWhiteSpace(derived?.FileReferenceId))
+        {
+            fileReference = await db.FileReferences
+                .AsNoTracking()
+                .Include(item => item.FileObject)
+                .SingleOrDefaultAsync(
+                    item => item.Id == derived.FileReferenceId,
+                    cancellationToken);
+        }
+
+        TemplateGenerationProfile? profile = null;
+        try
+        {
+            profile = JsonSerializer.Deserialize<TemplateGenerationProfile>(
+                version.GenerationProfileJson,
+                GenerationJsonOptions);
+        }
+        catch (JsonException)
+        {
+        }
+
+        if (profile is null)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.profile_invalid",
+                "生成条件を読み取れません。");
+        }
+        else
+        {
+            ValidateGenerationProfile(version, unit, profile, issues);
+            ValidateGenerationRoute(version, unit, profile, issues);
+            ValidateGenerationRangeAndName(version, unit, profile, issues);
+        }
+
+        ValidateGenerationDraftAndWarnings(unit, issues);
+        ValidateDerivedSource(
+            version,
+            unit,
+            derived,
+            fileReference,
+            issues);
+        return issues;
+    }
+
+    private static void ValidateGenerationProfile(
+        TemplateVersionEntity version,
+        TemplateGenerationUnitEntity unit,
+        TemplateGenerationProfile profile,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        var expectedHash = profile.ComputeHash();
+        if (version.GenerationProfileVersion
+                != TemplateGenerationProfile.CurrentProfileVersion
+            || profile.ProfileVersion
+                != TemplateGenerationProfile.CurrentProfileVersion
+            || profile.SplitPolicyVersion
+                != TemplateGenerationProfile.CurrentSplitPolicyVersion
+            || !TemplateGenerationProfile.IsSupportedNamingPolicyVersion(
+                profile.NamingPolicyVersion)
+            || profile.ExtractionPromptVersion
+                != TemplateGenerationBatchService.ExtractionPromptVersion
+            || profile.ExtractionSchemaVersion
+                != TemplateGenerationBatchService.ExtractionSchemaVersion
+            || !string.Equals(
+                version.GenerationProfileHash,
+                expectedHash,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                unit.GenerationProfileHash,
+                expectedHash,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                unit.GenerationProfileJson,
+                version.GenerationProfileJson,
+                StringComparison.Ordinal)
+            || version.OriginatingBatchId != unit.BatchId
+            || unit.Batch.Status != TemplateGenerationBatchStatus.Completed
+            || unit.Batch.CompletedAt is null
+            || unit.Status != TemplateGenerationUnitStatus.Confirmed
+            || unit.CreatedTemplateId != version.TestTemplateId
+            || string.IsNullOrWhiteSpace(unit.CreatedTemplateVersionId)
+            || profile.Subject != unit.Batch.Subject
+            || profile.Subject != version.TestTemplate.Subject
+            || profile.SourcePageCount != unit.Batch.SourcePageCount
+            || profile.SourcePageCount <= 0
+            || profile.UnitSequence != unit.Sequence
+            || profile.UnitSequence <= 0)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.profile_invalid",
+                "対応していない、または一致しない生成条件です。");
+        }
+
+        if (version.ResolvedGrade is < GradeLevel.Grade1 or > GradeLevel.Grade6
+            || unit.ResolvedGrade != version.ResolvedGrade)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.grade_required",
+                "小学1年から6年の学年を確認してください。");
+        }
+    }
+
+    private static void ValidateGenerationRoute(
+        TemplateVersionEntity version,
+        TemplateGenerationUnitEntity unit,
+        TemplateGenerationProfile profile,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        if (!Enum.IsDefined(profile.TestType)
+            || version.TestType != profile.TestType
+            || unit.TestType != profile.TestType
+            || unit.Batch.TestType != profile.TestType)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.test_type_invalid",
+                "テスト種別が生成条件と一致しません。");
+            return;
+        }
+
+        TemplatePromptSystem expectedPrompt;
+        try
+        {
+            expectedPrompt = TemplatePromptRouter.Resolve(
+                profile.TestType,
+                profile.AnswerStyle);
+        }
+        catch (DomainValidationException)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.prompt_route_invalid",
+                "回答形式と生成システムの組み合わせが正しくありません。");
+            return;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.prompt_route_invalid",
+                "回答形式と生成システムの組み合わせが正しくありません。");
+            return;
+        }
+
+        if (profile.PromptSystem != expectedPrompt
+            || version.PromptSystem != expectedPrompt
+            || unit.PromptSystem != expectedPrompt
+            || unit.Batch.PromptSystem != expectedPrompt
+            || version.AnswerStyle != profile.AnswerStyle
+            || unit.AnswerStyle != profile.AnswerStyle
+            || unit.Batch.AnswerStyle != profile.AnswerStyle)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.prompt_route_invalid",
+                "回答形式と生成システムの組み合わせが正しくありません。");
+        }
+    }
+
+    private static void ValidateGenerationRangeAndName(
+        TemplateVersionEntity version,
+        TemplateGenerationUnitEntity unit,
+        TemplateGenerationProfile profile,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        var rangeMatchesProfile = profile.FirstPage == unit.FirstPage
+            && profile.LastPage == unit.LastPage
+            && profile.FirstPage >= 1
+            && profile.LastPage >= profile.FirstPage
+            && profile.LastPage <= profile.SourcePageCount;
+        var expectedUnitCount = profile.TestType switch
+        {
+            TestType.Hop => profile.SourcePageCount,
+            TestType.Step when profile.SourcePageCount % 6 == 0 =>
+                profile.SourcePageCount / 2,
+            TestType.ClassPlacement or TestType.Other => 1,
+            _ => 0,
+        };
+        var canonicalRange = profile.TestType switch
+        {
+            TestType.Hop =>
+                profile.FirstPage == profile.UnitSequence
+                && profile.LastPage == profile.FirstPage,
+            TestType.Step =>
+                profile.FirstPage == 2L * (profile.UnitSequence - 1) + 1
+                && profile.LastPage == profile.FirstPage + 1,
+            TestType.ClassPlacement or TestType.Other =>
+                profile.UnitSequence == 1
+                && profile.FirstPage == 1
+                && profile.LastPage == profile.SourcePageCount,
+            _ => false,
+        };
+        if (!rangeMatchesProfile
+            || !canonicalRange
+            || unit.Batch.ExpectedUnitCount != expectedUnitCount)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.source_range_invalid",
+                "生成元ページ範囲が決定的な分割計画と一致しません。");
+        }
+
+        if (profile.TestType == TestType.Hop
+            && (profile.LastPage - profile.FirstPage + 1 != 1
+                || profile.StepSetIndex is not null
+                || profile.StepVariationIndex is not null
+                || profile.DeterministicSuffix is not null
+                || unit.StepSetIndex is not null
+                || unit.StepVariationIndex is not null
+                || unit.DeterministicSuffix is not null
+                || version.StepSetIndex is not null
+                || version.StepVariationIndex is not null))
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.hop_range_invalid",
+                "HOPは1ページ単位である必要があります。");
+        }
+
+        ValidateStepMetadata(version, unit, profile, issues);
+        if (profile.NamingPolicyVersion
+                == TemplateGenerationProfile.CurrentNamingPolicyVersion
+            && profile.TestType != TestType.Other
+            && version.ResolvedGrade is >= GradeLevel.Grade1
+                and <= GradeLevel.Grade6)
+        {
+            string? expectedName = null;
+            try
+            {
+                expectedName = TemplateNamePolicy.CreateKnownTestName(
+                    profile.TestType,
+                    profile.Subject,
+                    version.ResolvedGrade.Value,
+                    profile.UnitSequence,
+                    profile.StepSetIndex,
+                    profile.StepVariationIndex);
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (DomainValidationException)
+            {
+            }
+
+            if (expectedName is null
+                || !string.Equals(
+                    version.TestTemplate.Title,
+                    expectedName,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    unit.FinalTemplateName,
+                    expectedName,
+                    StringComparison.Ordinal))
+            {
+                AddGenerationIssue(
+                    issues,
+                    "generation.final_name_invalid",
+                    "テスト名が教科・学年・分割番号から作成した統一名と一致しません。");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(version.TestTemplate.Title)
+            || string.IsNullOrWhiteSpace(unit.FinalTemplateName)
+            || !string.Equals(
+                version.TestTemplate.Title,
+                unit.FinalTemplateName,
+                StringComparison.Ordinal))
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.final_name_required",
+                "最終テスト名を確認してください。");
+        }
+    }
+
+    private static void ValidateStepMetadata(
+        TemplateVersionEntity version,
+        TemplateGenerationUnitEntity unit,
+        TemplateGenerationProfile profile,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        if (profile.TestType != TestType.Step)
+        {
+            if (profile.TestType is TestType.ClassPlacement or TestType.Other
+                && (profile.StepSetIndex is not null
+                    || profile.StepVariationIndex is not null
+                    || profile.DeterministicSuffix is not null
+                    || unit.StepSetIndex is not null
+                    || unit.StepVariationIndex is not null
+                    || unit.DeterministicSuffix is not null
+                    || version.StepSetIndex is not null
+                    || version.StepVariationIndex is not null))
+            {
+                AddGenerationIssue(
+                    issues,
+                    "generation.step_variation_invalid",
+                    "STEP以外にSTEPの枝番を設定できません。");
+            }
+
+            return;
+        }
+
+        var expectedVariation = (profile.UnitSequence - 1) % 3 + 1;
+        var expectedSet = (profile.UnitSequence - 1) / 3 + 1;
+        var expectedSuffix = $"-{expectedVariation}";
+        if (profile.LastPage - profile.FirstPage + 1 != 2)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.step_range_invalid",
+                "STEPは2ページ単位である必要があります。");
+        }
+
+        if (profile.StepVariationIndex != expectedVariation
+            || profile.StepSetIndex != expectedSet
+            || unit.StepVariationIndex != expectedVariation
+            || unit.StepSetIndex != expectedSet
+            || version.StepVariationIndex != expectedVariation
+            || version.StepSetIndex != expectedSet)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.step_variation_invalid",
+                "STEPのセット番号または枝番が正しくありません。");
+        }
+
+        if (profile.DeterministicSuffix != expectedSuffix
+            || unit.DeterministicSuffix != expectedSuffix
+            || !version.TestTemplate.Title.EndsWith(
+                expectedSuffix,
+                StringComparison.Ordinal)
+            || CountOccurrences(version.TestTemplate.Title, expectedSuffix) != 1)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.step_suffix_invalid",
+                "STEPの固定サフィックスは末尾に1回だけ必要です。");
+        }
+    }
+
+    private static void ValidateGenerationDraftAndWarnings(
+        TemplateGenerationUnitEntity unit,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        var draftHashValid = !string.IsNullOrWhiteSpace(unit.ExtractionDraftJson)
+            && !string.IsNullOrWhiteSpace(unit.ExtractionDraftHash)
+            && unit.ExtractionDraftHash.Length == 64
+            && string.Equals(
+                Convert.ToHexString(SHA256.HashData(
+                        Encoding.UTF8.GetBytes(unit.ExtractionDraftJson)))
+                    .ToLowerInvariant(),
+                unit.ExtractionDraftHash,
+                StringComparison.Ordinal);
+        if (!draftHashValid)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.extraction_draft_hash_invalid",
+                "抽出結果のハッシュを確認できません。");
+        }
+
+        try
+        {
+            var warnings = JsonSerializer.Deserialize<GenerationWarning[]>(
+                unit.WarningsJson,
+                GenerationJsonOptions);
+            if (warnings is null)
+            {
+                throw new JsonException();
+            }
+
+            if (warnings.Any(item =>
+                    item is null
+                    || !Enum.IsDefined(item.Severity)
+                    || string.IsNullOrWhiteSpace(item.Code)
+                    || string.IsNullOrWhiteSpace(item.Message)))
+            {
+                AddGenerationIssue(
+                    issues,
+                    "generation.warnings_invalid",
+                    "生成時の警告状態を確認できません。");
+                return;
+            }
+
+            if (warnings.Any(item =>
+                    item.Severity == GenerationWarningSeverity.Blocking))
+            {
+                AddGenerationIssue(
+                    issues,
+                    "generation.blocking_warning",
+                    "生成時の未解決警告があります。");
+            }
+        }
+        catch (JsonException)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.warnings_invalid",
+                "生成時の警告状態を確認できません。");
+        }
+    }
+
+    private static void ValidateDerivedSource(
+        TemplateVersionEntity version,
+        TemplateGenerationUnitEntity unit,
+        TemplateGenerationDerivedSourceEntity? derived,
+        FileReferenceEntity? fileReference,
+        ICollection<TemplateValidationIssue> issues)
+    {
+        var matchingTemplateSources = version.Sources
+            .Where(source =>
+                source.FileReferenceId == derived?.FileReferenceId)
+            .Take(2)
+            .ToArray();
+        var templateSource = matchingTemplateSources.Length == 1
+            ? matchingTemplateSources[0]
+            : null;
+        var provenanceValid = derived is not null
+            && fileReference is not null
+            && templateSource is not null
+            && derived.UnitId == unit.Id
+            && derived.ParentSourceId == unit.Batch.SourceId
+            && derived.ParentFirstPage == unit.FirstPage
+            && derived.ParentLastPage == unit.LastPage
+            && derived.OriginalContentSha256 == unit.Batch.Source.FinalSha256
+            && IsSha256(derived.OriginalContentSha256)
+            && ((derived.AppliedRotationsJson == "[]"
+                    && derived.DerivationType == "pageRange")
+                || (derived.AppliedRotationsJson != "[]"
+                    && derived.DerivationType == "pageRangeAndRotation"))
+            && derived.DerivationPolicyVersion
+                == PdfPageRangeDerivationPolicy.CurrentVersion
+            && derived.AppliedRotationsJson == unit.AppliedRotationsJson
+            && derived.DerivedContentSha256 == unit.DerivedSourceSha256
+            && IsSha256(derived.DerivedContentSha256)
+            && derived.FileReferenceId == fileReference.Id
+            && fileReference.OwnerType == "template_generation_unit"
+            && fileReference.OwnerId == unit.Id
+            && fileReference.Purpose == "derived_source"
+            && templateSource.UploadSessionId == unit.Batch.SourceId;
+        if (!provenanceValid)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.derived_source_invalid",
+                "生成元PDFの派生履歴を確認できません。");
+        }
+
+        var fileObject = fileReference?.FileObject;
+        if (fileObject is null
+            || fileObject.State != "available"
+            || fileObject.DeletedAt is not null
+            || fileObject.StorageClass
+                != ContentStorageClass.TemplateDerived.ToString()
+            || fileObject.VerifiedMime != "application/pdf"
+            || fileObject.Extension != "pdf"
+            || fileObject.Bytes <= 0
+            || fileObject.Sha256 != derived?.DerivedContentSha256
+            || fileObject.RelativeObjectPath != unit.DerivedSourceObjectKey)
+        {
+            AddGenerationIssue(
+                issues,
+                "generation.derived_object_unavailable",
+                "生成元PDFを利用できません。");
+        }
+    }
+
+    private static int CountOccurrences(string value, string search)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(
+                   search,
+                   offset,
+                   StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += search.Length;
+        }
+
+        return count;
+    }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 }
+        && value.All(character =>
+            character is >= '0' and <= '9'
+                or >= 'a' and <= 'f');
+
+    private static void AddGenerationIssue(
+        ICollection<TemplateValidationIssue> issues,
+        string code,
+        string message) =>
+        issues.Add(new TemplateValidationIssue(code, message, null, true));
+
     private static DomainTemplateVersion BuildDomainVersion(
         TemplateVersionEntity version)
     {
@@ -2891,6 +4411,20 @@ public static class TemplatesEndpoints
             choicePolicy = new ChoiceAnswerPolicy(canonical.AnswerText, choices);
         }
 
+        RubricRule[] rubricRules = entity.GradingMode == "ai_rubric"
+            && !string.IsNullOrWhiteSpace(entity.RubricText)
+                ?
+                [
+                    new RubricRule(
+                        $"rubric-{entity.Id}",
+                        0,
+                        RubricConditionType.ModelAssessed,
+                        entity.RubricText,
+                        new MilliPoints(entity.MaxPointsMilli),
+                        entity.TeacherVerified),
+                ]
+                : [];
+
         return new QuestionDefinition(
             entity.Id,
             entity.LogicalQuestionId,
@@ -2905,9 +4439,12 @@ public static class TemplatesEndpoints
             entity.RequiresReviewAlways,
             entity.TeacherVerified,
             acceptedAnswers,
+            rubricRules,
             numericPolicy: numericPolicy,
             choicePolicy: choicePolicy,
-            kanjiPolicyNote: entity.KanjiPolicyNote);
+            kanjiPolicyNote: entity.KanjiPolicyNote,
+            requiresCompleteAnswer: entity.RequiresCompleteAnswer,
+            answerOrderInsensitive: entity.AnswerOrderInsensitive);
     }
 
     private static AcceptedAnswer BuildDomainAnswer(
@@ -2979,6 +4516,8 @@ public static class TemplatesEndpoints
                 MaxPointsMilli = sourceQuestion.MaxPointsMilli,
                 PointIncrementMilli = sourceQuestion.PointIncrementMilli,
                 AllowNonKanji = sourceQuestion.AllowNonKanji,
+                RequiresCompleteAnswer = sourceQuestion.RequiresCompleteAnswer,
+                AnswerOrderInsensitive = sourceQuestion.AnswerOrderInsensitive,
                 KanjiPolicyNote = sourceQuestion.KanjiPolicyNote,
                 RubricText = sourceQuestion.RubricText,
                 TeacherNote = sourceQuestion.TeacherNote,
@@ -3317,6 +4856,7 @@ public static class TemplatesEndpoints
         {
             domainContentHash,
             version.DefaultPointsMilli,
+            version.ExpectedSubmissionPageCount,
             sources = version.Sources
                 .OrderBy(source => source.Ordinal)
                 .ThenBy(source => source.Id, StringComparer.Ordinal)
@@ -3633,7 +5173,7 @@ public static class TemplatesEndpoints
             StatusCodes.Status422UnprocessableEntity,
             code,
             title,
-            "入力内容と公開条件を確認してください。",
+            "入力内容と受付開始条件を確認してください。",
             errors);
 
     private static IResult Conflict(
@@ -3652,8 +5192,15 @@ public static class TemplatesEndpoints
         Conflict(
             context,
             "TEMPLATE_VERSION_IMMUTABLE",
-            "公開済みの採点基準は変更できません",
+            "確定済みの採点基準は変更できません",
             "新しい下書き版を複製して編集してください。");
+
+    private static IResult Archived(HttpContext context) =>
+        Conflict(
+            context,
+            "TEMPLATE_ARCHIVED",
+            "アーカイブ済みのひな形は変更できません",
+            "ひな形を復元してから編集してください。");
 
     private static IResult RevisionRequired(HttpContext context) =>
         ApiHelpers.Problem(
@@ -3935,6 +5482,11 @@ public static class TemplatesEndpoints
         public long? DefaultPointsMilli { get; init; }
     }
 
+    private sealed record TemplateLifecycleApiRequest
+    {
+        public long? Revision { get; init; }
+    }
+
     private sealed record CreateTemplateVersionApiRequest
     {
         public string? SourceVersionId { get; init; }
@@ -3981,6 +5533,10 @@ public static class TemplatesEndpoints
     private sealed record PublishTemplateApiRequest
     {
         public long? Revision { get; init; }
+
+        public DateOnly? TestDate { get; init; }
+
+        public string? ClassLabel { get; init; }
     }
 
     private sealed record QuestionWriteRequest
@@ -4002,6 +5558,10 @@ public static class TemplatesEndpoints
         public long? PointIncrementMilli { get; init; }
 
         public bool? AllowNonKanji { get; init; }
+
+        public bool? RequiresCompleteAnswer { get; init; }
+
+        public bool? AnswerOrderInsensitive { get; init; }
 
         public IReadOnlyList<AcceptedAnswerWriteRequest>? AcceptedAnswers { get; init; }
 
@@ -4108,6 +5668,29 @@ public static class TemplatesEndpoints
         string? ContentHash,
         DateTimeOffset UpdatedAt,
         DateTimeOffset? PublishedAt,
+        long Revision,
+        PublishTestSessionResponse? TestSession = null);
+
+    private sealed record PublishTestSessionResponse(
+        string Id,
+        string Name,
+        string SessionName,
+        string Title,
+        string TemplateId,
+        string TemplateVersionId,
+        string TemplateTitle,
+        int TemplateVersionNumber,
+        string? Subject,
+        string? GradeLabel,
+        string? Category,
+        int? ExpectedSubmissionPageCount,
+        string? Course,
+        string? TemplateCourse,
+        DateOnly TestDate,
+        string? ClassLabel,
+        string Priority,
+        string State,
+        string CreationSource,
         long Revision);
 
     private sealed record TemplateSourceApiResponse(
@@ -4141,6 +5724,8 @@ public static class TemplatesEndpoints
         long MaxPointsMilli,
         long PointIncrementMilli,
         bool AllowNonKanji,
+        bool RequiresCompleteAnswer,
+        bool AnswerOrderInsensitive,
         IReadOnlyList<AcceptedAnswerApiResponse> AcceptedAnswers,
         string? CanonicalAnswer,
         string? Rubric,

@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "../router";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "../router";
 import { useSession } from "../auth/SessionContext";
 import { Icon } from "../components/Icon";
+import {
+  ActiveFilterSummary,
+  facetSuggestions,
+  FilterTextInput,
+  ListPagination,
+  ListSortControls,
+} from "../components/ListControls";
 import {
   Button,
   Card,
@@ -20,32 +27,48 @@ import {
   type StudentFormValues,
 } from "../components/StudentForm";
 import { useApiQuery } from "../hooks/useApiQuery";
+import { useListQueryState } from "../hooks/useListQueryState";
 import { ApiError, api, asPaged, newIdempotencyKey } from "../lib/api";
 import { formatDate, formatDateTime } from "../lib/format";
 import type { PagedResponse, StudentSummary } from "../types";
 
+const STUDENT_SORTS = [
+  { value: "studentNumber", label: "生徒番号", defaultDirection: "asc" },
+  { value: "name", label: "氏名", defaultDirection: "asc" },
+  { value: "updatedAt", label: "更新日時", defaultDirection: "desc" },
+] as const;
+
+const STUDENT_QUERY_OPTIONS = {
+  allowedSorts: [
+    "studentNumber",
+    "-studentNumber",
+    "name",
+    "-name",
+    "updatedAt",
+    "-updatedAt",
+  ],
+  defaultSort: "studentNumber",
+  enumParams: { status: ["active", "inactive", "all"] },
+  textParams: ["class", "course", "grade"],
+  defaultPageSize: 50,
+} as const;
+
+const STUDENT_FILTER_KEYS = ["q", "status", "class", "course", "grade"] as const;
+
 export function StudentsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const list = useListQueryState(STUDENT_QUERY_OPTIONS);
+  const { searchParams } = list;
   const navigate = useNavigate();
   const { hasAnyRole } = useSession();
   const canEdit = hasAnyRole("administrator", "teacher");
-  const [search, setSearch] = useState(searchParams.get("q") || "");
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const activeFilter = searchParams.get("status") || "active";
   const classFilter = searchParams.get("class") || "";
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const next = new URLSearchParams(searchParams);
-      if (search.trim()) next.set("q", search.trim());
-      else next.delete("q");
-      setSearchParams(next, { replace: true });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [search, searchParams, setSearchParams]);
+  const courseFilter = searchParams.get("course") || "";
+  const gradeFilter = searchParams.get("grade") || "";
 
   const queryKey = searchParams.toString();
   const students = useApiQuery<PagedResponse<StudentSummary>>(
@@ -58,23 +81,32 @@ export function StudentsPage() {
             search: searchParams.get("q"),
             status: activeFilter === "all" ? undefined : activeFilter,
             class: classFilter || undefined,
-            pageSize: 100,
+            course: courseFilter || undefined,
+            grade: gradeFilter || undefined,
+            sort: list.sort,
+            cursor: list.cursor,
+            pageSize: list.pageSize,
+            includeFacets: true,
           },
           signal,
         ),
       ),
   );
 
-  const classes = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (students.data?.items || [])
-            .map((student) => student.classLabel)
-            .filter((value): value is string => Boolean(value)),
-        ),
-      ).sort((a, b) => a.localeCompare(b, "ja")),
-    [students.data],
+  const classes = facetSuggestions(
+    students.data?.facets,
+    "classes",
+    (students.data?.items || []).map((student) => student.classLabel),
+  );
+  const courses = facetSuggestions(
+    students.data?.facets,
+    "courses",
+    (students.data?.items || []).map((student) => student.course),
+  );
+  const grades = facetSuggestions(
+    students.data?.facets,
+    "grades",
+    (students.data?.items || []).map((student) => student.gradeLabel),
   );
 
   async function createStudent(values: StudentFormValues) {
@@ -98,12 +130,21 @@ export function StudentsPage() {
     }
   }
 
-  function updateFilter(key: string, value: string) {
-    const next = new URLSearchParams(searchParams);
-    if (value && value !== "all") next.set(key, value);
-    else next.delete(key);
-    setSearchParams(next);
-  }
+  const activeFilters = [
+    searchParams.get("q")
+      ? { key: "q", label: "検索", value: `「${searchParams.get("q")}」` }
+      : undefined,
+    activeFilter !== "all"
+      ? {
+          key: "status",
+          label: "在籍",
+          value: activeFilter === "inactive" ? "在籍終了" : "在籍中",
+        }
+      : undefined,
+    classFilter ? { key: "class", label: "クラス", value: classFilter } : undefined,
+    courseFilter ? { key: "course", label: "コース", value: courseFilter } : undefined,
+    gradeFilter ? { key: "grade", label: "学年", value: gradeFilter } : undefined,
+  ].filter((value): value is { key: string; label: string; value: string } => Boolean(value));
 
   return (
     <div className="page">
@@ -138,44 +179,59 @@ export function StudentsPage() {
       <Card>
         <div className="list-toolbar">
           <SearchInput
-            value={search}
-            onChange={setSearch}
+            value={list.search}
+            onChange={list.setSearch}
             placeholder="生徒番号・氏名・カナ・別名で検索"
             label="生徒を検索"
           />
-          <div className="list-toolbar__filters">
-            <label>
-              <span className="sr-only">在籍状態</span>
-              <select
-                value={activeFilter}
-                onChange={(event) => updateFilter("status", event.target.value)}
-              >
-                <option value="active">在籍中</option>
-                <option value="inactive">在籍終了</option>
-                <option value="all">すべて</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">クラス</span>
-              <select
-                value={classFilter}
-                onChange={(event) => updateFilter("class", event.target.value)}
-              >
-                <option value="">すべてのクラス</option>
-                {classes.map((className) => (
-                  <option value={className} key={className}>
-                    {className}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <ListSortControls
+            value={list.sort}
+            options={STUDENT_SORTS}
+            defaultValue="studentNumber"
+            onChange={(value) => list.updateParam("sort", value)}
+          />
           {students.data ? (
             <span className="result-count">
               約{students.data.totalApproximate ?? students.data.items.length}名
             </span>
           ) : null}
         </div>
+
+        <div className="list-filter-panel" aria-label="生徒の絞り込み">
+          <label className="filter-field">
+            <span>在籍状態</span>
+            <select
+              value={activeFilter}
+              onChange={(event) => list.updateParam("status", event.target.value)}
+            >
+              <option value="active">在籍中</option>
+              <option value="inactive">在籍終了</option>
+              <option value="all">すべて</option>
+            </select>
+          </label>
+          <FilterTextInput
+            label="クラス"
+            value={classFilter}
+            suggestions={classes}
+            onCommit={(value) => list.updateParam("class", value)}
+          />
+          <FilterTextInput
+            label="コース"
+            value={courseFilter}
+            suggestions={courses}
+            onCommit={(value) => list.updateParam("course", value)}
+          />
+          <FilterTextInput
+            label="学年"
+            value={gradeFilter}
+            suggestions={grades}
+            onCommit={(value) => list.updateParam("grade", value)}
+          />
+        </div>
+        <ActiveFilterSummary
+          filters={activeFilters}
+          onClear={() => list.clearFilters(STUDENT_FILTER_KEYS, { status: "all" })}
+        />
 
         {students.status === "loading" ? (
           <SkeletonRows rows={7} />
@@ -252,17 +308,33 @@ export function StudentsPage() {
           <EmptyState
             icon="students"
             title={
-              searchParams.get("q")
+              activeFilters.length
                 ? "条件に一致する生徒がいません"
                 : "生徒がまだ登録されていません"
             }
             description={
-              searchParams.get("q")
-                ? "氏名の空白やカナ表記を変えて検索してください。"
+              activeFilters.length
+                ? "検索語や在籍状態、クラスなどの条件を変更してください。"
                 : "個別に追加するか、CSVファイルからまとめて取り込めます。"
             }
           />
         )}
+        <ListPagination
+          page={list.page}
+          pageSize={list.pageSize}
+          itemCount={students.data?.items.length || 0}
+          totalApproximate={students.data?.totalApproximate}
+          hasNext={list.canNavigateNext(students.data?.nextCursor)}
+          nextBlockedReason={
+            students.data?.nextCursor && !list.canNavigateNext(students.data.nextCursor)
+              ? "これ以上は絞り込みを追加するか、1ページの件数を増やしてください。"
+              : undefined
+          }
+          canGoPrevious={list.canGoPrevious}
+          onNext={() => list.nextPage(students.data?.nextCursor)}
+          onPrevious={list.previousPage}
+          onPageSizeChange={list.setPageSize}
+        />
       </Card>
 
       <Modal

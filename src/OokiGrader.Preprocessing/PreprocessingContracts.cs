@@ -3,17 +3,24 @@ namespace OokiGrader.Preprocessing;
 public sealed record PreprocessingOptions
 {
     public const string DefaultPipelineVersion = "local-raster-v3";
+    public const long DefaultMaxInputBytes = 250L * 1024 * 1024;
+    public const long DefaultMaxTotalPixels = 500_000_000;
+    public const long DefaultMaxNormalizedArtifactBytes = 512L * 1024 * 1024;
 
     public string PipelineVersion { get; init; } = DefaultPipelineVersion;
-    public long MaxInputBytes { get; init; } = 250L * 1024 * 1024;
+    public long MaxInputBytes { get; init; } = DefaultMaxInputBytes;
     public int MaxPages { get; init; } = 1_000;
     public int MaxDimensionPixels { get; init; } = 20_000;
     public long MaxPixelsPerPage { get; init; } = 100_000_000;
-    public long MaxTotalPixels { get; init; } = 500_000_000;
+    public long MaxTotalPixels { get; init; } = DefaultMaxTotalPixels;
     public int MaxTiffPages { get; init; } = 200;
     public long MaxTiffPixelsPerPage { get; init; } = 12_000_000;
     public long MaxTiffTotalPixels { get; init; } = 100_000_000;
-    public long MaxNormalizedArtifactBytes { get; init; } = 64L * 1024 * 1024;
+    // A 50-page submission may retain at most about 10 MiB of normalized PNG
+    // and thumbnail output per page. Raster working memory is separately kept
+    // to one decoded PDF page at a time by PreprocessingService.
+    public long MaxNormalizedArtifactBytes { get; init; } =
+        DefaultMaxNormalizedArtifactBytes;
     public int PdfDpi { get; init; } = 300;
     public int ImageDpi { get; init; } = 300;
     public int ThumbnailMaxDimension { get; init; } = 480;
@@ -70,7 +77,10 @@ public sealed record PreprocessingInput(
     string VerifiedMimeType,
     string? SourceName = null,
     int? MaximumPages = null,
-    long? MaximumNormalizedArtifactBytes = null);
+    long? MaximumNormalizedArtifactBytes = null,
+    int? FirstPdfPage = null,
+    int? LastPdfPage = null,
+    long? MaximumTotalPixels = null);
 
 public sealed record ImageArtifact(
     string MimeType,
@@ -105,7 +115,48 @@ public sealed record PreprocessedPage(
     ImageArtifact NormalizedPng,
     ImageArtifact ThumbnailPng,
     PageQualityMetrics Quality,
-    PageFingerprint Fingerprint);
+    PageFingerprint Fingerprint,
+    int AppliedRotationDegrees = 0,
+    double? OrientationConfidence = null,
+    string OrientationSource = "none",
+    double DeskewAngle = 0);
+
+/// <summary>
+/// Records an explicit quarter-turn independently from small-angle deskew.
+/// ClockwiseDegrees is always the rotation applied to the supplied page bytes.
+/// </summary>
+public sealed record AppliedPageRotation(
+    string PageId,
+    int OriginalPageNumber,
+    int ClockwiseDegrees,
+    string Source,
+    double Confidence);
+
+public sealed record DerivedPdfResult(
+    byte[] Bytes,
+    string Sha256,
+    int PageCount,
+    int FirstPage,
+    int LastPage,
+    IReadOnlyList<AppliedPageRotation> AppliedRotations,
+    string DerivationPolicyVersion =
+        PdfPageRangeDerivationPolicy.CurrentVersion);
+
+public static class PdfPageRangeDerivationPolicy
+{
+    public const string CurrentVersion = "page-range-quarter-turn-v1";
+}
+
+public interface IPdfPageRangeExtractor
+{
+    Task<DerivedPdfResult> ExtractAsync(
+        Stream source,
+        string sourceName,
+        int firstPage,
+        int lastPage,
+        IReadOnlyDictionary<int, int> rotations,
+        CancellationToken cancellationToken = default);
+}
 
 public sealed record PageAlignmentResult(
     PreprocessedPage Page,

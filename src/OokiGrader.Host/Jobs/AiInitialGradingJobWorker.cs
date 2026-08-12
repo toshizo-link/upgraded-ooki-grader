@@ -10,6 +10,7 @@ using OokiGrader.Application.Grading;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Domain.Grading;
 using OokiGrader.Domain.Templates;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using DomainQuestionDefinition =
@@ -23,6 +24,7 @@ public sealed record AiInitialGradingJobWorkerOptions
     public TimeSpan LeaseDuration { get; init; } = TimeSpan.FromMinutes(10);
     public int MaximumMediaBytes { get; init; } = 17 * 1024 * 1024;
     public int EstimatedImageTokensPerTile { get; init; } = 2_048;
+    public int QueueBatchSize { get; init; } = 25;
 
     internal void Validate()
     {
@@ -31,7 +33,8 @@ public sealed record AiInitialGradingJobWorkerOptions
             || LeaseDuration < TimeSpan.FromMinutes(2)
             || LeaseDuration > TimeSpan.FromHours(1)
             || MaximumMediaBytes is < 1_024 or > 18 * 1024 * 1024
-            || EstimatedImageTokensPerTile is < 256 or > 32_768)
+            || EstimatedImageTokensPerTile is < 256 or > 32_768
+            || QueueBatchSize is < 1 or > 200)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(AiInitialGradingJobWorkerOptions),
@@ -50,10 +53,17 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     public const string JobType = "gemini_initial_grade";
     public const string ApplyJobType = "gemini_initial_grade_apply";
     public const string ModelId = AiProviderRuntime.GeminiModel;
-    public const string PipelineVersion = "gemini-initial-grading-full-page-v2";
+    public const string PipelineVersion = "gemini-submission-analysis-page-chunks-v5";
 
     public const int JobSchemaVersion = 1;
     private const int MaximumStoredResponseCharacters = 1_000_000;
+    private const int MaximumIdentityEvidenceCharacters = 16_000;
+    private const int MaximumSerializedRequestBytes = 18 * 1024 * 1024;
+    private const int MaximumChunkMediaBytes = 12 * 1024 * 1024;
+    private const int MaximumMediaPartsPerChunk = 32;
+    private const int MaximumUserInstructionCharacters = 100_000;
+    private const int MaximumSystemInstructionCharacters = 20_000;
+    private const int SerializedRequestEnvelopeReserveBytes = 1024 * 1024;
     private static readonly JsonSerializerOptions PayloadSerializerOptions =
         new()
         {
@@ -227,20 +237,30 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                     throw new InvalidDataException("ai_response_too_large");
                 }
 
-                validated = AiGradingResponseValidator.Validate(
+                validated = ValidateCombinedResponse(
                     response.StructuredOutput,
                     claim.RequestKey,
                     claim.Questions.ToDictionary(
                         item => item.Id,
                         item => item.Definition,
-                        StringComparer.Ordinal));
+                        StringComparer.Ordinal),
+                    claim.ChunkIndex,
+                    claim.Artifacts.Count);
             }
             catch (InvalidDataException exception)
             {
+                var identity = AiGradingResponseValidator
+                    .ValidateIdentityComponent(
+                        response.StructuredOutput,
+                        claim.RequestKey,
+                        identityExpected: claim.ChunkIndex == 0);
                 await RecordInvalidResponseAsync(
                         claim,
                         response,
                         BoundedErrorCode(exception.Message),
+                        identity.IsApplicable
+                            ? identity.Transcription
+                            : null,
                         cancellationToken)
                     .ConfigureAwait(false);
                 return true;
@@ -295,12 +315,167 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            await EnsureQueuedJobsAsync(stoppingToken).ConfigureAwait(false);
             if (!await ProcessNextAsync(stoppingToken).ConfigureAwait(false))
             {
                 await Task.Delay(_options.PollInterval, stoppingToken)
                     .ConfigureAwait(false);
             }
         }
+    }
+
+    internal static string RootJobDeduplicationKey(
+        string submissionId,
+        string manifestHash,
+        string profileId,
+        long profileRevision,
+        string promptContentHash) =>
+        $"submission:{submissionId}:gemini-analyze:{manifestHash}:" +
+        $"{profileId}:{profileRevision}:{promptContentHash}";
+
+    private Task EnsureQueuedJobsAsync(CancellationToken cancellationToken)
+    {
+        return _writeCoordinator.ExecuteAsync(async token =>
+        {
+            await using var db = await _dbContextFactory
+                .CreateDbContextAsync(token)
+                .ConfigureAwait(false);
+            var bundle = _promptCatalog.GetRequired(AiTaskTypes.InitialGrading);
+            var profile = await db.AiTaskProfiles
+                .AsNoTracking()
+                .Include(item => item.AiConnection)
+                .SingleOrDefaultAsync(
+                    item => item.TaskType == AiTaskTypes.InitialGrading
+                        && item.Active,
+                    token)
+                .ConfigureAwait(false);
+            if (profile is null
+                || !_providerFeaturePolicy.IsEnabled(
+                    profile.AiConnection.Provider)
+                || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                    profile.ApprovalState)
+                || profile.PromptVersion != bundle.PromptVersion
+                || profile.SchemaVersion != bundle.SchemaVersion
+                || profile.PromptContentHash != bundle.ContentHash
+                || profile.ConnectionRevision
+                    != profile.AiConnection.CredentialRevision
+                || profile.AiConnection.State != "active"
+                || profile.AiConnection.LastCapabilityProbeState != "passed")
+            {
+                return;
+            }
+
+            var eligible = await db.Submissions
+                .AsNoTracking()
+                .Where(item =>
+                    item.VoidedAt == null
+                    && item.CurrentGradingRunId == null
+                    && item.ScanPayloadState == "scan_available"
+                    && item.PreprocessingCompletedAt != null
+                    && item.PreprocessingManifestHash != null
+                    && item.Pages.Any()
+                    && !item.GradingRuns.Any(run =>
+                        run.PipelineVersion == PipelineVersion
+                        && run.State == "awaiting_identity")
+                    && (item.State == "needs_name_review"
+                        || item.State == "grading"
+                        || item.State == "awaiting_grading"))
+                .OrderBy(item => item.UploadCompletedAt)
+                .ThenBy(item => item.Id)
+                .Take(_options.QueueBatchSize)
+                .Select(item => new
+                {
+                    item.Id,
+                    ManifestHash = item.PreprocessingManifestHash!,
+                    item.TestSession.TemplateVersionId,
+                    item.TestSession.Priority,
+                })
+                .ToArrayAsync(token)
+                .ConfigureAwait(false);
+            if (eligible.Length == 0)
+            {
+                return;
+            }
+
+            var keys = eligible.Select(item => RootJobDeduplicationKey(
+                    item.Id,
+                    item.ManifestHash,
+                    profile.Id,
+                    profile.Revision,
+                    bundle.ContentHash))
+                .ToArray();
+            var existingKeys = await db.BackgroundJobs
+                .AsNoTracking()
+                .Where(item => keys.Contains(item.DeduplicationKey))
+                .Select(item => item.DeduplicationKey)
+                .ToArrayAsync(token)
+                .ConfigureAwait(false);
+            var existing = existingKeys.ToHashSet(StringComparer.Ordinal);
+            var now = _timeProvider.GetUtcNow();
+            var queuedSubmissionIds = new List<string>(eligible.Length);
+            foreach (var item in eligible)
+            {
+                var key = RootJobDeduplicationKey(
+                    item.Id,
+                    item.ManifestHash,
+                    profile.Id,
+                    profile.Revision,
+                    bundle.ContentHash);
+                if (existing.Contains(key))
+                {
+                    continue;
+                }
+
+                db.BackgroundJobs.Add(new BackgroundJobEntity
+                {
+                    Id = UlidId.New(now),
+                    Type = JobType,
+                    SchemaVersion = JobSchemaVersion,
+                    DeduplicationKey = key,
+                    Priority = item.Priority == "expedite" ? 100 : 0,
+                    PayloadJson = JsonSerializer.Serialize(new
+                    {
+                        submissionId = item.Id,
+                        templateVersionId = item.TemplateVersionId,
+                        manifestHash = item.ManifestHash,
+                    }),
+                    State = "queued",
+                    MaxAttempts = 8,
+                    NextAttemptAt = now,
+                    CorrelationId = $"analysis:{item.Id}",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+                queuedSubmissionIds.Add(item.Id);
+            }
+
+            if (queuedSubmissionIds.Count > 0)
+            {
+                var nameJobPrefixes = queuedSubmissionIds
+                    .Select(id => $"submission:{id}:name:")
+                    .ToArray();
+                var legacyNameJobs = await db.BackgroundJobs
+                    .Where(job => job.Type
+                            == AiNameTranscriptionJobWorker.JobType
+                        && (job.State == "queued"
+                            || job.State == "retry_waiting"))
+                    .ToListAsync(token)
+                    .ConfigureAwait(false);
+                foreach (var nameJob in legacyNameJobs.Where(job =>
+                             nameJobPrefixes.Any(prefix =>
+                                 job.DeduplicationKey.StartsWith(
+                                     prefix,
+                                     StringComparison.Ordinal))))
+                {
+                    nameJob.State = "cancelled";
+                    nameJob.CompletedAt = now;
+                    nameJob.ErrorCode = "superseded_by_submission_analysis";
+                    nameJob.SafeErrorDetail = null;
+                }
+            }
+
+            await db.SaveChangesAsync(token).ConfigureAwait(false);
+        }, cancellationToken);
     }
 
     private Task<JobLease?> LeaseNextAsync(CancellationToken cancellationToken)
@@ -448,6 +623,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                     question.MaxPointsMilli,
                     question.PointIncrementMilli,
                     question.AllowNonKanji,
+                    question.RequiresCompleteAnswer,
+                    question.AnswerOrderInsensitive,
                     question.RubricText,
                     question.AcceptedAnswers
                         .OrderBy(answer => answer.Id, StringComparer.Ordinal)
@@ -467,12 +644,18 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 bundle,
                 questions,
                 artifactSnapshots);
+            var chunks = CreateArtifactChunks(
+                inputManifestHash,
+                artifactSnapshots,
+                questionSnapshots,
+                bundle);
             var existingRun = submission.GradingRuns.SingleOrDefault(
                 run => run.PipelineVersion == PipelineVersion
                     && run.CanonicalInputManifestHash == inputManifestHash);
             if (existingRun is not null)
             {
-                if (submission.CurrentGradingRunId != existingRun.Id)
+                if (submission.CurrentGradingRunId is not null
+                    && submission.CurrentGradingRunId != existingRun.Id)
                 {
                     throw Permanent("ai_grading_run_conflict");
                 }
@@ -483,20 +666,136 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 return null;
             }
 
-            var requestEntity = await db.AiRequests
+            if (submission.CurrentGradingRunId is not null
+                || submission.State == "needs_grade_review")
+            {
+                throw Permanent("ai_grading_run_conflict");
+            }
+
+            var chunkHashes = chunks
+                .Select(item => item.InputManifestHash)
+                .ToArray();
+            var requestRows = await db.AiRequests
                 .Include(item => item.Usage)
                 .Include(item => item.BatchRequest)
                 .Where(item => item.EntityType == "submission"
                         && item.EntityId == submission.Id
-                        && item.InputManifestHash == inputManifestHash
-                        && item.TaskProfileRevision == profile.Revision
-                        && (payload.AiRequestId == null
-                            || item.Id == payload.AiRequestId))
-                .OrderByDescending(item => item.AttemptNumber)
-                .ThenByDescending(item => item.CreatedAt)
-                .ThenByDescending(item => item.Id)
-                .FirstOrDefaultAsync(token)
+                        && item.Purpose == AiTaskTypes.InitialGrading
+                        && item.AiTaskProfileId == profile.Id
+                        && chunkHashes.Contains(item.InputManifestHash)
+                        && item.TaskProfileRevision == profile.Revision)
+                .ToListAsync(token)
                 .ConfigureAwait(false);
+            var currentRequestByManifest = requestRows
+                .GroupBy(item => item.InputManifestHash, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(item => item.AttemptNumber)
+                        .ThenByDescending(item => item.CreatedAt)
+                        .ThenByDescending(item => item.Id, StringComparer.Ordinal)
+                        .First(),
+                    StringComparer.Ordinal);
+            var questionDefinitions = questionSnapshots.ToDictionary(
+                item => item.Id,
+                item => item.Definition,
+                StringComparer.Ordinal);
+            var completedChunks = new List<CompletedChunk>(chunks.Length);
+            foreach (var chunk in chunks)
+            {
+                if (currentRequestByManifest.TryGetValue(
+                        chunk.InputManifestHash,
+                        out var current)
+                    && current.State == "succeeded")
+                {
+                    completedChunks.Add(CreateCompletedChunk(
+                        current,
+                        chunk,
+                        questionDefinitions));
+                }
+            }
+
+            ArtifactChunk? selectedChunk = null;
+            AiRequestEntity? requestEntity = null;
+            if (payload.AiRequestId is not null)
+            {
+                requestEntity = requestRows.SingleOrDefault(
+                    item => item.Id == payload.AiRequestId)
+                    ?? throw Permanent("ai_request_missing");
+                selectedChunk = chunks.SingleOrDefault(
+                    item => item.InputManifestHash
+                        == requestEntity.InputManifestHash)
+                    ?? throw Permanent("ai_request_identity_invalid");
+                if (!currentRequestByManifest.TryGetValue(
+                        selectedChunk.InputManifestHash,
+                        out var current)
+                    || current.Id != requestEntity.Id)
+                {
+                    throw Permanent("ai_request_superseded");
+                }
+            }
+            else
+            {
+                selectedChunk = chunks.FirstOrDefault(chunk =>
+                    !currentRequestByManifest.TryGetValue(
+                        chunk.InputManifestHash,
+                        out var current)
+                    || current.State != "succeeded");
+                if (selectedChunk is not null)
+                {
+                    currentRequestByManifest.TryGetValue(
+                        selectedChunk.InputManifestHash,
+                        out requestEntity);
+                }
+            }
+
+            if (completedChunks.Count == chunks.Length)
+            {
+                await CreateGradingRunAsync(
+                        db,
+                        submission,
+                        version.Id,
+                        profile.AiConnection.Provider,
+                        profile.AiConnection.ModelId,
+                        bundle,
+                        questionSnapshots,
+                        artifactSnapshots,
+                        inputManifestHash,
+                        completedChunks,
+                        lease.CorrelationId,
+                        job,
+                        now,
+                        token)
+                    .ConfigureAwait(false);
+                CompleteJob(job, now);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return null;
+            }
+
+            if (selectedChunk is null)
+            {
+                throw Permanent("ai_grading_chunk_state_invalid");
+            }
+
+            if (requestEntity?.State == "succeeded")
+            {
+                CompleteJob(job, now);
+                await EnqueueContinuationAsync(
+                        db,
+                        lease,
+                        payload,
+                        inputManifestHash,
+                        chunks,
+                        completedChunks,
+                        now,
+                        token)
+                    .ConfigureAwait(false);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return null;
+            }
+
             if (requestEntity is not null)
             {
                 if (requestEntity.PossibleDuplicate
@@ -545,7 +844,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                         inputManifestHash,
                         bundle,
                         questionSnapshots,
-                        artifactSnapshots,
+                        selectedChunk,
+                        chunks,
+                        completedChunks,
                         pricing: null,
                         usdToJpyMicros: 150_000_000,
                         forceExpedite: payload.ForceExpedite,
@@ -567,6 +868,16 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 throw Permanent("ai_grading_submission_state_invalid");
             }
 
+            requestEntity ??= CreateRequest(
+                now,
+                submission,
+                profile,
+                selectedChunk.InputManifestHash);
+            if (requestEntity.Id.Length == 0)
+            {
+                throw Permanent("ai_request_identity_invalid");
+            }
+
             var pricing = await db.PricingSnapshots
                 .AsNoTracking()
                 .Where(item =>
@@ -582,28 +893,20 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 .SingleOrDefaultAsync(item => item.Id == "default", token)
                 .ConfigureAwait(false);
             var instruction = CreateUserInstruction(
-                requestEntity?.RequestKey ?? "pending",
+                requestEntity.RequestKey,
                 questionSnapshots,
-                artifactSnapshots);
+                selectedChunk.Artifacts,
+                selectedChunk.Index,
+                chunks.Length);
             var reservedUsdMicros = pricing is null
                 ? 0
                 : EstimateMaximumCost(
                     pricing,
                     profile.MaxOutputTokens,
                     instruction,
-                    artifactSnapshots);
+                    selectedChunk.Artifacts);
             var usageWindow = await GetUsageWindowAsync(db, now, token)
                 .ConfigureAwait(false);
-
-            requestEntity ??= CreateRequest(
-                now,
-                submission,
-                profile,
-                inputManifestHash);
-            if (requestEntity.Id.Length == 0)
-            {
-                throw Permanent("ai_request_identity_invalid");
-            }
 
             if (budget?.Active == true)
             {
@@ -711,7 +1014,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 inputManifestHash,
                 bundle,
                 questionSnapshots,
-                artifactSnapshots,
+                selectedChunk,
+                chunks,
+                completedChunks,
                 pricing is null ? null : ToPricingSnapshot(pricing),
                 budget?.UsdToJpyMicros ?? 150_000_000,
                 payload.ForceExpedite,
@@ -728,7 +1033,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         string inputManifestHash,
         AiPromptBundle bundle,
         IReadOnlyList<QuestionSnapshot> questions,
-        IReadOnlyList<ArtifactSnapshot> artifacts,
+        ArtifactChunk chunk,
+        IReadOnlyList<ArtifactChunk> chunks,
+        IReadOnlyList<CompletedChunk> completedChunks,
         PricingSnapshot? pricing,
         long usdToJpyMicros,
         bool forceExpedite,
@@ -762,9 +1069,13 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 TimeSpan.FromSeconds(profile.AiConnection.TimeoutSeconds)),
             bundle,
             questions,
-            artifacts,
+            chunk.Artifacts,
+            chunk.Index,
+            chunks,
+            completedChunks,
             pricing,
             usdToJpyMicros,
+            forceExpedite,
             storedResponse);
     }
 
@@ -830,6 +1141,237 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             usage.EstimatedUsdMicros);
     }
 
+    private ArtifactChunk[] CreateArtifactChunks(
+        string canonicalInputManifestHash,
+        IReadOnlyList<ArtifactSnapshot> artifacts,
+        IReadOnlyList<QuestionSnapshot> questions,
+        AiPromptBundle bundle)
+    {
+        var groups = new List<IReadOnlyList<ArtifactSnapshot>>();
+        var current = new List<ArtifactSnapshot>();
+        var currentBytes = 0L;
+        var maximumInstructionArtifacts = artifacts
+            .OrderByDescending(item => item.Ordinal)
+            .ThenByDescending(item => item.Id, StringComparer.Ordinal)
+            .Take(MaximumMediaPartsPerChunk)
+            .OrderBy(item => item.Ordinal)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .ToArray();
+        var conservativeInstruction = CreateUserInstruction(
+            $"grade_{new string('0', 26)}",
+            questions,
+            maximumInstructionArtifacts,
+            chunkIndex: 199,
+            chunkCount: 200);
+        if (bundle.SystemInstruction.Length
+                > MaximumSystemInstructionCharacters
+            || conservativeInstruction.Length
+                > MaximumUserInstructionCharacters)
+        {
+            throw Permanent("ai_grading_prompt_too_large");
+        }
+
+        var serializedOverhead = checked(
+            Encoding.UTF8.GetByteCount(bundle.SystemInstruction)
+            + Encoding.UTF8.GetByteCount(conservativeInstruction)
+            + Encoding.UTF8.GetByteCount(
+                bundle.ResponseJsonSchema.GetRawText())
+            + SerializedRequestEnvelopeReserveBytes);
+        var base64Budget = MaximumSerializedRequestBytes
+            - serializedOverhead;
+        if (base64Budget <= 0)
+        {
+            throw Permanent("ai_grading_prompt_too_large");
+        }
+
+        var rawBudget = checked(base64Budget / 4 * 3);
+        var effectiveMediaLimit = Math.Min(
+            Math.Min(_options.MaximumMediaBytes, MaximumChunkMediaBytes),
+            rawBudget);
+        foreach (var artifact in artifacts
+                     .OrderBy(item => item.Ordinal)
+                     .ThenBy(item => item.Id, StringComparer.Ordinal))
+        {
+            if (artifact.Bytes <= 0
+                || artifact.Bytes > effectiveMediaLimit)
+            {
+                throw Permanent("ai_submission_page_too_large");
+            }
+
+            if (current.Count > 0
+                && (current.Count >= MaximumMediaPartsPerChunk
+                    || currentBytes + artifact.Bytes > effectiveMediaLimit))
+            {
+                groups.Add(current.ToArray());
+                current = [];
+                currentBytes = 0;
+            }
+
+            current.Add(artifact);
+            currentBytes = checked(currentBytes + artifact.Bytes);
+        }
+
+        if (current.Count > 0)
+        {
+            groups.Add(current.ToArray());
+        }
+
+        if (groups.Count == 0)
+        {
+            throw Permanent("ai_submission_pages_missing");
+        }
+
+        return groups
+            .Select((group, index) => new ArtifactChunk(
+                index,
+                ComputeChunkInputManifestHash(
+                    canonicalInputManifestHash,
+                    index,
+                    groups.Count,
+                    group),
+                group))
+            .ToArray();
+    }
+
+    private static string ComputeChunkInputManifestHash(
+        string canonicalInputManifestHash,
+        int chunkIndex,
+        int chunkCount,
+        IReadOnlyList<ArtifactSnapshot> artifacts)
+    {
+        var canonical = new StringBuilder();
+        AppendManifest(canonical, "pipeline", PipelineVersion);
+        AppendManifest(
+            canonical,
+            "canonical-input",
+            canonicalInputManifestHash);
+        AppendManifest(
+            canonical,
+            "chunk-index",
+            chunkIndex.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        AppendManifest(
+            canonical,
+            "chunk-count",
+            chunkCount.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        foreach (var artifact in artifacts)
+        {
+            AppendManifest(canonical, "artifact-id", artifact.Id);
+            AppendManifest(
+                canonical,
+                "artifact-page",
+                artifact.Ordinal.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+            AppendManifest(canonical, "artifact-sha256", artifact.Sha256);
+            AppendManifest(
+                canonical,
+                "artifact-bytes",
+                artifact.Bytes.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return Sha256(canonical.ToString());
+    }
+
+    private static CompletedChunk CreateCompletedChunk(
+        AiRequestEntity request,
+        ArtifactChunk chunk,
+        IReadOnlyDictionary<string, DomainQuestionDefinition> questions)
+    {
+        var json = request.ValidatedResponseJson;
+        var usage = request.Usage;
+        if (request.State != "succeeded"
+            || request.PossibleDuplicate
+            || request.InputManifestHash != chunk.InputManifestHash
+            || string.IsNullOrWhiteSpace(json)
+            || json.Length > MaximumStoredResponseCharacters
+            || !IsSha256(request.AcceptedResponseHash)
+            || request.AcceptedResponseHash != Sha256(json)
+            || usage is null
+            || (usage.ProviderRequestId is not null
+                && request.ProviderResponseId != usage.ProviderRequestId)
+            || (usage.ActualModel is not null
+                && request.ActualModel is not null
+                && usage.ActualModel != request.ActualModel))
+        {
+            throw Permanent("ai_succeeded_chunk_invalid");
+        }
+
+        ValidatedAiGradingResponse validated;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            validated = ValidateCombinedResponse(
+                document.RootElement,
+                request.RequestKey,
+                questions,
+                chunk.Index,
+                chunk.Artifacts.Count);
+        }
+        catch (JsonException)
+        {
+            throw Permanent("ai_succeeded_chunk_json_invalid");
+        }
+        catch (InvalidDataException exception)
+        {
+            throw Permanent(BoundedErrorCode(exception.Message));
+        }
+
+        return new CompletedChunk(
+            chunk.Index,
+            request.Id,
+            request.RequestKey,
+            request.InputManifestHash,
+            validated,
+            request.ActualModel ?? usage.ActualModel,
+            new UsageSnapshot(
+                usage.InputTokens,
+                usage.CachedTokens,
+                usage.OutputTokens,
+                usage.ThinkingTokens,
+                usage.TotalTokens,
+                usage.EstimatedUsdMicros),
+            chunk.Artifacts);
+    }
+
+    private static ValidatedAiGradingResponse ValidateCombinedResponse(
+        JsonElement response,
+        string expectedRequestKey,
+        IReadOnlyDictionary<string, DomainQuestionDefinition> questions,
+        int chunkIndex,
+        int mediaPartCount)
+    {
+        var identity = AiGradingResponseValidator.ValidateIdentityComponent(
+            response,
+            expectedRequestKey,
+            identityExpected: chunkIndex == 0);
+        var grading = AiGradingResponseValidator.Validate(
+            response,
+            expectedRequestKey,
+            questions,
+            mediaPartCount);
+        return grading with
+        {
+            Identity = identity.Transcription,
+            IdentityValidationError = identity.IsValid
+                ? null
+                : identity.ErrorCode,
+            UnexpectedContent = grading.UnexpectedContent,
+        };
+    }
+
+    private static UsageSnapshot ToUsageSnapshot(
+        AiUsage usage,
+        long estimatedUsdMicros) =>
+        new(
+            usage.PromptTokens,
+            usage.CachedTokens,
+            usage.OutputTokens,
+            usage.ThinkingTokens,
+            usage.TotalTokens,
+            estimatedUsdMicros);
+
     private async Task<IReadOnlyList<AiMediaPart>> LoadMediaAsync(
         PreparedClaim claim,
         CancellationToken cancellationToken)
@@ -890,7 +1432,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             CreateUserInstruction(
                 claim.RequestKey,
                 claim.Questions,
-                claim.Artifacts),
+                claim.Artifacts,
+                claim.ChunkIndex,
+                claim.Chunks.Count),
             claim.Bundle.ResponseJsonSchema,
             media,
             claim.MaxOutputTokens,
@@ -913,19 +1457,28 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 throw new InvalidDataException("ai_response_too_large");
             }
 
-            validated = AiGradingResponseValidator.Validate(
+            validated = ValidateCombinedResponse(
                 stored.Response.StructuredOutput,
                 claim.RequestKey,
                 claim.Questions.ToDictionary(
                     item => item.Id,
                     item => item.Definition,
-                    StringComparer.Ordinal));
+                    StringComparer.Ordinal),
+                claim.ChunkIndex,
+                claim.Artifacts.Count);
         }
         catch (InvalidDataException exception)
         {
+            var identity = AiGradingResponseValidator.ValidateIdentityComponent(
+                stored.Response.StructuredOutput,
+                claim.RequestKey,
+                identityExpected: claim.ChunkIndex == 0);
             await RecordInvalidStoredResponseAsync(
                     claim,
                     BoundedErrorCode(exception.Message),
+                    identity.IsApplicable
+                        ? identity.Transcription
+                        : null,
                     cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -1082,21 +1635,32 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
 
             var submission = await db.Submissions
                 .Include(item => item.GradingRuns)
+                .Include(item => item.TestSession)
                 .SingleOrDefaultAsync(
                     item => item.Id == claim.SubmissionId,
                     token)
                 .ConfigureAwait(false)
                 ?? throw Permanent("ai_grading_submission_missing");
-            if (submission.CurrentGradingRunId is not null
-                || submission.State is not ("grading" or "awaiting_grading")
-                || submission.Revision < claim.SubmissionRevision)
+            var abandoned = submission.VoidedAt is not null;
+            if ((!abandoned
+                    && (submission.CurrentGradingRunId is not null
+                        || submission.State is not (
+                            "needs_name_review" or "grading"
+                            or "awaiting_grading")))
+                || submission.Revision < claim.SubmissionRevision
+                || submission.ScanPayloadState != "scan_available"
+                || submission.PreprocessingManifestHash
+                    != claim.Artifacts[0].InputManifestHash
+                || submission.TestSession.TemplateVersionId
+                    != claim.TemplateVersionId)
             {
                 throw Permanent("ai_grading_submission_changed");
             }
 
             var existingRun = submission.GradingRuns.SingleOrDefault(
                 run => run.PipelineVersion == PipelineVersion
-                    && run.CanonicalInputManifestHash == claim.InputManifestHash);
+                    && run.CanonicalInputManifestHash
+                        == claim.CanonicalInputManifestHash);
             if (existingRun is not null)
             {
                 throw Permanent("ai_grading_run_conflict");
@@ -1121,196 +1685,505 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 : request.Usage?.EstimatedUsdMicros
                     ?? throw Permanent("ai_batch_response_usage_missing");
 
-            var observations = validated.Observations.ToDictionary(
-                item => item.QuestionId,
-                StringComparer.Ordinal);
-            var possiblePoints = claim.Questions.Aggregate(
-                0L,
-                static (total, question) =>
-                    checked(total + question.MaximumPointsMilli));
-            var earnedPoints = validated.Observations.Aggregate(
-                0L,
-                static (total, observation) =>
-                    checked(total + observation.ProposedPointsMilli));
-            var run = new GradingRunEntity
+            await PersistIdentityEvidenceAsync(
+                    db,
+                    claim,
+                    validated.Identity,
+                    now,
+                    token)
+                .ConfigureAwait(false);
+            if (abandoned)
             {
-                Id = UlidId.New(now),
-                SubmissionId = submission.Id,
-                RunNumber = checked(
-                    submission.GradingRuns.Select(item => item.RunNumber)
-                        .DefaultIfEmpty()
-                        .Max() + 1),
-                TemplateVersionId = claim.TemplateVersionId,
-                Reason = "gemini_initial_pilot",
-                State = "needs_grade_review",
-                Provider = claim.Connection.Provider,
-                Model = response.ActualModel ?? claim.Connection.ModelId,
-                PromptVersion = claim.Bundle.PromptVersion,
-                SchemaVersion = claim.Bundle.SchemaVersion,
-                PipelineVersion = PipelineVersion,
-                CanonicalInputManifestHash = claim.InputManifestHash,
-                EarnedPointsMilli = earnedPoints,
-                PossiblePointsMilli = possiblePoints,
-                ResultSourceRevision = 1,
-                AiUsageAggregationJson = JsonSerializer.Serialize(new
-                {
-                    aiRequestId = request.Id,
-                    response.Usage.PromptTokens,
-                    response.Usage.CachedTokens,
-                    response.Usage.OutputTokens,
-                    response.Usage.ThinkingTokens,
-                    response.Usage.TotalTokens,
-                    estimatedUsdMicros = actualCost,
-                }),
-                CreatedAt = now,
-                FinishedAt = now,
-            };
-            db.GradingRuns.Add(run);
-
-            var results = new List<(QuestionResultEntity Result, long Points)>(
-                claim.Questions.Count);
-            var pageReferenceId = claim.Artifacts
-                .OrderBy(item => item.Ordinal)
-                .Select(item => item.FileReferenceId)
-                .FirstOrDefault();
-            foreach (var question in claim.Questions)
-            {
-                QuestionResultEntity result;
-                long points;
-                if (observations.TryGetValue(question.Id, out var observation))
-                {
-                    points = observation.ProposedPointsMilli;
-                    result = new QuestionResultEntity
-                    {
-                        Id = UlidId.New(now),
-                        GradingRunId = run.Id,
-                        QuestionId = question.Id,
-                        TranscribedAnswer =
-                            observation.Observation.Transcription,
-                        NormalizedAnswer = JapaneseTextNormalizer
-                            .NormalizeForComparison(
-                                observation.Observation.Transcription),
-                        ProposedPointsMilli = points,
-                        MaximumPointsMilli = question.MaximumPointsMilli,
-                        Outcome = observation.ProposedOutcome,
-                        Method = "ai_pilot",
-                        ConfidenceBasisPoints =
-                            observation.ProviderConfidenceBasisPoints,
-                        KanjiCheck =
-                            observation.Observation.ScriptObservationUncertain
-                                ? "uncertain"
-                                : "not_applicable",
-                        ReasonCode = validated.UnexpectedContent
-                            ? "ai_unexpected_content"
-                            : observation.ProviderReasonCode
-                                ?? "ai_pilot_proposal",
-                        Explanation = observation.BoundedExplanation,
-                        AnswerCropFileReferenceId = pageReferenceId,
-                        ReviewRequired = true,
-                        ReviewStatus = "pending",
-                        ModelResponseItemHash =
-                            observation.CanonicalItemHash,
-                        CreatedAt = now,
-                    };
-                }
-                else
-                {
-                    points = 0;
-                    result = new QuestionResultEntity
-                    {
-                        Id = UlidId.New(now),
-                        GradingRunId = run.Id,
-                        QuestionId = question.Id,
-                        ProposedPointsMilli = 0,
-                        MaximumPointsMilli = question.MaximumPointsMilli,
-                        Outcome = "unreadable",
-                        Method = "manual",
-                        ConfidenceBasisPoints = 0,
-                        KanjiCheck = "not_applicable",
-                        ReasonCode = "ai_missing_question",
-                        AnswerCropFileReferenceId = pageReferenceId,
-                        ReviewRequired = true,
-                        ReviewStatus = "pending",
-                        CreatedAt = now,
-                    };
-                }
-
-                db.QuestionResults.Add(result);
-                results.Add((result, points));
+                CompleteJob(job, now);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return;
             }
 
-            await db.SaveChangesAsync(token).ConfigureAwait(false);
-            foreach (var (result, points) in results)
+            var currentChunk = new CompletedChunk(
+                claim.ChunkIndex,
+                request.Id,
+                request.RequestKey,
+                request.InputManifestHash,
+                validated,
+                response.ActualModel,
+                ToUsageSnapshot(response.Usage, actualCost),
+                claim.Artifacts);
+            var completedChunks = claim.CompletedChunks
+                .Where(item => item.Index != currentChunk.Index)
+                .Append(currentChunk)
+                .OrderBy(item => item.Index)
+                .ToArray();
+            if (completedChunks.Length == claim.Chunks.Count)
             {
-                var revision = new ResultRevisionEntity
-                {
-                    Id = UlidId.New(now),
-                    QuestionResultId = result.Id,
-                    RevisionNumber = 1,
-                    AwardedPointsMilli = points,
-                    Outcome = result.Outcome,
-                    AnswerTextCorrection = result.TranscribedAnswer,
-                    ReasonCode = result.ReasonCode,
-                    Source = "initial",
-                    CreatedAt = now,
-                };
-                db.ResultRevisions.Add(revision);
-                result.CurrentRevisionId = revision.Id;
-            }
-
-            await db.SaveChangesAsync(token).ConfigureAwait(false);
-            if (_adjudicationJobScheduler is not null)
-            {
-                await _adjudicationJobScheduler.EnqueueAmbiguousAsync(
+                await CreateGradingRunAsync(
                         db,
                         submission,
-                        run,
-                        results.Select(item => item.Result).ToArray(),
-                        validated,
-                        claim.Questions
-                            .Select(item => new AiAdjudicationArtifactCandidate(
-                                item.Id,
-                                ProviderDisclosureAllowed: true))
-                            .ToArray(),
+                        claim.TemplateVersionId,
+                        claim.Connection.Provider,
+                        claim.Connection.ModelId,
+                        claim.Bundle,
+                        claim.Questions,
+                        claim.Chunks.SelectMany(item => item.Artifacts).ToArray(),
+                        claim.CanonicalInputManifestHash,
+                        completedChunks,
                         claim.CorrelationId,
-                        job.Id,
+                        job,
+                        now,
+                        token)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await EnqueueContinuationAsync(
+                        db,
+                        new JobLease(
+                            job.Id,
+                            job.Type,
+                            job.SchemaVersion,
+                            job.PayloadJson,
+                            job.Priority,
+                            job.CorrelationId),
+                        new GradingPayload(
+                            claim.SubmissionId,
+                            claim.TemplateVersionId,
+                            claim.Artifacts[0].InputManifestHash,
+                            ForceExpedite: claim.ForceExpedite),
+                        claim.CanonicalInputManifestHash,
+                        claim.Chunks,
+                        completedChunks,
                         now,
                         token)
                     .ConfigureAwait(false);
             }
 
-            run.EarnedPointsMilli = results.Aggregate(
-                0L,
-                static (total, item) => checked(total + item.Points));
-            run.PossiblePointsMilli = results.Aggregate(
-                0L,
-                static (total, item) =>
-                    checked(total + item.Result.MaximumPointsMilli));
-            submission.CurrentGradingRunId = run.Id;
-            submission.State = "needs_grade_review";
-            AddAudit(
-                db,
-                now,
-                claim.CorrelationId,
-                "grading.gemini_pilot_created",
-                submission.Id,
-                "teacher_review_required");
-            AddStatusOutbox(
-                db,
-                now,
-                claim.CorrelationId,
-                submission.Id,
-                submission.State);
             CompleteJob(job, now);
             await db.SaveChangesAsync(token).ConfigureAwait(false);
             await transaction.CommitAsync(token).ConfigureAwait(false);
         }, cancellationToken);
     }
 
+    private static async Task EnqueueContinuationAsync(
+        OokiGraderDbContext db,
+        JobLease lease,
+        GradingPayload payload,
+        string canonicalInputManifestHash,
+        IReadOnlyList<ArtifactChunk> chunks,
+        IReadOnlyCollection<CompletedChunk> completedChunks,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var completedIndexes = completedChunks
+            .Select(item => item.Index)
+            .ToHashSet();
+        var next = chunks.FirstOrDefault(
+            item => !completedIndexes.Contains(item.Index));
+        if (next is null)
+        {
+            return;
+        }
+
+        var deduplicationKey =
+            $"submission:{payload.SubmissionId}:gemini-analyze:" +
+            $"{payload.ManifestHash}:{canonicalInputManifestHash}:" +
+            $"chunk:{next.Index + 1}";
+        if (db.BackgroundJobs.Local.Any(
+                item => item.DeduplicationKey == deduplicationKey)
+            || await db.BackgroundJobs.AsNoTracking().AnyAsync(
+                    item => item.DeduplicationKey == deduplicationKey,
+                    cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return;
+        }
+
+        db.BackgroundJobs.Add(new BackgroundJobEntity
+        {
+            Id = UlidId.New(now),
+            Type = JobType,
+            SchemaVersion = JobSchemaVersion,
+            DeduplicationKey = deduplicationKey,
+            Priority = lease.Priority,
+            PayloadJson = JsonSerializer.Serialize(new
+            {
+                submissionId = payload.SubmissionId,
+                templateVersionId = payload.TemplateVersionId,
+                manifestHash = payload.ManifestHash,
+                forceExpedite = payload.ForceExpedite,
+            }),
+            State = "queued",
+            AttemptCount = 0,
+            MaxAttempts = 8,
+            NextAttemptAt = now,
+            CorrelationId = lease.CorrelationId,
+            CausationId = lease.Id,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+    }
+
+    private async Task CreateGradingRunAsync(
+        OokiGraderDbContext db,
+        SubmissionEntity submission,
+        string templateVersionId,
+        string provider,
+        string requestedModel,
+        AiPromptBundle bundle,
+        IReadOnlyList<QuestionSnapshot> questions,
+        IReadOnlyList<ArtifactSnapshot> artifacts,
+        string canonicalInputManifestHash,
+        IReadOnlyList<CompletedChunk> completedChunks,
+        string? correlationId,
+        BackgroundJobEntity job,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (completedChunks.Count == 0
+            || completedChunks.Select(item => item.Index).Distinct().Count()
+                != completedChunks.Count
+            || completedChunks.Any(item =>
+                !IsSha256(item.InputManifestHash)))
+        {
+            throw Permanent("ai_grading_chunk_aggregate_invalid");
+        }
+
+        var observations = completedChunks
+            .SelectMany(chunk => chunk.Response.Observations.Select(
+                observation => new ChunkObservation(chunk, observation)))
+            .GroupBy(item => item.Observation.QuestionId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(item => item.Chunk.Index).ToArray(),
+                StringComparer.Ordinal);
+        var unique = observations
+            .Where(item => item.Value.Length == 1)
+            .ToDictionary(
+                item => item.Key,
+                item => item.Value[0],
+                StringComparer.Ordinal);
+        var conflicts = observations
+            .Where(item => item.Value.Length > 1)
+            .ToDictionary(
+                item => item.Key,
+                item => item.Value,
+                StringComparer.Ordinal);
+        var unexpectedContent = completedChunks.Any(
+            item => item.Response.UnexpectedContent);
+        var actualModels = completedChunks
+            .Select(item => item.ActualModel)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var totalCost = completedChunks.Aggregate(
+            0L,
+            static (total, item) =>
+                checked(total + item.Usage.EstimatedUsdMicros));
+        var run = new GradingRunEntity
+        {
+            Id = UlidId.New(now),
+            SubmissionId = submission.Id,
+            RunNumber = checked(
+                submission.GradingRuns.Select(item => item.RunNumber)
+                    .DefaultIfEmpty()
+                    .Max() + 1),
+            TemplateVersionId = templateVersionId,
+            Reason = "gemini_submission_analysis",
+            State = "needs_grade_review",
+            Provider = provider,
+            Model = actualModels.Length == 1
+                ? actualModels[0]!
+                : requestedModel,
+            PromptVersion = bundle.PromptVersion,
+            SchemaVersion = bundle.SchemaVersion,
+            PipelineVersion = PipelineVersion,
+            CanonicalInputManifestHash = canonicalInputManifestHash,
+            EarnedPointsMilli = 0,
+            PossiblePointsMilli = 0,
+            ResultSourceRevision = 1,
+            AiUsageAggregationJson = JsonSerializer.Serialize(new
+            {
+                aiRequestId = completedChunks[0].RequestId,
+                aiRequestIds = completedChunks.Select(item => item.RequestId),
+                chunkCount = completedChunks.Count,
+                identityIncluded = completedChunks[0].Response.Identity is not null,
+                identityValidationError =
+                    completedChunks[0].Response.IdentityValidationError,
+                chunks = completedChunks.Select(item => new
+                {
+                    chunkIndex = item.Index + 1,
+                    requestId = item.RequestId,
+                    inputManifestHash = item.InputManifestHash,
+                }),
+                promptTokens = SumNullable(
+                    completedChunks.Select(item => item.Usage.PromptTokens)),
+                cachedTokens = SumNullable(
+                    completedChunks.Select(item => item.Usage.CachedTokens)),
+                outputTokens = SumNullable(
+                    completedChunks.Select(item => item.Usage.OutputTokens)),
+                thinkingTokens = SumNullable(
+                    completedChunks.Select(item => item.Usage.ThinkingTokens)),
+                totalTokens = SumNullable(
+                    completedChunks.Select(item => item.Usage.TotalTokens)),
+                estimatedUsdMicros = totalCost,
+            }),
+            CreatedAt = now,
+            FinishedAt = now,
+        };
+        db.GradingRuns.Add(run);
+
+        var defaultPageReferenceId = artifacts
+            .OrderBy(item => item.Ordinal)
+            .Select(item => item.FileReferenceId)
+            .FirstOrDefault();
+        var results = new List<(QuestionResultEntity Result, long Points)>(
+            questions.Count);
+        foreach (var question in questions)
+        {
+            QuestionResultEntity result;
+            long points;
+            if (unique.TryGetValue(question.Id, out var evidence))
+            {
+                var observation = evidence.Observation;
+                var reviewRequired = unexpectedContent
+                    || observation.ProviderReviewRecommended;
+                points = observation.ProposedPointsMilli;
+                result = new QuestionResultEntity
+                {
+                    Id = UlidId.New(now),
+                    GradingRunId = run.Id,
+                    QuestionId = question.Id,
+                    TranscribedAnswer =
+                        observation.Observation.Transcription,
+                    NormalizedAnswer = JapaneseTextNormalizer
+                        .NormalizeForComparison(
+                            observation.Observation.Transcription),
+                    ProposedPointsMilli = points,
+                    MaximumPointsMilli = question.MaximumPointsMilli,
+                    Outcome = observation.ProposedOutcome,
+                    Method = "ai_pilot",
+                    ConfidenceBasisPoints =
+                        observation.ProviderConfidenceBasisPoints,
+                    KanjiCheck =
+                        observation.Observation.ScriptObservationUncertain
+                            ? "uncertain"
+                            : "not_applicable",
+                    ReasonCode = unexpectedContent
+                        ? "ai_unexpected_content"
+                        : observation.ProviderReasonCode
+                            ?? "ai_pilot_proposal",
+                    Explanation = observation.BoundedExplanation,
+                    AnswerCropFileReferenceId = EvidencePageReferenceId(
+                        evidence,
+                        defaultPageReferenceId),
+                    ReviewRequired = reviewRequired,
+                    ReviewStatus = reviewRequired ? "pending" : "not_required",
+                    ModelResponseItemHash = observation.CanonicalItemHash,
+                    CreatedAt = now,
+                };
+            }
+            else if (conflicts.TryGetValue(
+                         question.Id,
+                         out var conflictEvidence))
+            {
+                points = 0;
+                result = new QuestionResultEntity
+                {
+                    Id = UlidId.New(now),
+                    GradingRunId = run.Id,
+                    QuestionId = question.Id,
+                    ProposedPointsMilli = 0,
+                    MaximumPointsMilli = question.MaximumPointsMilli,
+                    Outcome = "review",
+                    Method = "manual",
+                    ConfidenceBasisPoints = 0,
+                    KanjiCheck = "not_applicable",
+                    ReasonCode = "ai_chunk_observation_conflict",
+                    Explanation =
+                        "Multiple page chunks returned an observation; " +
+                        "teacher selection is required.",
+                    AnswerCropFileReferenceId = EvidencePageReferenceId(
+                        conflictEvidence[0],
+                        defaultPageReferenceId),
+                    ReviewRequired = true,
+                    ReviewStatus = "pending",
+                    ModelResponseItemHash = Sha256(string.Join(
+                        '\n',
+                        conflictEvidence.Select(item =>
+                            $"{item.Chunk.RequestId}:" +
+                            item.Observation.CanonicalItemHash))),
+                    CreatedAt = now,
+                };
+            }
+            else
+            {
+                points = 0;
+                result = new QuestionResultEntity
+                {
+                    Id = UlidId.New(now),
+                    GradingRunId = run.Id,
+                    QuestionId = question.Id,
+                    ProposedPointsMilli = 0,
+                    MaximumPointsMilli = question.MaximumPointsMilli,
+                    Outcome = "unreadable",
+                    Method = "manual",
+                    ConfidenceBasisPoints = 0,
+                    KanjiCheck = "not_applicable",
+                    ReasonCode = "ai_missing_question",
+                    AnswerCropFileReferenceId = defaultPageReferenceId,
+                    ReviewRequired = true,
+                    ReviewStatus = "pending",
+                    CreatedAt = now,
+                };
+            }
+
+            db.QuestionResults.Add(result);
+            results.Add((result, points));
+        }
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var (result, points) in results)
+        {
+            var revision = new ResultRevisionEntity
+            {
+                Id = UlidId.New(now),
+                QuestionResultId = result.Id,
+                RevisionNumber = 1,
+                AwardedPointsMilli = points,
+                Outcome = result.Outcome,
+                AnswerTextCorrection = result.TranscribedAnswer,
+                ReasonCode = result.ReasonCode,
+                Source = "initial",
+                CreatedAt = now,
+            };
+            db.ResultRevisions.Add(revision);
+            result.CurrentRevisionId = revision.Id;
+        }
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        var aggregateResponse = new ValidatedAiGradingResponse(
+            $"aggregate_{canonicalInputManifestHash}",
+            unique.Values
+                .OrderBy(item => item.Chunk.Index)
+                .Select(item => item.Observation)
+                .ToArray(),
+            unexpectedContent || conflicts.Count > 0);
+        var identityConfirmed = submission.AssignedStudentId is not null
+            || IsExplicitlyUnidentified(submission);
+        if (_adjudicationJobScheduler is not null)
+        {
+            await _adjudicationJobScheduler.EnqueueAmbiguousAsync(
+                    db,
+                    submission,
+                    run,
+                    results.Select(item => item.Result).ToArray(),
+                    aggregateResponse,
+                    questions
+                        .Select(item => new AiAdjudicationArtifactCandidate(
+                            item.Id,
+                            ProviderDisclosureAllowed: true))
+                        .ToArray(),
+                    correlationId,
+                    job.Id,
+                    now,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!identityConfirmed)
+            {
+                foreach (var adjudicationJob in db.BackgroundJobs.Local.Where(
+                             item => item.Type
+                                    == AiAdjudicationJobWorker.JobType
+                                 && item.CausationId == job.Id
+                                 && item.State == "queued"))
+                {
+                    adjudicationJob.State = "blocked";
+                    adjudicationJob.ErrorCode = "awaiting_identity";
+                }
+            }
+        }
+
+        run.EarnedPointsMilli = results.Aggregate(
+            0L,
+            static (total, item) => checked(total + item.Points));
+        run.PossiblePointsMilli = results.Aggregate(
+            0L,
+            static (total, item) =>
+                checked(total + item.Result.MaximumPointsMilli));
+        var blockingReview = results.Any(item => item.Result.ReviewRequired);
+        var activatedState = blockingReview
+            ? "needs_grade_review"
+            : "ready_to_finalize";
+        run.State = identityConfirmed ? activatedState : "awaiting_identity";
+        if (identityConfirmed)
+        {
+            submission.CurrentGradingRunId = run.Id;
+            submission.State = activatedState;
+            run.ActivatedAt = now;
+        }
+
+        submission.UpdatedAt = now;
+        AddAudit(
+            db,
+            now,
+            correlationId,
+            "grading.gemini_pilot_created",
+            submission.Id,
+            !identityConfirmed
+                ? "awaiting_identity"
+                : blockingReview
+                    ? "teacher_review_required"
+                    : "ready_to_finalize");
+        if (identityConfirmed)
+        {
+            AddStatusOutbox(
+                db,
+                now,
+                correlationId,
+                submission.Id,
+                submission.State);
+        }
+    }
+
+    private static string? EvidencePageReferenceId(
+        ChunkObservation evidence,
+        string? fallback)
+    {
+        if (evidence.Observation.EvidenceMediaIndex is { } mediaIndex
+            && mediaIndex >= 0
+            && mediaIndex < evidence.Chunk.Artifacts.Count)
+        {
+            return evidence.Chunk.Artifacts[mediaIndex].FileReferenceId;
+        }
+
+        return evidence.Chunk.Artifacts
+            .OrderBy(item => item.Ordinal)
+            .Select(item => item.FileReferenceId)
+            .FirstOrDefault() ?? fallback;
+    }
+
+    private static long? SumNullable(IEnumerable<long?> values)
+    {
+        var total = 0L;
+        var found = false;
+        foreach (var value in values)
+        {
+            if (value is null)
+            {
+                continue;
+            }
+
+            total = checked(total + value.Value);
+            found = true;
+        }
+
+        return found ? total : null;
+    }
+
     private Task RecordInvalidResponseAsync(
         PreparedClaim claim,
         AiProviderResponse response,
         string errorCode,
+        ValidatedAiIdentityTranscription? identity,
         CancellationToken cancellationToken)
     {
         return _writeCoordinator.ExecuteAsync(async token =>
@@ -1337,6 +2210,13 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             request.CompletedAt = now;
             request.UpdatedAt = now;
             AddUsageAndSettleReservation(db, claim, response, now);
+            await PersistIdentityEvidenceAsync(
+                    db,
+                    claim,
+                    identity,
+                    now,
+                    token)
+                .ConfigureAwait(false);
             await MarkSubmissionNeedsAttentionAsync(
                     db,
                     claim.SubmissionId,
@@ -1359,6 +2239,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     private Task RecordInvalidStoredResponseAsync(
         PreparedClaim claim,
         string errorCode,
+        ValidatedAiIdentityTranscription? identity,
         CancellationToken cancellationToken)
     {
         return _writeCoordinator.ExecuteAsync(async token =>
@@ -1406,6 +2287,14 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 batch.ErrorCode = "gemini_batch_partial_failure";
                 batch.UpdatedAt = now;
             }
+
+            await PersistIdentityEvidenceAsync(
+                    db,
+                    claim,
+                    identity,
+                    now,
+                    token)
+                .ConfigureAwait(false);
 
             await MarkSubmissionNeedsAttentionAsync(
                     db,
@@ -1756,6 +2645,56 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         }
     }
 
+    private static async Task PersistIdentityEvidenceAsync(
+        OokiGraderDbContext db,
+        PreparedClaim claim,
+        ValidatedAiIdentityTranscription? identity,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (identity is null || claim.ChunkIndex != 0)
+        {
+            return;
+        }
+
+        var submission = await db.Submissions
+            .SingleOrDefaultAsync(
+                item => item.Id == claim.SubmissionId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (submission is null
+            || submission.VoidedAt is not null
+            || IsExplicitlyUnidentified(submission))
+        {
+            return;
+        }
+
+        var evidence = await CombinedIdentityEvidenceBuilder.BuildAsync(
+                db,
+                submission.TestSessionId,
+                identity,
+                claim.RequestId,
+                claim.Artifacts[0].InputManifestHash,
+                PipelineVersion,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var evidenceJson = JsonSerializer.Serialize(evidence);
+        if (evidenceJson.Length > MaximumIdentityEvidenceCharacters)
+        {
+            throw Permanent("ai_identity_evidence_too_large");
+        }
+
+        submission.AssignmentEvidenceJson = evidenceJson;
+        if (submission.AssignedStudentId is null)
+        {
+            submission.AssignmentMethod = "none";
+            submission.AssignmentConfidenceBasisPoints = null;
+            submission.AssignmentPolicyVersion = evidence.MatchingPolicyVersion;
+        }
+
+        submission.UpdatedAt = now;
+    }
+
     private async Task<BackgroundJobEntity> LoadOwnedJobAsync(
         OokiGraderDbContext db,
         string jobId,
@@ -1781,8 +2720,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     {
         if (profile.TaskType != AiTaskTypes.InitialGrading
             || !profile.Active
-            || profile.ApprovalState is not (
-                "pilot_approved" or "production_approved")
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
             || !AiProviderCatalog.IsSupportedProvider(
                 profile.AiConnection.Provider)
             || profile.ModelId != profile.AiConnection.ModelId
@@ -1822,10 +2761,11 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         GradingPayload payload)
     {
         if ((submission.AssignedStudentId is null
-                && !IsExplicitlyUnidentified(submission))
-            || submission.CurrentGradingRunId is not null
+                && !IsExplicitlyUnidentified(submission)
+                && submission.State != "needs_name_review")
             || submission.State is not (
-                "grading" or "awaiting_grading" or "needs_attention")
+                "needs_name_review" or "grading" or "awaiting_grading"
+                or "needs_attention" or "needs_grade_review")
             || submission.ScanPayloadState != "scan_available"
             || submission.PreprocessingCompletedAt is null
             || !IsSha256(submission.PreprocessingManifestHash)
@@ -1839,7 +2779,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
 
         if (version.Id != payload.TemplateVersionId
             || version.Id != submission.TestSession.TemplateVersionId
-            || version.State != "published"
+            || !TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(version.State)
             || questions.Length == 0
             || questions.Length > 300
             || questions.Any(question =>
@@ -2004,7 +2944,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     private static string CreateUserInstruction(
         string requestKey,
         IReadOnlyCollection<QuestionSnapshot> questions,
-        IReadOnlyCollection<ArtifactSnapshot> artifacts)
+        IReadOnlyCollection<ArtifactSnapshot> artifacts,
+        int chunkIndex,
+        int chunkCount)
     {
         var media = artifacts.Select(
             (artifact, index) => new
@@ -2024,26 +2966,54 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             maximum_points_milli = question.MaximumPointsMilli,
             point_increment_milli = question.PointIncrementMilli,
             allow_non_kanji = question.AllowNonKanji,
+            requires_complete_answer = question.RequiresCompleteAnswer,
+            answer_order_insensitive = question.AnswerOrderInsensitive,
             rubric_text = question.RubricText,
             accepted_answers = question.AcceptedAnswers,
         });
         return
             """
-            The attached media are every page of one completed Japanese test,
-            in page order. Match answers to the supplied questions using printed
-            question labels, question text, and document layout. Do not infer or
-            return student identity. Transcribe each visible answer exactly,
-            preserving Japanese script. Grade only against the teacher-supplied
-            rubric and accepted answers. Include every question ID either once
-            in results or once in missing_question_ids. Recommend review whenever
-            evidence is ambiguous, incomplete, subjective, unexpected, or
-            unreadable.
+            The attached media are one consecutive page chunk from a completed
+            Japanese test, in original test page order. Other page chunks may
+            contain answers that are not visible here. Match only visible answers
+            to the supplied questions using printed question labels, question
+            text, and document layout. For every returned result, set
+            evidence_media_index to the media item containing that visible answer.
+            Read and grade directly from the original page pixels in one integrated
+            inspection. Transcribe each visible answer exactly, preserving Japanese
+            script and every visible line boundary as \n. The transcription is an
+            audit record, not the sole input to grading. Grade only against the
+            teacher-supplied rubric and accepted answers. A visual line wrap,
+            indentation, or surrounding layout whitespace alone must never make
+            otherwise identical content incorrect. Ignore only layout placement;
+            never omit, reorder, or merge distinct answer components.
+            When requires_complete_answer is true, award either zero or the full
+            maximum; a clear response missing any required component is incorrect,
+            never partial. This does not override unreadable, cropped, or ambiguous
+            review states. When answer_order_insensitive is true, compare the
+            complete multiset of components separated by Japanese/ASCII commas,
+            slashes, semicolons, middle dots, or line breaks. Order may differ,
+            but no component may be missing and duplicate counts must match.
+            Include every question ID either once in results or once in
+            missing_question_ids; use missing_question_ids when its answer is not
+            visible in this chunk. Recommend review whenever evidence is
+            ambiguous, incomplete, subjective, unexpected, or unreadable.
+
+            When identity_required is true, transcribe only the visibly written
+            name and student number from PAGE_1's printed identity field into
+            identity. Do not infer a student, use a roster, or return a student ID.
+            When identity_required is false, return identity=null and ignore all
+            names while grading this chunk.
 
             """
             + JsonSerializer.Serialize(new
             {
-                schema_version = "answer_transcribe_grade_v1",
+                schema_version = "submission_analysis_v2",
                 request_key = requestKey,
+                chunk_index = chunkIndex + 1,
+                chunk_count = chunkCount,
+                identity_required = chunkIndex == 0,
+                identity_page_number = chunkIndex == 0 ? 1 : (int?)null,
                 media,
                 questions = rubric,
             });
@@ -2505,7 +3475,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         string ProcessingStrategy,
         string RequestId,
         string RequestKey,
-        string InputManifestHash,
+        string CanonicalInputManifestHash,
         int MaxOutputTokens,
         string MediaResolution,
         string SecretReference,
@@ -2513,8 +3483,12 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         AiPromptBundle Bundle,
         IReadOnlyList<QuestionSnapshot> Questions,
         IReadOnlyList<ArtifactSnapshot> Artifacts,
+        int ChunkIndex,
+        IReadOnlyList<ArtifactChunk> Chunks,
+        IReadOnlyList<CompletedChunk> CompletedChunks,
         PricingSnapshot? Pricing,
         long UsdToJpyMicros,
+        bool ForceExpedite,
         StoredAiResponse? StoredResponse);
 
     private sealed record StoredAiResponse(
@@ -2531,6 +3505,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         long MaximumPointsMilli,
         long PointIncrementMilli,
         bool AllowNonKanji,
+        bool RequiresCompleteAnswer,
+        bool AnswerOrderInsensitive,
         string? RubricText,
         IReadOnlyList<string> AcceptedAnswers,
         DomainQuestionDefinition Definition);
@@ -2547,6 +3523,33 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         int WidthPixels,
         int HeightPixels,
         ContentObjectLocator Locator);
+
+    private sealed record ArtifactChunk(
+        int Index,
+        string InputManifestHash,
+        IReadOnlyList<ArtifactSnapshot> Artifacts);
+
+    private sealed record CompletedChunk(
+        int Index,
+        string RequestId,
+        string RequestKey,
+        string InputManifestHash,
+        ValidatedAiGradingResponse Response,
+        string? ActualModel,
+        UsageSnapshot Usage,
+        IReadOnlyList<ArtifactSnapshot> Artifacts);
+
+    private sealed record UsageSnapshot(
+        long? PromptTokens,
+        long? CachedTokens,
+        long? OutputTokens,
+        long? ThinkingTokens,
+        long? TotalTokens,
+        long EstimatedUsdMicros);
+
+    private sealed record ChunkObservation(
+        CompletedChunk Chunk,
+        ValidatedAiQuestionObservation Observation);
 
     private sealed record PricingSnapshot(
         string Id,

@@ -9,6 +9,7 @@ using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Domain.Grading;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Preprocessing;
@@ -48,13 +49,12 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
     public const string JobType = "gemini_template_extract";
     public const string ModelId = AiProviderRuntime.GeminiModel;
     public const string PipelineVersion =
-        "gemini-template-extraction-auto-detail-qc-v9";
+        "gemini-template-extraction-auto-detail-qc-v10";
 
     private const int JobSchemaVersion = 1;
     private const int MaximumProviderPasses = 3;
     private const int QualityControlDetailViewCount = 4;
     private const int MaximumStoredResponseCharacters = 1_000_000;
-    private const int SafeQuestionConfidenceBasisPoints = 9_500;
     private const double MetadataApplicationConfidence = 0.85;
     private const string IndependentSlotAuditInstruction =
         """
@@ -181,8 +181,11 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                     cancellationToken)
                 .ConfigureAwait(false);
             var request = CreateProviderRequest(claim, preparedMedia);
-            await MarkDispatchingAsync(claim, cancellationToken)
-                .ConfigureAwait(false);
+            if (!await MarkDispatchingAsync(claim, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                return true;
+            }
             dispatchCommitted = true;
 
             var providerResponses = new List<AiProviderResponse>(
@@ -528,6 +531,46 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 && version.Questions.Count > 0)
             {
                 CompleteJob(job, now);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return null;
+            }
+
+            if (version.TestTemplate.State == "archived")
+            {
+                var requests = await db.AiRequests
+                    .Where(item => item.EntityType == "template_version"
+                        && item.EntityId == version.Id
+                        && (item.State == "prepared"
+                            || item.State == "budget_blocked"
+                            || item.State == "retry_waiting"))
+                    .ToListAsync(token)
+                    .ConfigureAwait(false);
+                foreach (var request in requests)
+                {
+                    request.State = "cancelled";
+                    request.ErrorCode = "template_extract_template_archived";
+                    request.SafeErrorDetail = null;
+                    request.CompletedAt = now;
+                    request.UpdatedAt = now;
+                    ReleaseReservation(db, request.Id, now);
+                }
+
+                ResetGeneratingVersion(version, now);
+                BlockJob(job, now, "template_extract_template_archived");
+                AddAudit(
+                    db,
+                    now,
+                    lease.CorrelationId,
+                    "template.ai_generation_cancelled",
+                    version.Id,
+                    "template_extract_template_archived");
+                AddStatusOutbox(
+                    db,
+                    now,
+                    lease.CorrelationId,
+                    version.Id,
+                    "cancelled");
                 await db.SaveChangesAsync(token).ConfigureAwait(false);
                 await transaction.CommitAsync(token).ConfigureAwait(false);
                 return null;
@@ -1231,12 +1274,53 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 item.Source.Role,
                 item.PageCount),
             StringComparer.Ordinal);
-        var validated = TemplateExtractionResponseValidator.Validate(
-            response.StructuredOutput,
-            claim.RequestKey,
-            evidence,
-            claim.DefaultPointsMilli,
-            claim.TargetTotalPointsMilli);
+        ValidatedTemplateExtraction validated;
+        var responseSchemaVersion = response.StructuredOutput
+            .TryGetProperty("schema_version", out var schemaElement)
+                ? schemaElement.GetString()
+                : null;
+        if (string.Equals(
+                responseSchemaVersion,
+                "template_extract_v5",
+                StringComparison.Ordinal))
+        {
+            var suppliedPages = preparedMedia
+                .SelectMany(item => Enumerable.Range(1, item.PageCount)
+                    .Select(pageNumber => new TemplateExtractionPageManifest(
+                        $"{item.Source.Id}:page:{pageNumber}",
+                        item.Source.Id,
+                        pageNumber)))
+                .ToArray();
+            var envelope = OrientationGatedTemplateExtractionValidator.Validate(
+                response.StructuredOutput,
+                claim.RequestKey,
+                suppliedPages,
+                evidence,
+                claim.DefaultPointsMilli,
+                claim.TargetTotalPointsMilli);
+            if (envelope.Action != TemplateExtractionAction.Extract
+                || envelope.Extraction is null)
+            {
+                // The legacy draft worker cannot safely mutate its already-bound
+                // source set. New creation uses TemplateGenerationUnitJobWorker,
+                // which owns the bounded local rotation retry.
+                throw new InvalidDataException(
+                    "template_extract_orientation_requires_batch_flow");
+            }
+
+            validated = envelope.Extraction;
+        }
+        else
+        {
+            // Kept solely so durable legacy jobs created with the v4 snapshot
+            // remain readable/retryable during the additive migration.
+            validated = TemplateExtractionResponseValidator.Validate(
+                response.StructuredOutput,
+                claim.RequestKey,
+                evidence,
+                claim.DefaultPointsMilli,
+                claim.TargetTotalPointsMilli);
+        }
         return new ExtractionCandidate(response, responseJson, validated);
     }
 
@@ -1371,7 +1455,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
         };
     }
 
-    private Task MarkDispatchingAsync(
+    private Task<bool> MarkDispatchingAsync(
         PreparedClaim claim,
         CancellationToken cancellationToken)
     {
@@ -1391,11 +1475,40 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 .ConfigureAwait(false)
                 ?? throw Permanent("template_extract_request_missing");
             var version = await db.TemplateVersions
+                .Include(item => item.TestTemplate)
                 .SingleOrDefaultAsync(
                     item => item.Id == claim.TemplateVersionId,
                     token)
                 .ConfigureAwait(false)
                 ?? throw Permanent("template_extract_version_missing");
+            if (version.TestTemplate.State == "archived")
+            {
+                request.State = "cancelled";
+                request.ErrorCode = "template_extract_template_archived";
+                request.SafeErrorDetail = null;
+                request.CompletedAt = now;
+                request.UpdatedAt = now;
+                ReleaseReservation(db, request.Id, now);
+                ResetGeneratingVersion(version, now);
+                BlockJob(job, now, "template_extract_template_archived");
+                AddAudit(
+                    db,
+                    now,
+                    claim.CorrelationId,
+                    "template.ai_generation_cancelled",
+                    version.Id,
+                    "template_extract_template_archived");
+                AddStatusOutbox(
+                    db,
+                    now,
+                    claim.CorrelationId,
+                    version.Id,
+                    "cancelled");
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return false;
+            }
+
             if (version.State != "generating"
                 || version.Revision != claim.VersionRevision
                 || request.PossibleDuplicate
@@ -1414,6 +1527,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             job.ProgressBasisPoints = Math.Max(job.ProgressBasisPoints, 4_000);
             await db.SaveChangesAsync(token).ConfigureAwait(false);
             await transaction.CommitAsync(token).ConfigureAwait(false);
+            return true;
         }, cancellationToken);
     }
 
@@ -1449,6 +1563,44 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                     token)
                 .ConfigureAwait(false)
                 ?? throw Permanent("template_extract_version_missing");
+            if (version.TestTemplate.State == "archived")
+            {
+                if (request.State != "dispatching"
+                    || request.PossibleDuplicate
+                    || version.State != "generating")
+                {
+                    throw Permanent("template_extract_completion_state_invalid");
+                }
+
+                request.State = "cancelled";
+                request.ProviderResponseId = response.ProviderResponseId;
+                request.ActualModel = response.ActualModel;
+                request.FinishReason = response.FinishReason;
+                request.ErrorCode = "template_extract_template_archived";
+                request.SafeErrorDetail = null;
+                request.CompletedAt = now;
+                request.UpdatedAt = now;
+                AddUsageAndSettleReservation(db, claim, response, now);
+                ResetGeneratingVersion(version, now);
+                BlockJob(job, now, "template_extract_template_archived");
+                AddAudit(
+                    db,
+                    now,
+                    claim.CorrelationId,
+                    "template.ai_generation_cancelled",
+                    version.Id,
+                    "template_extract_template_archived");
+                AddStatusOutbox(
+                    db,
+                    now,
+                    claim.CorrelationId,
+                    version.Id,
+                    "cancelled");
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return;
+            }
+
             if (request.State != "dispatching"
                 || request.PossibleDuplicate
                 || version.State != "generating"
@@ -1581,15 +1733,23 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                     QuestionType = proposal.QuestionType,
                     GradingMode = GradingModeFor(proposal.QuestionType),
                     MaxPointsMilli = proposal.SuggestedPointsMilli,
-                    PointIncrementMilli = 1,
+                    PointIncrementMilli =
+                        QuestionGradingDefaultPolicy.PointIncrementMilliFor(
+                            proposal.SuggestedPointsMilli),
                     AllowNonKanji =
                         proposal.AllowNonKanjiSuggestion,
+                    RequiresCompleteAnswer =
+                        proposal.RequiresCompleteAnswerSuggestion,
+                    AnswerOrderInsensitive =
+                        proposal.AnswerOrderInsensitiveSuggestion,
+                    RubricText =
+                        QuestionGradingDefaultPolicy.BuildDefaultRubric(
+                            proposal.QuestionType,
+                            proposal.ExpectedAnswer),
                     KanjiPolicyNote =
                         "AIによる表記方針の提案です。先生の確認が必要です。",
                     TeacherNote = BoundedTeacherNote(warnings),
-                    RequiresReviewAlways = RequiresPermanentReview(
-                        proposal,
-                        confidence),
+                    RequiresReviewAlways = RequiresPermanentReview(proposal),
                     AiConfidenceBasisPoints = confidence,
                     TeacherVerified = false,
                     CreatedAt = now,
@@ -1960,8 +2120,8 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
     {
         if (profile.TaskType != AiTaskTypes.TemplateExtraction
             || !profile.Active
-            || profile.ApprovalState is not (
-                "pilot_approved" or "production_approved")
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
             || !AiProviderCatalog.IsSupportedProvider(
                 profile.AiConnection.Provider)
             || profile.ModelId != profile.AiConnection.ModelId
@@ -2203,6 +2363,20 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                             : (int?)null,
                     source.DisplayName,
                 });
+        var pageManifest = sources
+            .OrderBy(item => item.Ordinal)
+            .SelectMany(source => Enumerable.Range(
+                    1,
+                    pageCounts is not null
+                        && pageCounts.TryGetValue(source.Id, out var count)
+                            ? count
+                            : 0)
+                .Select(pageNumber => new
+                {
+                    page_id = $"{source.Id}:page:{pageNumber}",
+                    source_id = source.Id,
+                    page_number = pageNumber,
+                }));
         return
             """
             The attached primary media are teacher-supplied test sources in the
@@ -2299,17 +2473,26 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             apply its configured default. Every AI field remains a teacher-review
             draft and must never be treated as published.
 
+            Copy printed grading-rule instructions conservatively. Set
+            requires_complete_answer_suggestion true only when the visible prompt
+            explicitly requires 完答 or otherwise explicitly says every listed
+            component is required for credit. Set
+            answer_order_insensitive_suggestion true only when the visible prompt
+            explicitly says 順不同 or that component order does not matter. These
+            flags are independent; do not infer either one merely because an
+            expected answer contains a list. Otherwise return false.
+
             Finally reread every question_text against the image at high resolution.
             Remove scan noise and impossible extra kana, but do not paraphrase or
             invent wording. Japanese text must remain grammatical enough to identify
             the printed prompt.
 
-            Infer title, subject, category, grade_label, and course only from
-            visible document headers or unambiguous printed context. Use null for
-            replaceable_metadata_fields identifies filename-derived fallback
-            values rather than teacher-entered facts; do not merely repeat those
-            fallbacks or current_metadata placeholders. Metadata suggestions are
-            advisory and include a single conservative confidence plus warnings.
+            Return printed_test_name only when the top-level test name is visibly
+            printed and safely readable. Return printed_grade_label only when an
+            explicit grade is visibly printed. Do not infer grade from difficulty,
+            vocabulary, question numbers, subject, or a filename. Do not classify
+            subject, category, answer style, test type, split boundaries, or STEP
+            variation. Use null for a name or grade that is not safely visible.
 
             FINAL SOURCE-ROLE GATE. Immediately before returning JSON, verify each
             answer against the source manifest: readable answers from
@@ -2322,7 +2505,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             """
             + JsonSerializer.Serialize(new
             {
-                schema_version = "template_extract_v4",
+                schema_version = "template_extract_v5",
                 request_key = requestKey,
                 default_points_milli = defaultPointsMilli,
                 target_total_points_milli = targetTotalPointsMilli,
@@ -2337,6 +2520,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 replaceable_metadata_fields = replaceableMetadataFields
                     .Order(StringComparer.Ordinal),
                 sources = sourceManifest,
+                pages = pageManifest,
             });
     }
 
@@ -2394,28 +2578,11 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
         };
 
     private static string GradingModeFor(string questionType) =>
-        questionType switch
-        {
-            "multiple_choice"
-                or "boolean"
-                or "numeric"
-                or "exact_short_text" => "transcribe_then_rules",
-            _ => "manual",
-        };
+        QuestionGradingDefaultPolicy.GradingModeFor(questionType);
 
     private static bool RequiresPermanentReview(
-        ValidatedTemplateQuestion proposal,
-        int confidenceBasisPoints) =>
-        proposal.RequiresTeacherAnswer
-        || proposal.ExpectedAnswer is null
-        || confidenceBasisPoints < SafeQuestionConfidenceBasisPoints
-        || proposal.Warnings.Count > 0
-        || proposal.ReviewIssues.Any(issue => issue.Blocking)
-        || proposal.QuestionType is
-            "semantic_short_text"
-            or "multi_part"
-            or "subjective"
-            or "unsupported";
+        ValidatedTemplateQuestion proposal) =>
+        proposal.QuestionType == "unsupported";
 
     private static string ToReviewNote(
         TemplateExtractionReviewIssue issue) =>

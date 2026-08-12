@@ -200,6 +200,9 @@ public sealed class SubmissionPreprocessingWorkerTests
         Assert.Empty(artifacts);
         using var quality = JsonDocument.Parse(
             submission.QualitySummaryJson!);
+        Assert.Equal(
+            1,
+            quality.RootElement.GetProperty("expectedPageCount").GetInt32());
         var alignment = quality.RootElement
             .GetProperty("pages")[0]
             .GetProperty("alignment");
@@ -207,6 +210,65 @@ public sealed class SubmissionPreprocessingWorkerTests
         Assert.Equal(
             page.AlignmentScoreBasisPoints,
             alignment.GetProperty("scoreBasisPoints").GetInt32());
+    }
+
+    [Fact]
+    public async Task AlignsAgainstDeterministicGeneratedTemplateSource()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedSubmissionAsync(
+            validImage: true,
+            includeAlignmentReference: true,
+            deterministicDerivedAlignmentReference: true);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var page = await db.SubmissionPages
+            .AsNoTracking()
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        var sourceReferenceId = await db.TemplateSources
+            .AsNoTracking()
+            .Select(item => item.FileReferenceId)
+            .SingleAsync();
+        var reference = await db.FileReferences
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == sourceReferenceId);
+
+        Assert.Equal("needs_name_review", submission.State);
+        Assert.Equal("aligned", page.AlignmentState);
+        Assert.Equal("template_generation_unit", reference.OwnerType);
+        Assert.Equal("derived_source", reference.Purpose);
+    }
+
+    [Fact]
+    public async Task RejectsDerivedSourceOwnedByAnotherGenerationUnit()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedSubmissionAsync(
+            validImage: true,
+            includeAlignmentReference: true,
+            deterministicDerivedAlignmentReference: true,
+            derivedSourceOwnerMismatch: true);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        Assert.Equal("failed", job.State);
+        Assert.Equal("preprocessing_alignment_reference_invalid", job.ErrorCode);
+        Assert.Equal("needs_attention", submission.State);
+        Assert.Empty(await db.SubmissionPages
+            .Where(item => item.SubmissionId == seeded.SubmissionId)
+            .ToArrayAsync());
     }
 
     [Fact]
@@ -411,7 +473,9 @@ public sealed class SubmissionPreprocessingWorkerTests
             bool validImage,
             bool includeAlignmentReference = false,
             bool unusableAlignmentReference = false,
-            string alignmentSourceRole = "blank_test")
+            string alignmentSourceRole = "blank_test",
+            bool deterministicDerivedAlignmentReference = false,
+            bool derivedSourceOwnerMismatch = false)
         {
             var now = DateTimeOffset.UtcNow;
             var content = validImage
@@ -435,7 +499,9 @@ public sealed class SubmissionPreprocessingWorkerTests
                     writable: false);
                 alignmentStored = await ContentStore.PutAsync(
                     alignmentStream,
-                    ContentStorageClass.TemplateSource,
+                    deterministicDerivedAlignmentReference
+                        ? ContentStorageClass.TemplateDerived
+                        : ContentStorageClass.TemplateSource,
                     "png");
             }
 
@@ -450,6 +516,9 @@ public sealed class SubmissionPreprocessingWorkerTests
             var fileObjectId = UlidId.New(now);
             var retentionAnchor = now.AddMinutes(-5);
             var jobId = UlidId.New(now);
+            var derivedUnitId = deterministicDerivedAlignmentReference
+                ? UlidId.New(now)
+                : null;
 
             await using var db = await CreateDbContextAsync();
             db.TestTemplates.Add(new TestTemplateEntity
@@ -471,6 +540,7 @@ public sealed class SubmissionPreprocessingWorkerTests
                 PublishedByStaffUserId = staffId,
                 PublishedAt = now,
                 ContentHash = new string('a', 64),
+                OriginatingUnitId = derivedUnitId,
                 CreatedAt = now,
                 UpdatedAt = now,
             });
@@ -608,7 +678,9 @@ public sealed class SubmissionPreprocessingWorkerTests
                     Extension = alignmentStored.Locator.Extension,
                     RelativeObjectPath = alignmentStored.RelativePath,
                     StorageClass =
-                        ContentStorageClass.TemplateSource.ToString(),
+                        (deterministicDerivedAlignmentReference
+                            ? ContentStorageClass.TemplateDerived
+                            : ContentStorageClass.TemplateSource).ToString(),
                     RetentionClass = "template_source",
                     ManagedScanBytes = false,
                     State = "available",
@@ -620,9 +692,17 @@ public sealed class SubmissionPreprocessingWorkerTests
                 {
                     Id = alignmentFileReferenceId,
                     FileObjectId = alignmentFileObjectId,
-                    OwnerType = "upload_session",
-                    OwnerId = alignmentUploadId,
-                    Purpose = "template_source",
+                    OwnerType = deterministicDerivedAlignmentReference
+                        ? "template_generation_unit"
+                        : "upload_session",
+                    OwnerId = deterministicDerivedAlignmentReference
+                        ? derivedSourceOwnerMismatch
+                            ? UlidId.New(now)
+                            : derivedUnitId!
+                        : alignmentUploadId,
+                    Purpose = deterministicDerivedAlignmentReference
+                        ? "derived_source"
+                        : "template_source",
                     RetentionAnchorAt = now,
                     CreatedAt = now,
                 });

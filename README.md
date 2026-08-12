@@ -9,9 +9,18 @@ full-page understanding of interwoven Japanese test sheets, exception-only
 correction after bulk confirmation, reports, verified backup/offline restore, and guarded
 Windows technician tooling. It is still a pre-production system: real-school
 accuracy evidence now covers one difficult Japanese fill-in sheet, but a broad
-school golden set, production Windows/DR testing, and Authenticode release
-signing remain external gates. See
+school golden set and production Windows/DR testing remain external gates.
+Authenticode signing remains a gate only for a conventionally distributed
+Setup EXE; a separate, supervised on-site path accepts a personally delivered,
+fully checksum-verified release without requiring a paid signing certificate. See
 [Implementation status](docs/implementation-status.md) for the exact boundary.
+
+The teacher UI now shares server-backed multi-term search, exact filters,
+allowlisted sorting, active-filter summaries, and cursor paging across students,
+test sessions, templates, and finalized reports. Teachers can export checked
+results or every exportable result matching the current report filters as a
+durable, previewed ZIP containing the canonical Japanese result PDFs and a
+UTF-8 manifest CSV.
 
 ## Repository layout
 
@@ -61,9 +70,45 @@ The web build is written to `src/OokiGrader.Web/dist`.
 dotnet publish src/OokiGrader.Host/OokiGrader.Host.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/publish/win-x64
 ```
 
-For the guarded Host + offline Tool + technician-script package and the Inno
-Setup x64 installer, use PowerShell 7.4 and Inno Setup 6 on a controlled
-Windows x64 build host:
+### Recommended supervised on-site package
+
+For a small school where the technician personally carries the release to the
+host, build the guarded Host + offline Tool + technician-script package. A paid
+certificate is not required for this path:
+
+```powershell
+pwsh -File installer/New-OokiGraderReleasePackage.ps1 `
+  -Version 0.1.0 `
+  -OutputRoot C:\OokiGrader-Releases
+```
+
+Copy the resulting immutable `OokiGrader-0.1.0-win-x64` folder to a
+technician-controlled USB drive. On the Windows 11 host, open PowerShell 7 as
+Administrator in that folder and run:
+
+```powershell
+pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+```
+
+The guided script defaults to `https://ooki-grader.test/`, verifies the complete
+release inventory, creates a free school-local CA and HTTPS certificate,
+installs the Windows service, scopes the firewall to the school subnet, checks
+database/storage/real HTTPS readiness, and produces a public-only classroom-PC
+setup folder. Copy that folder—not the host certificate or private key—to each
+authorized PC and right-click `Install-On-This-PC.cmd` → **Run as
+administrator**. It validates its own checksums, installs the public CA and
+managed hosts entry, verifies HTTPS without a warning bypass, and creates the
+desktop shortcut.
+
+This mode deliberately requires physical custody, a fixed or DHCP-reserved host
+IP, an exact checksum manifest, typed confirmations, and a Windows Private
+network. Checksums do not prove publisher identity, so never use the unsigned
+mode for a package received through an untrusted download or third party.
+
+### Optional signed Setup EXE
+
+For broader distribution, use PowerShell 7.4 and Inno Setup 6 on a controlled
+Windows x64 build host and provide an Authenticode signing hook:
 
 ```powershell
 dotnet restore OokiGrader.slnx --runtime win-x64
@@ -80,7 +125,7 @@ pwsh -File installer/New-OokiGraderWindowsInstaller.ps1 `
   -SigningHook C:\secure\Sign-Ooki.ps1
 ```
 
-The first command creates an immutable, fully inventoried payload. The second
+The first command creates an immutable, fully inventoried and signed payload. The second
 re-verifies its version, complete checksum coverage, and approved publisher,
 then produces `OokiGrader-Setup-0.1.0-x64.exe` plus JSON evidence and a SHA-256
 file. Compilation and signing are Windows-only. The checked-in setup source and
@@ -90,9 +135,12 @@ the target-Windows, Authenticode, LAN, and disaster-recovery gates in
 
 ## Guides and evaluation evidence
 
-- [Teacher user guide (Japanese PDF)](output/pdf/ooki-grader-user-guide-ja.pdf)
-- [Host/app setup and operations guide (Japanese PDF)](output/pdf/ooki-grader-host-operations-guide-ja.pdf)
+- [On-site installation guide (Japanese PDF; supervised no-paid-certificate path)](output/pdf/ooki-grader-onsite-installation-guide-ja.pdf)
+- [On-site installation source (Japanese)](docs/operations/onsite-installation-ja.md)
+- [Teacher user guide (Japanese PDF; 28-page task walkthrough with real-app screens and fictional demo data)](output/pdf/ooki-grader-user-guide-ja.pdf)
+- [Host/app setup and operations guide (Japanese PDF; 19 pages covering daily checks, bulk reports, backup, incidents, recovery, and updates)](output/pdf/ooki-grader-host-operations-guide-ja.pdf)
 - [Detailed host/app operations source](docs/operations/host-app-setup-and-operations-ja.md)
+- [Real-app manual screenshot manifest (fictional data only)](output/playwright/manual-20260810/MANIFEST.md)
 - [Japanese fill-in template accuracy report](output/accuracy/fill-in-template-generation-report-2026-08-05.md)
 - [OpenRouter DeepSeek V4 Flash / Gemini comparison](output/accuracy/openrouter-deepseek-v4-vs-gemini-report-2026-08-05.md)
 
@@ -124,7 +172,11 @@ npm --prefix src/OokiGrader.Web run dev
 
 Open `http://localhost:5173`. The SPA proxies `/api` requests to the host while preserving the browser origin required by the request guard. To use a different API URL, set `OOKI_API_PROXY` when starting Vite and set `Security__AllowedOrigin` on the host to the exact browser origin.
 
-The host applies EF Core migrations automatically and creates its SQLite database and managed files under `Data:Root`. Relative data paths are resolved from the host content root. To keep development data in an explicit location, set an absolute `Data__Root`; set `Data__ObjectStore` and `Data__Incoming` as well if those should live elsewhere.
+The host applies EF Core migrations automatically. Relative data paths are
+resolved from the host content root. When using an absolute development data
+root, set `Data__Root`, `Data__ObjectStore`, `Data__Incoming`, and
+`Data__Reports` together; otherwise the database and uploaded files can point
+at different trees after a restart.
 
 ### First-run bootstrap
 
@@ -144,29 +196,56 @@ The liveness and readiness probes are available at `/health/live` and `/health/r
 
 ### Configure Gemini
 
-After bootstrap, open the administrator AI settings, create a Gemini
-connection, and enter the credential there. Production Windows stores the
-credential in a revisioned DPAPI envelope; non-Windows development keeps it
-only in process memory. The checked-in grading path accepts the exact model
+After bootstrap, open the administrator AI settings, add or replace the Gemini
+API key, and choose **接続を確認して有効化**. The host tests the supplied
+candidate before it changes any saved state. Authentication, exact-model,
+image-input, strict structured-output, usage-metadata, and representative image
+task checks must all pass. Only then does the host encrypt and persist the key
+and atomically make the exact current profiles for template extraction, name
+transcription, initial grading, and adjudication available. A failed or
+ambiguous replacement leaves the previous working key, connection, and task
+profiles unchanged.
+
+Production Windows stores the credential in a revisioned DPAPI envelope. macOS
+development stores it in an authenticated encrypted file bound to the
+persistent ASP.NET Core Data Protection key ring under `Data:Root`, so a normal
+Host restart does not require the key to be entered again. This macOS store is
+development-only; moving the data root or restoring it on another machine still
+requires re-entry. The checked-in grading path accepts the exact model
 identifier `gemini-3.5-flash-lite`.
 
-Run the connection test before activating task profiles. It checks
-authentication plus model, image, structured-output, and usage support through
-the normal Gemini API. New grading work does not expose a Batch/priority choice;
-the host queues it safely and teachers work from one consistent flow. Pricing,
-budget, and evaluation controls remain available under the folded advanced
-settings. Never put a provider key in source, `appsettings`, a shell argument,
+The normal Gemini screen does not ask a school administrator to create an
+evaluation record, approve a pilot, or activate four profiles by hand. Its
+manual connection test repairs missing or stale current profiles after a full
+capability pass, and startup reconciles active Gemini profiles after a
+checked-in prompt/schema/hash revision change. New grading work does not expose a
+Batch/priority choice; the host queues it safely and teachers work from one
+consistent flow. Timeout, concurrency, pricing, and budget settings remain
+under folded details. Advanced model evaluation and manual profile endpoints
+remain available for OpenRouter and backward-compatible technical operation.
+Never put a provider key in source, `appsettings`, a shell argument,
 screenshots, or logs.
+
+Capability-gated activation makes AI drafting available; it never starts
+reception, assigns a student, or finalizes a result. Teachers still compare the
+source, correct the AI draft, explicitly start reception for the confirmed
+template, and explicitly finalize grades. Starting reception atomically fixes
+the immutable template version and opens its first test session; teachers do
+not publish and then create the same test again in a second screen. Formal
+golden-set accuracy evaluation remains a release and model-change quality gate,
+not a routine Gemini setup step.
 
 ### Configure OpenRouter (optional)
 
 The same administrator screen can store one OpenRouter connection separately
-from Gemini. Use a school-controlled key and an exact OpenRouter model slug.
-The host fixes the endpoint to `https://openrouter.ai/api/v1/`, requires
-parameter-compatible routing, denies data-collection routes, requires Zero Data
-Retention, and runs an image plus strict-structured-output capability test
-before creating task profiles. A connection that cannot accept images remains
-blocked.
+from Gemini. OpenRouter does not use Gemini's one-step `testAndEnable` path:
+save the advanced connection first, then explicitly run **再確認**. Use a
+school-controlled key and an exact OpenRouter model slug. The host fixes the
+endpoint to `https://openrouter.ai/api/v1/`, requires parameter-compatible
+routing, denies data-collection routes, requires Zero Data Retention, and runs
+an image plus strict-structured-output capability test during that manual
+recheck. A connection that cannot accept images remains blocked; separately
+evaluated profiles still require the advanced manual activation workflow.
 
 Pricing is stored per provider and exact model from an official provider URL.
 Gemini usage is settled from returned token counts and the approved price
@@ -212,18 +291,127 @@ Configuration follows normal ASP.NET Core precedence. Use `appsettings.json`, an
 | `Data:ObjectStore` | Content-addressed object storage | `.data/objects` |
 | `Data:Incoming` | Resumable upload staging | `.data/incoming` |
 | `Data:Reports` | Generated report artifacts | `.data/reports` |
-| `Security:AllowedOrigin` | Exact origin accepted for API mutations | `https://ooki-grader.local` |
+| `Security:AllowedOrigin` | Exact origin accepted for API mutations | `https://ooki-grader.test` |
 | `Security:RequireSecureCookies` | Uses a Secure `__Host-` session cookie | `true` |
 | `Security:SessionIdleMinutes` | Session idle timeout | `30` |
 | `Security:SessionAbsoluteHours` | Absolute session lifetime | `12` |
 | `Security:BootstrapTokenHours` | First-run token lifetime, clamped to 1–24 hours | `24` |
 | `Storage:PhysicalReserveBytes` | Free-space reserve enforced for uploads | `5368709120` |
 | `Backup:Enabled` | Scheduled verified backups after destination setup | `false` |
+| `TemplateGeneration:MaximumUnitsPerBatch` | Maximum deterministic template units created from one source PDF | `200` |
+| `TemplateGeneration:MaximumSourcePages` | Maximum source-PDF pages accepted by the deterministic planner | `1000` |
+| `Workers:TemplateGenerationUnit:PollInterval` | Durable unit-worker queue polling interval | `00:00:01` |
+| `Workers:TemplateGenerationUnit:LeaseDuration` | Lease duration for one deterministic extraction unit | `00:10:00` |
+| `Workers:TemplateGenerationUnit:MaximumProviderMediaBytes` | Maximum derived unit size sent to the active provider | `12582912` |
+| `Workers:TemplateGenerationUnit:MaximumStoredResponseCharacters` | Bound on retained structured response text | `1000000` |
+| `Workers:AiInitialGrading:MaximumMediaBytes` | Configured chunk-media ceiling; the worker additionally caps raw media at 12 MiB and below the dynamic 18 MiB serialized-request budget | `17825792` |
+| `Features:Ai.TemplateGeneration` | Enables AI-assisted template generation, including the deterministic batch path | `true` |
 | `Features:Recognition.AutoAssign` | Evaluation-gated automatic student assignment | `false` |
 | `Features:Grading.AutoFinalize` | Evaluation-gated unattended finalization | `false` |
 | `Features:Input.FullPageFallback` | Legacy compatibility setting; the current AI workflow uses normalized full pages | `false` |
 
 Development overrides the allowed origin to `http://localhost:5173` and disables Secure cookies. Do not carry those two development overrides into a LAN or production deployment.
+
+### Deterministic template creation rollout and rollback
+
+New creation starts with the teacher selecting `HOP`, `STEP`,
+`クラス分けテスト`, or `その他` and one of the four supported subjects before
+upload. Only `その他` adds the `通常` / `穴埋め` choice. The host plans HOP as
+one independent template per page and STEP as one independent template per two
+pages; STEP rejects any PDF whose page count is not divisible by six before AI
+work or budget reservation. Class-placement and Other PDFs stay whole. There
+is no AI test-type, split, variation, subject, naming, grade, or
+orientation-preflight task.
+
+Template extraction uses one orientation-gated request. Upright media is
+extracted in that same response. A valid `rotate` response causes the host to
+apply per-page quarter turns locally and make exactly one corrected-media
+request; another rotation request is a blocking failure. Paper name and grade
+are returned with extraction, and filename grade is parsed locally. Final check
+resolves the grade first, then the host assigns immutable names to known types:
+HOP `{subject}{grade}年HOP{unitSequence}`, STEP
+`{subject}{grade}年STEPセット{set}-{variation}`, and class placement
+`{subject}{grade}年クラス分けテスト`. For these types, the AI-read printed
+title is retained only as provenance/reference and never controls or edits the
+final name. Only `その他` uses an editable title, initially proposed from the
+printed title when available, before the batch is transactionally converted to
+independent draft templates.
+
+Roll out only after a verified backup, migration rehearsal, verification that
+startup or a successful manual connection test reconciled the exact v2/v5
+current profile, and synthetic HOP/STEP acceptance runs. Formal provider-backed
+and golden-set checks remain release evidence, not a school-administrator
+approval screen. The migration is additive and keeps historical templates and
+legacy jobs readable. To stop new generation, set
+`Features:Ai.TemplateGeneration` to `false`; queued and stored batch records
+remain durable for diagnosis. Application rollback must use the repository's
+offline restore procedure against the pre-upgrade verified backup when the
+older binary cannot read the newer schema. Do not downgrade the executable over
+a migrated live database, delete batch rows, or reactivate the removed legacy
+creation UI as a shortcut.
+
+### Ordered one-page scan intake
+
+Completed papers use one ordered intake pipeline driven by the published
+template version's expected submission page count. HOP groups one one-page PDF
+per submission. Each registered STEP variation/session (`-1`, `-2`, or `-3`)
+is a separate test and groups two consecutive PDFs; the original six-page STEP
+pack is not one grading session. Class-placement and Other group the complete
+published page count, from one through the supported maximum of 50 pages. The
+browser records an explicit one-based input ordinal before parallel upload;
+server completion order, timestamps, and filenames never decide ownership.
+
+Every uploaded file must be a one-page PDF. The host classifies it locally
+against every template page, requires an unambiguous page role, and blocks the
+batch on missing, repeated, foreign, ambiguous, or out-of-order pages. Valid
+groups are materialized as one logical multipage submission with immutable
+source-page hash/ordinal provenance, then enter the existing preprocessing,
+student-name, and grading pipeline. The student's written name is expected on
+logical page 1 and applies to the rest of that ordered group. For the normal
+Gemini path, the first bounded grading request reads that identity field and
+grades the visible answers in one response; the roster is still matched only
+on the host and a teacher still confirms the student. Later chunks never return
+identity. The legacy name-only request remains a fallback when combined
+analysis is unavailable.
+
+Initial grading keeps a long paper as one logical submission but sends its
+normalized pages in deterministic consecutive chunks. A chunk has at most 32
+page images and at most the smallest of the configured media limit, 12 MiB of
+raw media, and the dynamic budget that keeps Gemini's complete serialized
+request below 18 MiB. Every chunk is durable and idempotent, and the host creates
+one combined grading run only after all chunks succeed. If more than one chunk
+claims the same question, that question is assigned zero proposed points and
+requires teacher review instead of being resolved by request order. Oversized
+prompts or a single page that cannot fit fail locally before provider disclosure.
+Within each chunk Gemini reads the original page pixels and returns the visible
+answer transcription, outcome, and points in the same response. The prompt keeps
+visible line boundaries for audit but forbids treating visual line wrapping or
+layout whitespace alone as an incorrect answer; a narrow host check also repairs
+an AI false negative when an accepted answer differs only by CR/LF wrapping.
+Until the teacher confirms or explicitly leaves the identity unidentified, a
+completed run is staged and hidden from finalization; confirming identity
+activates that same run without sending the answer pages again.
+
+Teachers can open one answer-specific grading workspace from the review queue
+or test-session detail. It displays the complete original/assembled PDF (with
+lazy normalized-page fallback), all question results, and append-only score,
+outcome, and transcription edits. `未確認を一括確認` preserves every proposed
+value and resolves only the exact versioned unresolved set shown in the dialog;
+it does not finalize the submission and rejects the entire action if another
+teacher changed any selected result.
+
+This workflow deliberately accepts the school's scanner-order contract: page
+2 and later are assumed to belong to the student whose page 1 immediately
+precedes them. Without an identifier on later pages, software cannot detect a
+correctly positioned page from a different student. Operators must therefore
+scan each student's complete paper consecutively and review the visible group
+boundaries before freezing the batch.
+
+The normal age/quota retention policy covers the original one-page scans, the
+assembled PDF, normalized pages, thumbnails, and grading image evidence. After
+deletion, live file links are removed and the submission is `scan_deleted`,
+while ordered page numbers/hashes, structured grading runs and revisions,
+totals, audit records, and result reports remain available.
 
 Authenticated mutations require both the opaque session cookie and a rotated CSRF token. All mutations require exactly one `Origin` header matching `Security:AllowedOrigin`. Passwords are hashed with Argon2id, published template versions are protected by database integrity triggers, SQLite uses WAL and foreign keys, and the object store is content-addressed.
 
@@ -267,6 +455,21 @@ The specification is the target design; [Implementation status](docs/implementat
 - Teachers never draw question boxes or enter coordinates. The selected AI
   provider receives complete normalized pages and matches each logical question
   by its printed label, wording, and page context.
+- New template creation always selects test type and subject before upload.
+  HOP/STEP boundaries and STEP `-1`/`-2`/`-3` suffixes are host-owned,
+  deterministic rules; the three STEP variations are unrelated templates after
+  creation.
+- The question editor exposes `完答`, `順不同`, and `漢字必須` independently.
+  Complete-answer questions are all-or-nothing, order-insensitive answers
+  compare explicitly separated components with duplicate counts preserved, and
+  the Kanji policy remains compatible with the `allowNonKanji` API field.
+- Removing a template is a recoverable archive, not destructive erasure.
+  Archived templates cannot be edited or selected for new tests, while their
+  published versions, existing sessions, grading results, and audit history
+  remain readable and can be restored from the archived filter. Archive waits
+  for any automatic draft extraction to finish. A closed test session can be
+  archived only after every submission and background intake/grading task is
+  terminal; archived sessions leave action queues and become read-only.
 - Automatic image retention is three calendar months, with a 150 GB managed scan-storage cap.
 
 The documents record external API facts as verified on **2026-07-27**. Model availability, pricing, quotas, and provider terms must be rechecked before every production release.

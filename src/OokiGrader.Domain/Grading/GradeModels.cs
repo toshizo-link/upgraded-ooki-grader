@@ -51,6 +51,8 @@ public enum GradeReason
     BlankResponse,
     UnreadableOrAmbiguous,
     RubricProposal,
+    CompleteAnswerRequired,
+    OrderInsensitiveMatch,
     RubricAssessmentInvalid,
     ManualOrSubjective,
     AlwaysReview,

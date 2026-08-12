@@ -150,6 +150,8 @@ public sealed record QuestionResponse(
     string GradingMode,
     long MaxPointsMilli,
     bool AllowNonKanji,
+    bool RequiresCompleteAnswer,
+    bool AnswerOrderInsensitive,
     bool RequiresReviewAlways,
     long Revision,
     IReadOnlyList<AcceptedAnswerResponse> AcceptedAnswers);
@@ -169,6 +171,8 @@ public sealed record UpsertQuestionRequest(
     string GradingMode,
     long MaxPointsMilli,
     bool AllowNonKanji,
+    bool RequiresCompleteAnswer,
+    bool AnswerOrderInsensitive,
     bool RequiresReviewAlways,
     IReadOnlyList<UpsertAcceptedAnswerRequest> AcceptedAnswers,
     long? Revision);
@@ -185,7 +189,10 @@ public sealed record ValidationIssueResponse(
     string Message,
     string? QuestionId);
 
-public sealed record PublishTemplateVersionRequest(long Revision);
+public sealed record PublishTemplateVersionRequest(
+    long Revision,
+    DateOnly? TestDate = null,
+    string? ClassLabel = null);
 
 public sealed record TestSessionSummary(
     string Id,
@@ -208,7 +215,8 @@ public sealed record CreateTestSessionRequest(
     DateOnly TestDate,
     string? GradeLabel,
     string? Course,
-    string Priority);
+    string? Priority = null,
+    bool OpenImmediately = false);
 
 public sealed record SubmissionSummary(
     string Id,
@@ -232,7 +240,10 @@ public sealed record CreateUploadRequest(
     string FileName,
     string DeclaredMimeType,
     long Length,
-    string? ExpectedSha256);
+    string? ExpectedSha256,
+    string? OrderedScanBatchId = null,
+    int? InputOrdinal = null,
+    string? ClientItemId = null);
 
 public sealed record UploadStatusResponse(
     string UploadId,

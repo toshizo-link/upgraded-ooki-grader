@@ -2,7 +2,7 @@
 
 **Status:** Baseline design with teacher-first simplification  
 **Specification version:** 1.0  
-**Last verified:** 2026-08-05  
+**Last verified:** 2026-08-11
 **Primary deployment:** One Japanese cram-school site, Windows 11 host, trusted school LAN  
 **Primary users:** School administrators, teachers, and scan operators
 
@@ -41,14 +41,17 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** expres
 - The adopted coordinate-free workflow in
   `12-coordinate-free-teacher-workflow.md` supersedes earlier references to
   teacher-edited regions, crops, privacy masking, or full-page fallback.
-- The 2026-08-05 teacher-first simplification routes all new work through one
-  normal queued request path. Gemini is the default; an administrator may add
-  an OpenRouter connection, but only an image-capable, structured-output model
-  with approved accuracy evidence can be activated. Batch/economy/priority
-  controls and teacher-facing routing choices described in older chapters are
-  legacy architecture background. Silent cross-provider failover is disabled.
-  The current UI shows the uploaded source beside the AI draft and requires
-  teacher confirmation before publishing or finalizing.
+- The teacher-first simplification routes all new work through one normal
+  queued request path. Gemini is the default: the normal setup tests a supplied
+  candidate key before persistence and, only on a full capability/image-task
+  pass, atomically makes the four exact-current advisory profiles available.
+  The administrator does not enter evaluation evidence or activate those four
+  profiles manually. OpenRouter remains an advanced option and only an
+  image-capable, structured-output model with approved accuracy evidence can be
+  activated. Batch/economy/priority controls and teacher-facing routing choices
+  described in older chapters are legacy architecture background. Silent
+  cross-provider failover is disabled. The current UI shows the uploaded source beside
+  the AI draft and requires teacher confirmation before publishing or finalizing.
 - A release MUST use one tagged, internally consistent specification version.
 
 ## External facts verified for this design
@@ -70,4 +73,4 @@ The following facts affect architecture and cost. They are not guarantees by Ook
 
 ## Product baseline in one paragraph
 
-One Windows 11 host runs an ASP.NET Core service and owns an embedded SQLite database plus an NTFS-managed file store. Every staff computer uses a browser over HTTPS on the school LAN. Teachers add one or more sources—blank questions, a paper containing model answers, a completed non-model paper for which AI must solve independently, and/or a separate model-answer sheet—and usually accept the automatically proposed source classification. The original page stays visible beside the generated question-and-answer draft; safe proposals can be confirmed together and only exceptions need individual correction. After one explicit publish action, teachers start answer intake, upload completed papers, and let the active evaluated AI profile recognize names and propose grading; Gemini is the checked-in default, while an approved OpenRouter model may be selected explicitly. Supplied model answers remain authoritative and writing on a non-model paper is never silently treated as an answer key. Every AI result remains reviewable and finalization stays teacher-controlled. Scores remain durable records, while original test scans and scan-derived artifacts are removed after three calendar months or earlier when the managed quota requires it.
+One Windows 11 host runs an ASP.NET Core service and owns an embedded SQLite database plus an NTFS-managed file store. Every staff computer uses a browser over HTTPS on the school LAN. Teachers add one or more sources—blank questions, a paper containing model answers, a completed non-model paper for which AI must solve independently, and/or a separate model-answer sheet—and usually accept the automatically proposed source classification. The original page stays visible beside the generated question-and-answer draft; safe proposals can be confirmed together and only exceptions need individual correction. After one explicit publish action, teachers start answer intake, upload completed papers, and let the active capability-passed Gemini profile or explicitly evaluated OpenRouter profile recognize names and propose grading. Supplied model answers remain authoritative and writing on a non-model paper is never silently treated as an answer key. Every AI result remains reviewable and finalization stays teacher-controlled. Scores remain durable records, while original test scans and scan-derived artifacts are removed after three calendar months or earlier when the managed quota requires it.

@@ -14,8 +14,11 @@ import { SessionDetailPage } from "./pages/SessionDetailPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { StudentDetailPage } from "./pages/StudentDetailPage";
 import { StudentsPage } from "./pages/StudentsPage";
-import { TemplateCreatePage } from "./pages/TemplateCreatePage";
+import { SubmissionGradingPage } from "./pages/SubmissionGradingPage";
 import { TemplateEditorPage } from "./pages/TemplateEditorPage";
+import { TemplateGenerationCreateRoute } from "./pages/TemplateGenerationCreateRoute";
+import { TemplateGenerationFinalCheckPage } from "./pages/TemplateGenerationFinalCheckPage";
+import { TemplateGenerationProgressPage } from "./pages/TemplateGenerationProgressPage";
 import { TemplatesPage } from "./pages/TemplatesPage";
 import type { StaffRole } from "./types";
 import "./styles.css";
@@ -63,6 +66,14 @@ export function AppRoutes() {
         }
       />
       <Route
+        path="/submissions/:submissionId/grading"
+        element={
+          <RoleGuard roles={["administrator", "teacher"]}>
+            <SubmissionGradingPage />
+          </RoleGuard>
+        }
+      />
+      <Route
         path="/templates"
         element={
           <RoleGuard roles={["administrator", "teacher"]}>
@@ -74,7 +85,23 @@ export function AppRoutes() {
         path="/templates/new"
         element={
           <RoleGuard roles={["administrator", "teacher"]}>
-            <TemplateCreatePage />
+            <TemplateGenerationCreateRoute />
+          </RoleGuard>
+        }
+      />
+      <Route
+        path="/templates/generation/:batchId"
+        element={
+          <RoleGuard roles={["administrator", "teacher"]}>
+            <TemplateGenerationProgressPage />
+          </RoleGuard>
+        }
+      />
+      <Route
+        path="/templates/generation/:batchId/final-check"
+        element={
+          <RoleGuard roles={["administrator", "teacher"]}>
+            <TemplateGenerationFinalCheckPage />
           </RoleGuard>
         }
       />

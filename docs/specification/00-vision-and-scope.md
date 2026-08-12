@@ -30,7 +30,14 @@ it; and publish it for grading.
 
 ### G-03 — Accurate, usable, cost-controlled grading assistance
 
-The school can configure the official Gemini API, OpenRouter, or both. Direct Gemini can aggregate non-urgent work into discounted Batch API jobs. OpenRouter uses durable bounded parallel requests and can provide model/provider choice. The product evaluates model profiles for accuracy before activation, records token usage and estimated/actual cost, avoids duplicate work, and supports explicit priority paths.
+The school can configure the official Gemini API, OpenRouter, or both. The
+normal Gemini flow tests a candidate credential and the exact current visual
+contract before saving it, then makes the four advisory AI tasks available as
+one atomic operation. OpenRouter remains an advanced, explicitly profiled
+option. The product records token usage and estimated/actual cost, avoids
+duplicate work, and keeps release/model-change accuracy evaluation separate
+from routine school setup. AI availability never removes teacher review,
+publication, assignment, or finalization gates.
 
 ### G-04 — Safe student matching
 
@@ -61,7 +68,8 @@ The following are explicitly out of scope unless a later specification adds them
 - direct access to the host folder via SMB as an application workflow;
 - direct scanner-driver control such as TWAIN/WIA from peer browsers;
 - automatic creation of pedagogically correct answer keys without teacher approval;
-- grading essays or subjective long-form responses without mandatory review;
+- automatically finalizing essays or subjective long-form responses without
+  explicit teacher finalization of the completed paper;
 - facial recognition, behavioral scoring, plagiarism detection, or proctoring;
 - a native Android/iOS application;
 - syncing to a school information system, accounting platform, LMS, or messaging service;
@@ -138,7 +146,10 @@ These values are capacity targets, not license limits. Crossing a target should 
 
 ## 6. Product principles
 
-1. **Accuracy first:** a model/profile is activated only after it beats the release quality gate on real school-style tests.
+1. **Accuracy first:** a model/prompt bundle reaches a release only after the
+   release quality gate on real school-style tests; routine Gemini credential
+   setup capability-gates advisory profiles and never authorizes automatic
+   publication, assignment, or finalization.
 2. **Teacher authority:** teachers approve answer keys and can correct every grade.
 3. **Ease of use:** normal scanning, reviewing, and exporting require no provider knowledge.
 4. **Precision before automation:** an uncertain name or grade is queued, not guessed.
@@ -188,7 +199,8 @@ AI quality targets in this document are launch gates to validate, not claims tha
 - 150 GB/three-month scan cleanup;
 - official Gemini API integration, including Gemini 3.5 Flash-Lite Batch API;
 - OpenRouter integration with compatible multimodal structured-output models;
-- per-task provider/model profiles and capability/accuracy validation;
+- candidate-first Gemini setup with atomic current task profiles, plus advanced
+  provider/model profiles and capability/accuracy validation;
 - Windows service installer, backup, health page, and audit log.
 
 ### Post-MVP candidates

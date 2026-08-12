@@ -118,15 +118,18 @@ public sealed class PreprocessingServiceTests
             + "wvUAAAAAEDcaoAAAAAACK4cKAAAAIAA=");
         var service = new PreprocessingService(new PreprocessingOptions
         {
-            MaxPixelsPerPage = 1_000,
-            MaxTotalPixels = 2_000,
+            MaxPixelsPerPage = 1_000_000,
+            MaxTotalPixels = 2_000_000,
         });
 
         var tiff = await service.ProcessAsync(
             new MemoryStream(input),
             new PreprocessingInput("image/tiff", "two-pages.tiff"));
-        var pdfBytes = PreprocessedDocumentEncoder.ToPdf(tiff.Pages);
-        var pdf = await service.ProcessAsync(
+        var pdfBytes = PreprocessedDocumentEncoder.ToPdf(
+            tiff.Pages
+                .Select(page => page with { DpiX = 72, DpiY = 72 })
+                .ToArray());
+        var pdf = await new PreprocessingService().ProcessAsync(
             new MemoryStream(pdfBytes),
             new PreprocessingInput("application/pdf", "two-pages.pdf"));
 
@@ -149,6 +152,142 @@ public sealed class PreprocessingServiceTests
             directOrderDistance < reversedOrderDistance,
             $"Direct distance {directOrderDistance}; "
             + $"reversed distance {reversedOrderDistance}.");
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task PdfEncoderPreservesA4PhysicalSizeAcrossMultiplePages(
+        int pageCount)
+    {
+        // A4 at 150 DPI. The encoder must convert pixels to PDF points;
+        // treating these pixel dimensions as points would rasterize each page
+        // above the configured safety limit on the second pass.
+        var input = CreatePng(1_240, 1_754, canvas =>
+        {
+            using var paint = new SKPaint
+            {
+                Color = SKColors.Black,
+                StrokeWidth = 8,
+                IsAntialias = false,
+            };
+            canvas.DrawRect(new SKRect(40, 40, 1_200, 1_714), paint);
+        });
+        var service = new PreprocessingService(new PreprocessingOptions
+        {
+            MaxPages = 10,
+            MaxPixelsPerPage = 12_000_000,
+            MaxTotalPixels = 48_000_000,
+        });
+        var source = await service.ProcessAsync(
+            new MemoryStream(input),
+            new PreprocessingInput("image/png", "a4-150dpi.png"));
+        var first = Assert.Single(source.Pages) with
+        {
+            DpiX = 150,
+            DpiY = 150,
+        };
+        var pages = Enumerable.Range(1, pageCount)
+            .Select(pageNumber => first with { PageNumber = pageNumber })
+            .ToArray();
+
+        var pdf = PreprocessedDocumentEncoder.ToPdf(pages);
+        var roundTrip = await service.ProcessAsync(
+            new MemoryStream(pdf),
+            new PreprocessingInput(
+                "application/pdf",
+                $"a4-{pageCount}-pages.pdf"));
+
+        Assert.Equal(pageCount, roundTrip.Pages.Count);
+        Assert.All(roundTrip.Pages, page =>
+        {
+            Assert.InRange(page.Width, 2_475, 2_485);
+            Assert.InRange(page.Height, 3_503, 3_513);
+        });
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(50)]
+    public async Task IncrementalPdfWriterAndSequentialRasterizerSupportBoundedLongDocuments(
+        int pageCount)
+    {
+        const int width = 320;
+        const int height = 450;
+        var sourcePng = CreatePng(width, height, canvas =>
+        {
+            using var paint = new SKPaint
+            {
+                Color = SKColors.Black,
+                StrokeWidth = 3,
+                Style = SKPaintStyle.Stroke,
+            };
+            canvas.DrawRect(new SKRect(15, 20, 305, 430), paint);
+            canvas.DrawLine(25, 70, 295, 70, paint);
+            canvas.DrawCircle(170, 230, 55, paint);
+        });
+        var maximumTotalPixels = checked(500_000L * pageCount);
+        var service = new PreprocessingService(new PreprocessingOptions
+        {
+            MaxPages = 50,
+            MaxPixelsPerPage = 500_000,
+            MaxTotalPixels = maximumTotalPixels,
+        });
+        var source = await service.ProcessAsync(
+            new MemoryStream(sourcePng),
+            new PreprocessingInput("image/png", "fixture.png"));
+        var page = Assert.Single(source.Pages);
+        using var spool = new MemoryStream();
+        using (var writer = PreprocessedDocumentEncoder.CreatePdfWriter(spool))
+        {
+            for (var pageNumber = 1; pageNumber <= pageCount; pageNumber++)
+            {
+                writer.AppendPage(page with { PageNumber = pageNumber });
+            }
+
+            writer.Complete();
+            Assert.Equal(pageCount, writer.PageCount);
+            Assert.InRange(
+                writer.OutputBytes,
+                1,
+                PreprocessingOptions.DefaultMaxInputBytes);
+        }
+
+        spool.Position = 0;
+        var result = await service.ProcessAsync(
+            spool,
+            new PreprocessingInput(
+                "application/pdf",
+                $"synthetic-{pageCount}.pdf",
+                MaximumPages: pageCount,
+                MaximumNormalizedArtifactBytes:
+                    PreprocessingOptions.DefaultMaxNormalizedArtifactBytes,
+                MaximumTotalPixels: maximumTotalPixels));
+
+        Assert.Equal(pageCount, result.Pages.Count);
+        Assert.Equal(
+            Enumerable.Range(1, pageCount),
+            result.Pages.Select(item => item.PageNumber));
+        Assert.Equal(pageCount - 1, result.RepeatedPages.Count);
+        Assert.All(result.RepeatedPages, repeated =>
+        {
+            Assert.Equal(1, repeated.FirstPageNumber);
+            Assert.InRange(repeated.DuplicatePageNumber, 2, pageCount);
+        });
+        Assert.All(result.Pages, processed =>
+        {
+            Assert.Equal(width, processed.Width);
+            Assert.InRange(processed.Height, height - 1, height + 1);
+        });
+        Assert.InRange(
+            result.Pages.Sum(processed =>
+                processed.NormalizedPng.Bytes.LongLength
+                + processed.ThumbnailPng.Bytes.LongLength),
+            1,
+            PreprocessingOptions.DefaultMaxNormalizedArtifactBytes);
+        Assert.Equal(
+            512L * 1024 * 1024,
+            new PreprocessingOptions().MaxNormalizedArtifactBytes);
     }
 
     [Fact]

@@ -350,7 +350,11 @@ Start with whichever connection won the M0 spike, then implement both before M5 
 
 - connection and task-profile entities;
 - encrypted secret store;
-- profile capability/evaluation/activation;
+- routine Gemini candidate-before-persist full capability/image-task probe;
+- atomic Gemini secret/connection/exact-four-current-profile activation with
+  failure preservation and `approval_state=capability_passed`;
+- startup and stored-key-test reconciliation of exact-current Gemini profiles;
+- advanced/manual OpenRouter capability/evaluation/approval/activation;
 - canonical AI request/response;
 - schema validation;
 - usage/pricing/budget ledger;
@@ -383,7 +387,8 @@ Start with whichever connection won the M0 spike, then implement both before M5 
 
 ### Name
 
-- `name_transcribe_v1`;
+- `submission_analysis_v2` chunk-1 identity component, with
+  `name_transcribe_v1` legacy/fallback compatibility;
 - local normalization/candidate scoring;
 - calibration and thresholds;
 - expected roster/duplicate conflict;
@@ -393,7 +398,8 @@ Start with whichever connection won the M0 spike, then implement both before M5 
 
 - deterministic multiple choice/numeric/exact engine;
 - Japanese normalization/Kanji policy;
-- `answer_transcribe_grade_v1`;
+- `submission_analysis_v2` bounded page chunks, with
+  `answer_transcribe_grade_v1` compatibility reads;
 - rubric/semantic result;
 - confidence feature/calibration;
 - unreadable/blank;
@@ -403,7 +409,10 @@ Start with whichever connection won the M0 spike, then implement both before M5 
 
 - both provider connections are configurable/testable;
 - provider-neutral Gemini/OpenRouter standard queued paths pass fault tests;
-- candidate active profiles pass applicable calibration gates;
+- normal Gemini transactional commissioning, initial-failure,
+  replacement-failure, and exact-four activation tests pass;
+- advanced/manual profile candidates pass applicable evaluation gates and the
+  compatibility endpoints remain tested;
 - no model calculates total/finalizes;
 - budget hard stop works.
 
@@ -461,7 +470,8 @@ Start with whichever connection won the M0 spike, then implement both before M5 
 
 - health/admin dashboards;
 - jobs/dispatch/batch diagnostics;
-- provider connection/profile UI;
+- one-step Gemini add/replace UI with four read-only task readiness states;
+- separate advanced/manual OpenRouter and legacy profile compatibility UI;
 - budgets/usage;
 - backup/verify/restore;
 - integrity checks;
@@ -574,7 +584,8 @@ Expand only after gates.
 - Gemini direct;
 - OpenRouter;
 - usage/cost/budgets;
-- evaluation activation.
+- Gemini capability-gated atomic activation;
+- advanced/manual evaluation activation.
 
 ### EP-07 Recognition/grading
 

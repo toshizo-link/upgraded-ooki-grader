@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Host.Middleware;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
@@ -33,6 +34,23 @@ public static partial class ResultsEndpoints
                 "/{submissionId}/results/{resultId}:override",
                 OverrideResult)
             .RequireAuthorization("teacher");
+        submissions.MapGet(
+                "/{submissionId}/grading-workspace",
+                GetGradingWorkspace)
+            .RequireAuthorization("teacher");
+        submissions.MapGet(
+                "/{submissionId}/original-pdf",
+                GetSubmissionOriginalPdf)
+            .RequireAuthorization("teacher");
+        submissions.MapGet(
+                "/{submissionId}/pages/{pageId}/thumbnail",
+                GetSubmissionPageThumbnail)
+            .RequireAuthorization("teacher");
+        submissions.MapPost(
+                "/{submissionId}/results:confirm-unresolved",
+                ConfirmUnresolvedResults)
+            .RequireAuthorization("teacher")
+            .RequireIdempotency();
         submissions.MapPost("/{submissionId}:finalize", FinalizeSubmission)
             .RequireAuthorization("teacher");
         submissions.MapPost("/{submissionId}:reopen", ReopenSubmission)
@@ -65,6 +83,11 @@ public static partial class ResultsEndpoints
         if (submission?.CurrentGradingRunId is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         if (submission.FinalizedAt is not null)
@@ -108,11 +131,26 @@ public static partial class ResultsEndpoints
                 [new { currentRevision = currentRevision.RevisionNumber }]);
         }
 
+        var nextAnswerTextCorrection = request.TranscriptionCorrection is null
+            ? currentRevision.AnswerTextCorrection
+            : request.TranscriptionCorrection.Trim();
+        var effectiveTranscription = nextAnswerTextCorrection
+            ?? result.TranscribedAnswer
+            ?? string.Empty;
         if (request.AwardedPointsMilli < 0
             || request.AwardedPointsMilli > result.MaximumPointsMilli
             || request.AwardedPointsMilli
                 % result.Question.PointIncrementMilli != 0
+            || (result.Question.RequiresCompleteAnswer
+                && request.AwardedPointsMilli is > 0
+                && request.AwardedPointsMilli < result.MaximumPointsMilli)
             || !AllowedOutcomes.Contains(request.Outcome)
+            || !OutcomeMatchesPoints(
+                request.Outcome,
+                request.AwardedPointsMilli,
+                result.MaximumPointsMilli)
+            || (request.Outcome == "blank"
+                && effectiveTranscription.Length > 0)
             || !ValidReasonCode(request.ReasonCode)
             || request.TranscriptionCorrection?.Length > 4_000
             || request.Note?.Length > 2_000)
@@ -148,7 +186,7 @@ public static partial class ResultsEndpoints
             RevisionNumber = checked(currentRevision.RevisionNumber + 1),
             AwardedPointsMilli = request.AwardedPointsMilli,
             Outcome = request.Outcome,
-            AnswerTextCorrection = TrimOrNull(request.TranscriptionCorrection),
+            AnswerTextCorrection = nextAnswerTextCorrection,
             ReasonCode = request.ReasonCode,
             TeacherNote = TrimOrNull(request.Note),
             Source = "teacher_override",
@@ -234,6 +272,11 @@ public static partial class ResultsEndpoints
         if (submission is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         var precondition = CheckSubmissionRevision(
@@ -407,6 +450,11 @@ public static partial class ResultsEndpoints
         if (submission is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         var precondition = CheckSubmissionRevision(
@@ -615,9 +663,13 @@ public static partial class ResultsEndpoints
                 submissionId = submission.Id,
                 submission.TestSession.TestDate,
                 testTitle =
-                    submission.TestSession.TemplateVersion.TestTemplate.Title,
-                subject = submission.TestSession.TemplateVersion.TestTemplate.Subject,
-                category = submission.TestSession.TemplateVersion.TestTemplate.Category,
+                    submission.TestSession.TitleOverride
+                    ?? submission.TestSession.TemplateTitleSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
+                subject = submission.TestSession.TemplateSubjectSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Subject,
+                category = submission.TestSession.TemplateCategorySnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Category,
                 run.EarnedPointsMilli,
                 run.PossiblePointsMilli,
                 percentageBasisPoints = PercentageBasisPoints(
@@ -700,11 +752,15 @@ public static partial class ResultsEndpoints
                 },
             testSessionId = submission.TestSessionId,
             submission.TestSession.TestDate,
-            testTitle = submission.TestSession.TemplateVersion.TestTemplate.Title,
+            testTitle = submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
             templateVersionNumber =
                 submission.TestSession.TemplateVersion.VersionNumber,
-            subject = submission.TestSession.TemplateVersion.TestTemplate.Subject,
-            category = submission.TestSession.TemplateVersion.TestTemplate.Category,
+            subject = submission.TestSession.TemplateSubjectSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Subject,
+            category = submission.TestSession.TemplateCategorySnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Category,
             gradingRunId = run.Id,
             run.EarnedPointsMilli,
             run.PossiblePointsMilli,
@@ -928,8 +984,29 @@ public static partial class ResultsEndpoints
             && ReasonCodePattern().IsMatch(reasonCode);
     }
 
+    private static bool OutcomeMatchesPoints(
+        string outcome,
+        long awardedPointsMilli,
+        long maximumPointsMilli) => outcome switch
+        {
+            "correct" => awardedPointsMilli == maximumPointsMilli,
+            "partial" => awardedPointsMilli > 0
+                && awardedPointsMilli < maximumPointsMilli,
+            "incorrect" or "blank" or "unreadable" =>
+                awardedPointsMilli == 0,
+            _ => false,
+        };
+
     private static string? TrimOrNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IResult ArchivedSessionReadOnly(HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status409Conflict,
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            "アーカイブ済みのテスト実施は変更できません",
+            "過去の採点結果は閲覧できますが、修正、確定、再オープンはできません。");
 
     [GeneratedRegex("^[a-z][a-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex ReasonCodePattern();

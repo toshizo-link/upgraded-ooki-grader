@@ -1,3 +1,5 @@
+using OokiGrader.Domain.Templates;
+
 namespace OokiGrader.Infrastructure.Persistence.Entities;
 
 public sealed class StudentEntity : IRevisionedEntity, IUpdatedEntity
@@ -77,6 +79,19 @@ public sealed class TemplateVersionEntity : IRevisionedEntity, IUpdatedEntity
     public string? PublishedByStaffUserId { get; set; }
     public DateTimeOffset? PublishedAt { get; set; }
     public string? ContentHash { get; set; }
+    public TestType? TestType { get; set; }
+    public AnswerStyle? AnswerStyle { get; set; }
+    public TemplatePromptSystem? PromptSystem { get; set; }
+    public string? OriginatingBatchId { get; set; }
+    public string? OriginatingUnitId { get; set; }
+    public int? GenerationProfileVersion { get; set; }
+    public string? GenerationProfileJson { get; set; }
+    public string? GenerationProfileHash { get; set; }
+    public int? StepSetIndex { get; set; }
+    public int? StepVariationIndex { get; set; }
+    public string? PrintedTestName { get; set; }
+    public GradeLevel? ResolvedGrade { get; set; }
+    public int? ExpectedSubmissionPageCount { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public long Revision { get; set; } = 1;
@@ -84,6 +99,112 @@ public sealed class TemplateVersionEntity : IRevisionedEntity, IUpdatedEntity
     public TestTemplateEntity TestTemplate { get; set; } = null!;
     public ICollection<TemplateSourceEntity> Sources { get; } = new List<TemplateSourceEntity>();
     public ICollection<QuestionEntity> Questions { get; } = new List<QuestionEntity>();
+}
+
+/// <summary>
+/// Durable owner for one uploaded source PDF and its deterministic template units.
+/// The source identifier is the finalized template-source upload-session identifier.
+/// </summary>
+public sealed class TemplateGenerationBatchEntity : IRevisionedEntity, IUpdatedEntity
+{
+    public string Id { get; set; } = string.Empty;
+    public TemplateGenerationBatchStatus Status { get; set; } =
+        TemplateGenerationBatchStatus.Draft;
+    public TestType TestType { get; set; }
+    public string Subject { get; set; } = string.Empty;
+    public AnswerStyle? AnswerStyle { get; set; }
+    public TemplatePromptSystem PromptSystem { get; set; }
+    public string SourceId { get; set; } = string.Empty;
+    public int SourcePageCount { get; set; }
+    public int ExpectedUnitCount { get; set; }
+    public int CompletedUnitCount { get; set; }
+    public int FailedUnitCount { get; set; }
+    public string? CurrentOperationId { get; set; }
+    public string PlanHash { get; set; } = string.Empty;
+    public string CreatedByUserId { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public string? LastErrorCode { get; set; }
+    public long Revision { get; set; } = 1;
+
+    public UploadSessionEntity Source { get; set; } = null!;
+    public ICollection<TemplateGenerationUnitEntity> Units { get; } =
+        new List<TemplateGenerationUnitEntity>();
+}
+
+/// <summary>
+/// One independently generated template candidate. STEP variations deliberately
+/// remain independent rows and never share question or template identifiers.
+/// </summary>
+public sealed class TemplateGenerationUnitEntity : IRevisionedEntity, IUpdatedEntity
+{
+    public string Id { get; set; } = string.Empty;
+    public string BatchId { get; set; } = string.Empty;
+    public int Sequence { get; set; }
+    public TemplateGenerationUnitStatus Status { get; set; } =
+        TemplateGenerationUnitStatus.Pending;
+    public TestType TestType { get; set; }
+    public AnswerStyle? AnswerStyle { get; set; }
+    public int FirstPage { get; set; }
+    public int LastPage { get; set; }
+    public int? StepSetIndex { get; set; }
+    public int? StepVariationIndex { get; set; }
+    public string? DeterministicSuffix { get; set; }
+    public TemplatePromptSystem PromptSystem { get; set; }
+    public string GenerationProfileJson { get; set; } = string.Empty;
+    public string GenerationProfileHash { get; set; } = string.Empty;
+    public int OrientationAttemptCount { get; set; }
+    public string AppliedRotationsJson { get; set; } = "[]";
+    public string? DerivedSourceObjectKey { get; set; }
+    public string? DerivedSourceSha256 { get; set; }
+    public string? ExtractionDraftJson { get; set; }
+    public string? ExtractionDraftHash { get; set; }
+    public string? PrintedTestName { get; set; }
+    public string? UserConfirmedBaseName { get; set; }
+    public string? FinalTemplateName { get; set; }
+    public GradeLevel FilenameGrade { get; set; } = GradeLevel.Unknown;
+    public GradeLevel PaperGrade { get; set; } = GradeLevel.Unknown;
+    public GradeLevel ResolvedGrade { get; set; } = GradeLevel.Unknown;
+    public GradeEvidence GradeEvidence { get; set; } = GradeEvidence.None;
+    public bool GradeConfirmedByUser { get; set; }
+    public string WarningsJson { get; set; } = "[]";
+    public string? TeacherNote { get; set; }
+    public string? CreatedTemplateId { get; set; }
+    public string? CreatedTemplateVersionId { get; set; }
+    public string? ExtractionJobId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public long Revision { get; set; } = 1;
+
+    public TemplateGenerationBatchEntity Batch { get; set; } = null!;
+    public TestTemplateEntity? CreatedTemplate { get; set; }
+    public TemplateVersionEntity? CreatedTemplateVersion { get; set; }
+    public BackgroundJobEntity? ExtractionJob { get; set; }
+    public TemplateGenerationDerivedSourceEntity? DerivedSource { get; set; }
+}
+
+/// <summary>
+/// Immutable provenance for a materialized page range and optional quarter turns.
+/// </summary>
+public sealed class TemplateGenerationDerivedSourceEntity
+{
+    public string Id { get; set; } = string.Empty;
+    public string UnitId { get; set; } = string.Empty;
+    public string ParentSourceId { get; set; } = string.Empty;
+    public int ParentFirstPage { get; set; }
+    public int ParentLastPage { get; set; }
+    public string OriginalContentSha256 { get; set; } = string.Empty;
+    public string DerivationType { get; set; } = "pageRange";
+    public string AppliedRotationsJson { get; set; } = "[]";
+    public string DerivationPolicyVersion { get; set; } = string.Empty;
+    public string DerivedContentSha256 { get; set; } = string.Empty;
+    public string? FileReferenceId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public TemplateGenerationUnitEntity Unit { get; set; } = null!;
+    public UploadSessionEntity ParentSource { get; set; } = null!;
+    public FileReferenceEntity? FileReference { get; set; }
 }
 
 public sealed class TemplateSourceEntity
@@ -115,6 +236,8 @@ public sealed class QuestionEntity : IRevisionedEntity, IUpdatedEntity
     public long MaxPointsMilli { get; set; }
     public long PointIncrementMilli { get; set; } = 1;
     public bool AllowNonKanji { get; set; }
+    public bool RequiresCompleteAnswer { get; set; }
+    public bool AnswerOrderInsensitive { get; set; }
     public string? KanjiPolicyNote { get; set; }
     public string? RubricText { get; set; }
     public string? TeacherNote { get; set; }
@@ -180,7 +303,15 @@ public sealed class TestSessionEntity : IRevisionedEntity, IUpdatedEntity
 {
     public string Id { get; set; } = string.Empty;
     public string TemplateVersionId { get; set; } = string.Empty;
+    public string CreationSource { get; set; } = "manual";
+    public string? RequestIdempotencyKey { get; set; }
+    public string? RequestFingerprint { get; set; }
     public string? TitleOverride { get; set; }
+    public string? TemplateTitleSnapshot { get; set; }
+    public string? TemplateSubjectSnapshot { get; set; }
+    public string? TemplateGradeLabelSnapshot { get; set; }
+    public string? TemplateCategorySnapshot { get; set; }
+    public string? TemplateCourseSnapshot { get; set; }
     public DateOnly TestDate { get; set; }
     public string? Course { get; set; }
     public string? ClassLabel { get; set; }
@@ -230,6 +361,9 @@ public sealed class UploadSessionEntity : IRevisionedEntity, IUpdatedEntity
     public DateTimeOffset ExpiresAt { get; set; }
     public string? SourceIpPrefix { get; set; }
     public string? IdempotencyKey { get; set; }
+    public string? OrderedScanBatchId { get; set; }
+    public int? OrderedScanInputOrdinal { get; set; }
+    public string? OrderedScanClientItemId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public long Revision { get; set; } = 1;
@@ -255,6 +389,9 @@ public sealed class SubmissionEntity : IRevisionedEntity, IUpdatedEntity
     public string UploadedByStaffUserId { get; set; } = string.Empty;
     public string? OriginalFileName { get; set; }
     public string? OriginalFileObjectId { get; set; }
+    public string? OrderedScanBatchId { get; set; }
+    public int? OrderedScanGroupOrdinal { get; set; }
+    public string? AssemblyManifestHash { get; set; }
     public DateTimeOffset? UploadCompletedAt { get; set; }
     public string? PreprocessingPipelineVersion { get; set; }
     public string? PreprocessingManifestHash { get; set; }

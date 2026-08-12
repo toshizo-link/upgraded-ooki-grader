@@ -65,6 +65,8 @@ Source: "{#OokiPackageRoot}\Test-OokiGraderPreflight.ps1"; DestDir: "{app}\insta
 Source: "{#OokiPackageRoot}\Upgrade-OokiGrader.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "{#OokiPackageRoot}\Restore-OokiGrader.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "{#OokiPackageRoot}\New-OokiGraderCertificate.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "{#OokiPackageRoot}\Install-OokiGraderOnSite.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "{#OokiPackageRoot}\New-OokiGraderPeerTrustPackage.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "{#OokiPackageRoot}\Install-OokiGraderPeerTrust.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "{#OokiPackageRoot}\OokiGrader.Windows.psm1"; DestDir: "{app}\installer"; Flags: ignoreversion
 
@@ -259,7 +261,7 @@ begin
   NetworkPage.Add('HTTPS ポート:', False);
   NetworkPage.Add('許可する校内サブネット (CIDR):', False);
   if not RegQueryStringValue(HKLM, ProductRegistryKey, 'DnsName', ExistingValue) then
-    ExistingValue := 'ooki-grader.local';
+    ExistingValue := 'ooki-grader.test';
   NetworkPage.Values[0] := ExistingValue;
   if not RegQueryStringValue(HKLM, ProductRegistryKey, 'HttpsPort', ExistingValue) then
     ExistingValue := '443';

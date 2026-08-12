@@ -39,7 +39,15 @@ public sealed class PreprocessingService : IPreprocessingService
         var inputSha256 = Fingerprinting.Sha256(bytes);
 
         IReadOnlyList<PreprocessedPage> pages;
-        if (mime == "image/tiff")
+        if (mime == "application/pdf")
+        {
+            pages = await ProcessPdfAsync(
+                    bytes,
+                    input,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else if (mime == "image/tiff")
         {
             pages = DecodeTiff(
                 bytes,
@@ -48,18 +56,11 @@ public sealed class PreprocessingService : IPreprocessingService
         }
         else
         {
-            IReadOnlyList<SKBitmap> decoded = mime switch
-            {
-                "application/pdf" => await RasterizePdfAsync(
-                        bytes,
-                        EffectiveMaximumPages(input),
-                        cancellationToken)
-                    .ConfigureAwait(false),
-                _ => DecodeImage(
-                    bytes,
-                    EffectiveMaximumPages(input),
-                    cancellationToken),
-            };
+            var decoded = DecodeImage(
+                bytes,
+                EffectiveMaximumPages(input),
+                EffectiveMaximumTotalPixels(input),
+                cancellationToken);
             try
             {
                 var processedPages = new List<PreprocessedPage>(decoded.Count);
@@ -72,13 +73,12 @@ public sealed class PreprocessingService : IPreprocessingService
                     ValidateDimensions(
                         pageBitmap.Width,
                         pageBitmap.Height,
-                        ref totalPixels);
+                        ref totalPixels,
+                        maximumTotalPixels: EffectiveMaximumTotalPixels(input));
                     var page = CreatePage(
                         pageBitmap,
                         index + 1,
-                        mime == "application/pdf"
-                            ? _options.PdfDpi
-                            : _options.ImageDpi);
+                        _options.ImageDpi);
                     ValidateArtifactBytes(
                         page,
                         EffectiveMaximumArtifactBytes(input),
@@ -286,9 +286,9 @@ public sealed class PreprocessingService : IPreprocessingService
             reference.NormalizedPng.Sha256);
     }
 
-    private async Task<IReadOnlyList<SKBitmap>> RasterizePdfAsync(
+    private async Task<IReadOnlyList<PreprocessedPage>> ProcessPdfAsync(
         byte[] pdfBytes,
-        int maximumPages,
+        PreprocessingInput input,
         CancellationToken cancellationToken)
     {
         await PdfRasterGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -327,6 +327,7 @@ public sealed class PreprocessingService : IPreprocessingService
                     exception);
             }
 
+            var maximumPages = EffectiveMaximumPages(input);
             if (pageCount is <= 0 || pageCount > maximumPages)
             {
                 throw new PreprocessingException(
@@ -334,13 +335,46 @@ public sealed class PreprocessingService : IPreprocessingService
                     $"The document page count must be between 1 and {maximumPages}.");
             }
 
-            var pageSizes = Conversion.GetPageSizes(pdfBytes, null);
-            long projectedTotalPixels = 0;
-            foreach (var size in pageSizes)
+            if (input.FirstPdfPage.HasValue != input.LastPdfPage.HasValue)
             {
+                throw new PreprocessingException(
+                    "page_range_invalid",
+                    "Both ends of a PDF page range must be provided together.");
+            }
+
+            var selectedFirstPage = input.FirstPdfPage ?? 1;
+            var selectedLastPage = input.LastPdfPage ?? pageCount;
+            if (selectedFirstPage < 1
+                || selectedLastPage < selectedFirstPage
+                || selectedLastPage > pageCount)
+            {
+                throw new PreprocessingException(
+                    "page_range_invalid",
+                    "The requested page range exceeds the PDF page count.");
+            }
+
+            var pageSizes = Conversion.GetPageSizes(pdfBytes, null).ToArray();
+            if (pageSizes.Length != pageCount)
+            {
+                throw new PreprocessingException(
+                    "pdf_invalid",
+                    "The PDF page-size manifest did not match its page count.");
+            }
+
+            var maximumTotalPixels = EffectiveMaximumTotalPixels(input);
+            long projectedTotalPixels = 0;
+            for (var pageIndex = selectedFirstPage - 1;
+                 pageIndex < selectedLastPage;
+                 pageIndex++)
+            {
+                var size = pageSizes[pageIndex];
                 var width = checked((int)Math.Ceiling(size.Width * _options.PdfDpi / 72d));
                 var height = checked((int)Math.Ceiling(size.Height * _options.PdfDpi / 72d));
-                ValidateDimensions(width, height, ref projectedTotalPixels);
+                ValidateDimensions(
+                    width,
+                    height,
+                    ref projectedTotalPixels,
+                    maximumTotalPixels: maximumTotalPixels);
             }
 
             var renderOptions = new RenderOptions
@@ -353,10 +387,15 @@ public sealed class PreprocessingService : IPreprocessingService
                 Grayscale = false,
                 BackgroundColor = SKColors.White,
             };
-            var pages = new List<SKBitmap>(pageCount);
+            var pages = new List<PreprocessedPage>(
+                selectedLastPage - selectedFirstPage + 1);
+            long totalPixels = 0;
+            long totalArtifactBytes = 0;
             try
             {
-                for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
+                for (var pageIndex = selectedFirstPage - 1;
+                     pageIndex < selectedLastPage;
+                     pageIndex++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var bitmap = Conversion.ToImage(
@@ -371,7 +410,23 @@ public sealed class PreprocessingService : IPreprocessingService
                             $"PDF page {pageIndex + 1} could not be rendered.");
                     }
 
-                    pages.Add(bitmap);
+                    using (bitmap)
+                    {
+                        ValidateDimensions(
+                            bitmap.Width,
+                            bitmap.Height,
+                            ref totalPixels,
+                            maximumTotalPixels: maximumTotalPixels);
+                        var page = CreatePage(
+                            bitmap,
+                            pageIndex - selectedFirstPage + 2,
+                            _options.PdfDpi);
+                        ValidateArtifactBytes(
+                            page,
+                            EffectiveMaximumArtifactBytes(input),
+                            ref totalArtifactBytes);
+                        pages.Add(page);
+                    }
                 }
 
                 return pages;
@@ -381,7 +436,8 @@ public sealed class PreprocessingService : IPreprocessingService
             {
                 foreach (var page in pages)
                 {
-                    page.Dispose();
+                    Array.Clear(page.NormalizedPng.Bytes);
+                    Array.Clear(page.ThumbnailPng.Bytes);
                 }
 
                 throw;
@@ -396,6 +452,7 @@ public sealed class PreprocessingService : IPreprocessingService
     private List<SKBitmap> DecodeImage(
         byte[] bytes,
         int maximumPages,
+        long maximumTotalPixels,
         CancellationToken cancellationToken)
     {
         using var data = SKData.CreateCopy(bytes);
@@ -412,11 +469,15 @@ public sealed class PreprocessingService : IPreprocessingService
         }
 
         long totalPixels = 0;
-        ValidateDimensions(codec.Info.Width, codec.Info.Height, ref totalPixels);
+        ValidateDimensions(
+            codec.Info.Width,
+            codec.Info.Height,
+            ref totalPixels,
+            maximumTotalPixels: maximumTotalPixels);
         if (frameCount > 1)
         {
             totalPixels = checked((long)codec.Info.Width * codec.Info.Height * frameCount);
-            if (totalPixels > _options.MaxTotalPixels)
+            if (totalPixels > maximumTotalPixels)
             {
                 throw new PreprocessingException(
                     "total_pixel_limit",
@@ -532,7 +593,7 @@ public sealed class PreprocessingService : IPreprocessingService
                         _options.MaxPixelsPerPage,
                         _options.MaxTiffPixelsPerPage),
                     Math.Min(
-                        _options.MaxTotalPixels,
+                        EffectiveMaximumTotalPixels(input),
                         _options.MaxTiffTotalPixels));
                 var raster = new int[checked(width * height)];
                 if (!image.ReadRGBAImageOriented(
@@ -1190,6 +1251,20 @@ public sealed class PreprocessingService : IPreprocessingService
             _options.MaxNormalizedArtifactBytes,
             input.MaximumNormalizedArtifactBytes
                 ?? _options.MaxNormalizedArtifactBytes);
+    }
+
+    private long EffectiveMaximumTotalPixels(PreprocessingInput input)
+    {
+        if (input.MaximumTotalPixels is <= 0)
+        {
+            throw new PreprocessingException(
+                "total_pixel_limit",
+                "The requested total pixel limit must be positive.");
+        }
+
+        return Math.Min(
+            _options.MaxTotalPixels,
+            input.MaximumTotalPixels ?? _options.MaxTotalPixels);
     }
 
     private static string NormalizeMimeType(string mimeType)

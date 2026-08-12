@@ -19,6 +19,9 @@ SCREEN_DIR = Path(__file__).resolve().parent / "screens"
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 PROCESSED_DIR = Path(__file__).resolve().parent / "processed"
 OUTPUT = ROOT / "output" / "pdf" / "ooki-grader-user-guide-ja.pdf"
+CURRENT_AI_SCREEN = (
+    ROOT / "output" / "playwright" / "manual-20260810" / "41-admin-ai-one-step.png"
+)
 FONT_PATH = (
     ROOT
     / "src"
@@ -785,7 +788,7 @@ def build() -> None:
         c,
         14,
         64,
-        "3  資料区分が違う場合だけ変更　　4  完全一致した公開済み版はそのまま再利用",
+        "3  資料区分が違う場合だけ変更　　4  完全一致した確定済み版はそのまま再利用",
         size=7.8,
         color=DARK,
     )
@@ -796,7 +799,7 @@ def build() -> None:
         182,
         28,
         "先生が直すのは例外だけ",
-        "資料区分は5秒間だけ修正できます。AI完了後は、安全に一括確認できる提案をまとめて採用し、正答不足・低信頼・記述式などだけを個別確認します。公開は先生が行います。",
+        "資料区分は5秒間だけ修正できます。AI完了後は、安全に一括確認できる提案をまとめて採用し、正答不足・低信頼・記述式などだけを個別確認します。受付開始は先生が行います。",
         tone="info",
     )
     new_page(c)
@@ -853,8 +856,8 @@ def build() -> None:
     )
     new_page(c)
 
-    # 8. Template editor and publishing
-    section_header(c, "07  ひな形編集", "採点方法・座標・公開を確認する", 8)
+    # 8. Template editor and reception start
+    section_header(c, "07  ひな形編集", "採点方法を確認して受付を始める", 8)
     editor_rect = place_image(
         c,
         SCREEN_DIR / "09-template-editor-q5.png",
@@ -875,7 +878,7 @@ def build() -> None:
         50,
     )
     rounded_box(c, 108, 91, 88, 50, fill=WHITE, stroke=BORDER)
-    draw_text(c, 114, 132, "公開前チェック", size=9.2, color=DARK)
+    draw_text(c, 114, 132, "受付開始前チェック", size=9.2, color=DARK)
     bullet_list(
         c,
         [
@@ -901,14 +904,14 @@ def build() -> None:
         31,
         182,
         34,
-        "公開後の版は変更できません",
-        "検証でブロック項目がないことを確認して公開します。あとで修正するときは新しい版を作成します。採点開始済みの答案は、開始時の版を使い続けます。",
+        "受付開始後の版は変更できません",
+        "検証でブロック項目がないことを確認し「受付を開始」を押します。同じ操作で版が確定し、答案受付画面へ移ります。あとで修正するときは新しい版を作成し、開始済みの答案は元の版を使い続けます。",
         tone="warn",
     )
     new_page(c)
 
     # 9. Sessions
-    section_header(c, "08  テスト実施", "受付を作成して名簿を設定する", 9)
+    section_header(c, "08  テスト実施", "2回目以降の受付を追加する", 9)
     sessions_rect = place_image(
         c,
         SCREEN_DIR / "11b-sessions-desktop.png",
@@ -932,9 +935,9 @@ def build() -> None:
     bullet_list(
         c,
         [
-            "公開済みのひな形を選び、実施名・実施日・クラス・コースを入力します。",
-            "費用優先は待ち時間が長くなる場合があります。優先処理は費用が高くなる可能性があります。",
-            "「作成後すぐに受付」をオンにすると、スキャン担当もアップロードできます。",
+            "確定済みのひな形を選び、試験名・教科・学年・カテゴリ・コースを確認します。",
+            "実施日と、必要な場合だけ対象クラスを入力します。試験名・コース・処理方法の再入力は不要です。",
+            "「受付を開始」を押すと、スキャン担当もすぐアップロードできます。",
             "受付を終了すると新規アップロードは止まりますが、送信済み処理は続きます。",
         ],
         14,
@@ -1238,12 +1241,12 @@ def build() -> None:
     section_header(
         c,
         "15  AI管理",
-        "Gemini 3.5 Flash-Lite の実接続を確認する",
+        "Geminiを確認し、4機能を一括で利用可能にする",
         16,
     )
     paragraph(
         c,
-        "分離したデモ環境で、通常APIへの実接続と「Gemini ひな形抽出」プロファイルの有効化を確認しました。",
+        "管理者が候補キーを保存前に確認し、成功時だけ4つの現行AI機能を一括で利用可能にします。先生はAPIキーやAI機能の承認・有効化を扱いません。",
         14,
         257,
         182,
@@ -1253,12 +1256,11 @@ def build() -> None:
     )
     ai_connection_rect = place_image(
         c,
-        SCREEN_DIR / "29-admin-ai-connected.png",
+        CURRENT_AI_SCREEN,
         14,
         137,
         88,
         108,
-        crop=(280, 300, 1410, 800),
     )
     marker(
         c,
@@ -1268,12 +1270,11 @@ def build() -> None:
     )
     ai_profile_rect = place_image(
         c,
-        SCREEN_DIR / "30-admin-ai-profiles-active.png",
+        CURRENT_AI_SCREEN,
         108,
         137,
         88,
         108,
-        crop=(280, 1500, 1410, 2020),
     )
     marker(
         c,
@@ -1281,8 +1282,8 @@ def build() -> None:
         ai_profile_rect[0] + 30,
         ai_profile_rect[1] + 73,
     )
-    label_chip(c, 1, "通常API: passed", 14, 122, 82)
-    label_chip(c, 2, "ひな形抽出: 有効", 108, 122, 88)
+    label_chip(c, 1, "接続・能力: 成功", 14, 122, 82)
+    label_chip(c, 2, "4機能: 利用可能", 108, 122, 88)
     callout(
         c,
         14,
@@ -1299,8 +1300,8 @@ def build() -> None:
         75,
         88,
         35,
-        "Batch は使っていません",
-        "任意の Batch 接続確認はこのデモでは失敗しました。今回の実行は passed の通常APIだけを使っています。",
+        "現行は標準経路だけ",
+        "新しい処理は耐久キューの標準APIを使います。Batch、優先度、急送などの選択肢は管理者や先生へ表示しません。",
         tone="warn",
     )
     callout(
@@ -1309,8 +1310,8 @@ def build() -> None:
         29,
         182,
         34,
-        "評価記録はデモ専用",
-        "プロファイル有効化に使った合成評価記録は画面説明用です。学校導入前に必要な実答案のゴールデンセット検証を満たすものではなく、秘密値そのものも本書には掲載していません。",
+        "利用可能でも先生確認は必要",
+        "能力確認は精度保証ではありません。固定サンプル評価はリリース判断で別に行い、答案受付の開始と答案の確定は先生が元画像を確認して行います。秘密値は本書に掲載しません。",
         tone="info",
     )
     new_page(c)
@@ -1382,8 +1383,8 @@ def build() -> None:
         21,
         182,
         20,
-        "公開は先生が決める",
-        "安全な客観式提案はまとめて確認できますが、正答不足・低信頼・記述式・領域不明は個別確認を残します。先生が検証してから公開し、AIは自動公開しません。",
+        "受付開始は先生が決める",
+        "原本と下書きを照合したら「すべての問題を確認」を使えます。入力不足など構造上の問題だけは理由付きで残るため、直して再確認します。確認だけでは受付は始まりません。",
         tone="warn",
     )
     new_page(c)
@@ -1436,7 +1437,7 @@ def build() -> None:
         88,
         35,
         "問題が解決しないとき",
-        "画面の相関ID、実施名、ファイル名、発生時刻、操作内容を控えます。失敗ジョブは原因を確認してから安全な再試行を使い、同じ答案を何度も送りません。",
+        "画面の相関ID、試験名、実施日、ファイル名、発生時刻、操作内容を控えます。失敗ジョブは原因を確認してから安全な再試行を使い、同じ答案を何度も送りません。",
         tone="info",
     )
     draw_text(
@@ -1608,7 +1609,7 @@ def build_ai_first_legacy() -> None:
         176,
         31,
         "このガイドで覚えること",
-        "資料を一度まとめて追加し、Geminiの下書きを待ち、安全な提案をまとめて確認します。先生が個別に触るのは正答不足・低信頼・記述式などの例外だけです。",
+        "資料を追加してGeminiの下書きを待ち、正解と採点基準を原本と照合します。通常はAI判定・部分点1点・必ず先生確認オフのまま使い、最後にすべての問題を確認します。",
         tone="safe",
     )
     draw_text(
@@ -1619,7 +1620,7 @@ def build_ai_first_legacy() -> None:
         size=7.6,
         color=MUTED,
     )
-    draw_right(c, 195, 25, "2026年8月5日", size=7.6, color=MUTED)
+    draw_right(c, 195, 25, "2026年8月9日", size=7.6, color=MUTED)
     footer(c, 1)
     new_page(c)
 
@@ -1627,7 +1628,7 @@ def build_ai_first_legacy() -> None:
     section_header(c, "01  最短ルート", "先生が行うのは3つだけ", 2)
     paragraph(
         c,
-        "通常運用では、設定画面を順番に埋める必要はありません。ファイルをまとめて追加し、要確認だけを処理し、最後に公開・確定します。",
+        "通常運用では、設定画面を順番に埋める必要はありません。ファイルをまとめて追加し、要確認だけを処理し、最後に受付を開始します。",
         14,
         257,
         182,
@@ -1658,8 +1659,8 @@ def build_ai_first_legacy() -> None:
     automation_step(
         c,
         3,
-        "先生が公開・確定",
-        "AIは下書きと提案を作ります。ひな形の公開、答案の割り当て、最終確定は職員が行います。",
+        "先生が受付開始・確定",
+        "AIは下書きと提案を作ります。答案受付の開始、答案の割り当て、最終確定は職員が行います。",
         140,
         211,
         56,
@@ -1688,7 +1689,7 @@ def build_ai_first_legacy() -> None:
         [
             "任意の基本情報欄は、推定が誤っている時だけ開く",
             "記入済み答案は、正答か生徒答案かだけ確認する",
-            "同じ資料が見つかったら、既存の公開済み版を使う",
+            "同じ資料が見つかったら、既存の確定済み版を使う",
             "処理中に待たず、ダッシュボードへ戻る",
         ],
         20,
@@ -1707,7 +1708,7 @@ def build_ai_first_legacy() -> None:
             "正答資料がない、またはAIの確信が低い",
             "記述式、部分点、複数の解釈があり得る",
             "氏名候補が複数、または読み取り不能",
-            "公開・結果確定など取り消しに注意が必要",
+            "受付開始・結果確定など取り消しに注意が必要",
         ],
         114,
         122,
@@ -1839,7 +1840,7 @@ def build_ai_first_legacy() -> None:
     section_header(c, "03  管理者のみ", "Geminiを一度だけ接続する", 4)
     paragraph(
         c,
-        "先生はAPIキーを扱いません。管理者が接続テスト、評価記録、価格、予算を設定すると、承認済みAIプロファイルが各画面から自動的に使われます。",
+        "先生はAPIキーを扱いません。管理者が候補キーを保存前に確認し、成功した場合だけ、ひな形・氏名・採点・再確認の4機能を一括で利用可能にします。",
         14,
         257,
         182,
@@ -1849,21 +1850,19 @@ def build_ai_first_legacy() -> None:
     )
     connection_rect = place_image(
         c,
-        SCREEN_DIR / "29-admin-ai-connected.png",
+        CURRENT_AI_SCREEN,
         14,
         141,
         88,
         101,
-        crop=(280, 444, 486, 681),
     )
     profile_rect = place_image(
         c,
-        SCREEN_DIR / "30-admin-ai-profiles-active.png",
+        CURRENT_AI_SCREEN,
         108,
         141,
         88,
         101,
-        crop=(280, 1530, 1410, 2020),
     )
     marker(
         c,
@@ -1877,16 +1876,16 @@ def build_ai_first_legacy() -> None:
         profile_rect[0] + profile_rect[2] * 0.70,
         profile_rect[1] + profile_rect[3] * 0.18,
     )
-    label_chip(c, 1, "通常APIが passed", 14, 126, 82)
-    label_chip(c, 2, "ひな形抽出が使用中", 108, 126, 88)
+    label_chip(c, 1, "接続・能力が成功", 14, 126, 82)
+    label_chip(c, 2, "4機能が利用可能", 108, 126, 88)
     rounded_box(c, 14, 73, 182, 41, fill=WHITE, stroke=BORDER)
     draw_text(c, 20, 104, "初回チェック", size=9.5, color=DARK)
     bullet_list(
         c,
         [
-            "管理 > Gemini AI でAPIキーを登録し、「接続・能力テスト」を実行",
-            "gemini-3.5-flash-lite と通常APIの passed を確認",
-            "学校の評価記録を承認後、ひな形・氏名・採点プロファイルを有効化",
+            "管理 > AI設定でAPIキーを入力し、「接続を確認して有効化」を実行",
+            "保存前に認証・モデル・画像・構造化出力・利用量・画像タスクを確認",
+            "成功時だけ暗号化保存し、4機能すべての「利用できます」を確認",
             "公式価格スナップショットと日次・月次の予算上限を保存",
         ],
         20,
@@ -1903,7 +1902,7 @@ def build_ai_first_legacy() -> None:
         88,
         31,
         "秘密値は表示されません",
-        "画面・監査ログ・本書にはAPIキーそのものを出しません。交換時も管理者が新しいキーへ置き換えます。",
+        "画面・監査ログ・本書にはAPIキーそのものを出しません。交換に失敗した場合は以前の正常なキーと4機能が保たれます。",
         tone="safe",
     )
     callout(
@@ -1912,8 +1911,8 @@ def build_ai_first_legacy() -> None:
         30,
         88,
         31,
-        "通常APIが標準",
-        "このガイドの実演は通常APIです。Batchは任意で、能力テストに合格した環境だけで有効にします。",
+        "標準APIだけを使用",
+        "新しい処理は耐久キューの標準APIだけを使います。Batch、優先度、急送などを選ぶ必要はありません。",
         tone="info",
     )
     new_page(c)
@@ -1978,7 +1977,7 @@ def build_ai_first_legacy() -> None:
         182,
         25,
         "分類だけ確認する",
-        "題名・教科などの任意欄は通常開きません。記入済み答案が模範解答でない時だけ「AIが正答を作成」を選びます。同じファイル・同じ資料区分の公開版だけが再利用候補になります。",
+        "題名・教科などの任意欄は通常開きません。記入済み答案が模範解答でない時だけ「AIが正答を作成」を選びます。同じファイル・同じ資料区分の確定済み版だけが再利用候補になります。",
         tone="safe",
     )
     new_page(c)
@@ -2058,7 +2057,7 @@ def build_ai_first_legacy() -> None:
     new_page(c)
 
     # 7. Exception-only review
-    section_header(c, "06  例外レビュー", "「すべて」ではなく「要確認」だけを見る", 7)
+    section_header(c, "06  問題確認", "揃った問題をまとめて確認し、不足だけ直す", 7)
     editor_rect = place_image(
         c,
         SCREEN_DIR / "32b-template-editor-ai-proposal-wide.png",
@@ -2084,13 +2083,13 @@ def build_ai_first_legacy() -> None:
     label_chip(c, 1, "要確認フィルター", 14, 97, 82)
     label_chip(c, 2, "提案を採用", 108, 97, 82)
     rounded_box(c, 14, 48, 88, 37, fill=MINT, stroke=GREEN)
-    draw_text(c, 20, 75, "まとめて確認できるもの", size=9, color=DARK)
+    draw_text(c, 20, 75, "確認済みにできるもの", size=9, color=DARK)
     bullet_list(
         c,
         [
-            "選択式・真偽・数値・完全一致短答",
-            "正答根拠があり、確信度が高い",
-            "内容の矛盾や警告がない",
+            "問題文・正解・採点基準が揃っている",
+            "通常のAI注意・確信度表示は先生が読んだ",
+            "問題ごとの確認権限がある",
         ],
         20,
         66,
@@ -2101,13 +2100,13 @@ def build_ai_first_legacy() -> None:
         dot_color=GREEN,
     )
     rounded_box(c, 108, 48, 88, 37, fill=ORANGE_PALE, stroke=ORANGE)
-    draw_text(c, 114, 75, "個別確認に残るもの", size=9, color=DARK)
+    draw_text(c, 114, 75, "理由付きで残るもの", size=9, color=DARK)
     bullet_list(
         c,
         [
-            "記述式・部分点・正答不足",
-            "低信頼・未対応形式・内容不足",
-            "先生の判断を必須にした問題",
+            "問題文・必須正解・採点基準の不足",
+            "設問番号の重複・不正な設定",
+            "版全体に関係する受付開始前の問題",
         ],
         114,
         66,
@@ -2124,7 +2123,7 @@ def build_ai_first_legacy() -> None:
         182,
         17,
         "最後だけ先生",
-        "例外を解決したら「検証」を実行し、「確認して公開」を押します。AIが自動公開することはありません。",
+        "「すべての問題を確認」は確認済みの印を付けるだけです。残件を直したあと先生が受付を開始し、AIが自動で受付を始めることはありません。",
         tone="safe",
     )
     new_page(c)
@@ -2195,7 +2194,7 @@ def build_ai_first_legacy() -> None:
     section_header(c, "08  答案処理", "まとめてアップロードし、AIへ流す", 9)
     paragraph(
         c,
-        "公開済みひな形からテスト実施を1回作り、答案をまとめて追加します。送信後は、画像処理から採点候補までバックグラウンドで進みます。",
+        "確認済みひな形で「受付を開始」し、答案をまとめて追加します。送信後は、画像処理から採点候補までバックグラウンドで進みます。",
         14,
         257,
         182,
@@ -2356,12 +2355,11 @@ def build_ai_first_legacy() -> None:
     section_header(c, "10  AI運用", "費用・失敗・再試行を管理する", 11)
     metrics_rect = place_image(
         c,
-        SCREEN_DIR / "29-admin-ai-connected.png",
+        CURRENT_AI_SCREEN,
         14,
         154,
         88,
         91,
-        crop=(850, 280, 1410, 1120),
     )
     jobs_rect = place_image(
         c,
@@ -2427,7 +2425,7 @@ def build_ai_first_legacy() -> None:
             "問題用紙 + 手元の解答資料を同時に追加",
             "資料区分が違う時だけ修正",
             "生徒答案なら「AIが正答を作成」を選択",
-            "完全一致が出たら既存の公開済み版を使用",
+            "完全一致が出たら既存の確定済み版を使用",
             "要確認だけ処理し、安全な客観式は一括確認",
         ],
         20,
@@ -2491,7 +2489,7 @@ def build_ai_first_legacy() -> None:
     draw_text(c, 20, 45, "困ったときに控える情報", size=8.7, color=DARK)
     paragraph(
         c,
-        "実施名 / ファイル名 / 発生時刻 / 画面の状態 / 相関ID / 行った操作。APIキーや生徒情報をメールへ貼り付けないでください。",
+        "試験名 / 実施日 / ファイル名 / 発生時刻 / 画面の状態 / 相関ID / 行った操作。APIキーや生徒情報をメールへ貼り付けないでください。",
         20,
         37,
         168,
@@ -2535,13 +2533,13 @@ def build_ai_first() -> None:
         c,
         18,
         221,
-        "資料をまとめて追加し、先生は要修正だけ確認",
-        size=11.5,
+        "ひな形分割・採点ルール・1ページPDFの順番組み立て",
+        size=10.8,
         color=MUTED,
     )
     cover_rect = place_image(
         c,
-        SCREEN_DIR / "32b-template-editor-ai-proposal-wide.png",
+        SCREEN_DIR / "36-template-step-plan.png",
         16,
         83,
         178,
@@ -2567,7 +2565,7 @@ def build_ai_first() -> None:
         176,
         31,
         "このガイドで行うこと",
-        "問題用紙からAI下書きを作り、元の資料と見比べて公開します。その後は答案をまとめて追加し、AIが迷った項目だけを確認します。",
+        "試験タイプと採点ルールを確認して受付を開始し、1ページPDFをスキャン順にまとめて採点します。使わないひな形は履歴を残して整理できます。",
         tone="safe",
     )
     draw_text(
@@ -2578,7 +2576,7 @@ def build_ai_first() -> None:
         size=7.6,
         color=MUTED,
     )
-    draw_right(c, 195, 25, "2026年8月5日", size=7.6, color=MUTED)
+    draw_right(c, 195, 25, "2026年8月11日", size=7.6, color=MUTED)
     footer(c, 1)
     new_page(c)
 
@@ -2597,8 +2595,8 @@ def build_ai_first() -> None:
     automation_step(
         c,
         1,
-        "資料を一度に追加",
-        "問題用紙と解答資料をまとめて選び、分類が違う時だけ直します。",
+        "種類と教科を先に選ぶ",
+        "HOP・STEPなどの試験タイプと教科を選んでからPDFを1件追加します。",
         14,
         212,
         56,
@@ -2607,8 +2605,8 @@ def build_ai_first() -> None:
     automation_step(
         c,
         2,
-        "AI下書きを確認",
-        "元の資料と見比べ、要修正だけ直して「公開する」を押します。",
+        "固定の作成予定を確認",
+        "ページ範囲とSTEPの -1 / -2 / -3 を確認して生成を開始します。",
         77,
         212,
         56,
@@ -2617,8 +2615,8 @@ def build_ai_first() -> None:
     automation_step(
         c,
         3,
-        "答案の例外を確認",
-        "答案は自動採点へ進みます。採点待ち・確認の件数だけ処理します。",
+        "学年と自動名称を確認",
+        "学年を先に確定し、自動名称と警告を確認してからひな形を作成します。",
         140,
         212,
         56,
@@ -2629,12 +2627,12 @@ def build_ai_first() -> None:
     bullet_list(
         c,
         [
-            "問題用紙と解答資料をまとめて追加",
-            "資料の種類は、提案が違う時だけ変更",
-            "「元の資料」とAI下書きを見比べる",
-            "左の「要修正」だけを直す",
-            "警告のない問題は「まとめて確認」",
-            "最後に「公開する」",
+            "試験タイプと教科を先に選択",
+            "「その他」だけ通常／穴埋めも選択",
+            "PDFは1件ずつ追加",
+            "HOPは1ページずつ、STEPは2ページずつ",
+            "学年を確定し、自動名称を確認",
+            "AI判定・正解・1点刻みを確認して受付開始",
         ],
         20,
         172,
@@ -2649,9 +2647,10 @@ def build_ai_first() -> None:
     bullet_list(
         c,
         [
-            "「答案受付を開始」で公開済みひな形を選択",
-            "答案をまとめてアップロード",
-            "氏名・解答の読み取りと採点は自動",
+            "ひな形編集画面で「受付を開始」を押す",
+            "1ページPDFを生徒ごとの順番に並べる",
+            "答案区切りを確認して順番を固定",
+            "氏名は1ページ目、採点は全ページから自動",
             "「採点待ち・確認」の件数だけ処理",
             "未解決がなくなった答案を確定",
         ],
@@ -2669,17 +2668,17 @@ def build_ai_first() -> None:
         34,
         182,
         49,
-        "迷ったら、この2つのボタン",
-        "ひな形の内容が整ったら「公開する」。答案を受け取る準備ができたら「答案受付を開始」。途中のAI処理は画面を閉じても続きます。",
+        "迷ったら、このボタン",
+        "ひな形の内容が整ったら「受付を開始」。版の確定と受付画面の作成は同時に完了します。全ページの受信後は画面を閉じても処理が続きます。",
         tone="safe",
     )
     new_page(c)
 
-    # 3. Source classifications
-    section_header(c, "02  資料の種類", "4つから選ぶだけ", 3)
+    # 3. Deterministic routing settings
+    section_header(c, "02  テスト設定", "PDFより先に種類と教科を選ぶ", 3)
     paragraph(
         c,
-        "AIが資料の種類を提案します。先生は提案が違う時だけ変更してください。とくに、記入済み答案を模範解答として扱わないことが重要です。",
+        "新しい作成画面では、PDFの内容から試験タイプを自動判定しません。先生が選んだ設定を信頼し、その設定だけで分割方法とAI指示を決めます。",
         14,
         257,
         182,
@@ -2687,95 +2686,9 @@ def build_ai_first() -> None:
         leading=4.5,
         color=MUTED,
     )
-    exam_rect = place_image(
+    settings_rect = place_image(
         c,
-        FIXTURE_DIR / "rendered" / "blank.png",
-        14,
-        91,
-        70,
-        151,
-        border=BLUE,
-    )
-    marker(
-        c,
-        1,
-        exam_rect[0] + exam_rect[2] * 0.28,
-        exam_rect[1] + exam_rect[3] * 0.71,
-    )
-    marker(
-        c,
-        2,
-        exam_rect[0] + exam_rect[2] * 0.29,
-        exam_rect[1] + exam_rect[3] * 0.48,
-    )
-    source_rows = [
-        (
-            "問題のみ（未記入）",
-            "空欄の問題用紙です。AIが問題を読み、正解候補を作ります。",
-            BLUE_PALE,
-            BLUE,
-        ),
-        (
-            "模範解答入り",
-            "記入された答えを、かな・漢字も画像どおり正解として読み取ります。",
-            MINT,
-            GREEN,
-        ),
-        (
-            "記入済み答案（AIが正答を作成）",
-            "書かれた答えは正解に使わず、AIが問題を独立して解きます。",
-            ORANGE_PALE,
-            ORANGE,
-        ),
-        (
-            "別紙の模範解答",
-            "別紙に正解、配点、採点の考え方が載っている資料です。",
-            WHITE,
-            GREEN,
-        ),
-    ]
-    for index, (title, body, fill, accent) in enumerate(source_rows):
-        y = 210 - index * 38
-        rounded_box(c, 92, y, 104, 32, fill=fill, stroke=accent)
-        marker(c, index + 1, 99, y + 22)
-        draw_text(c, 107, y + 22, title, size=8.5, color=DARK)
-        paragraph(
-            c,
-            body,
-            107,
-            y + 13,
-            82,
-            size=7.1,
-            leading=3.6,
-            color=MUTED,
-        )
-    callout(
-        c,
-        14,
-        28,
-        182,
-        47,
-        "記入済み答案で迷った時",
-        "生徒の答案、途中まで解いた用紙、正誤が保証されていない用紙は「記入済み答案（AIが正答を作成）」を選びます。書かれた内容は正解として使われません。",
-        tone="warn",
-    )
-    new_page(c)
-
-    # 4. Upload and classification
-    section_header(c, "03  ひな形を作成", "資料をまとめて追加し、分類だけ確認", 4)
-    paragraph(
-        c,
-        "「テストひな形を作成」でPDF・画像をまとめて追加します。アップロード後、資料の種類が自動で提案されます。",
-        14,
-        257,
-        182,
-        size=8.8,
-        leading=4.5,
-        color=MUTED,
-    )
-    role_rect = place_image(
-        c,
-        SCREEN_DIR / "34-template-role-review.png",
+        SCREEN_DIR / "35-template-settings-first.png",
         14,
         132,
         182,
@@ -2785,47 +2698,36 @@ def build_ai_first() -> None:
     marker(
         c,
         1,
-        role_rect[0] + role_rect[2] * 0.62,
-        role_rect[1] + role_rect[3] * 0.28,
+        settings_rect[0] + settings_rect[2] * 0.43,
+        settings_rect[1] + settings_rect[3] * 0.55,
     )
     marker(
         c,
         2,
-        role_rect[0] + role_rect[2] * 0.73,
-        role_rect[1] + role_rect[3] * 0.16,
+        settings_rect[0] + settings_rect[2] * 0.72,
+        settings_rect[1] + settings_rect[3] * 0.55,
     )
-    label_chip(c, 1, "ファイルごとの「資料の種類」を確認", 14, 118, 88)
-    label_chip(c, 2, "違う時だけ選び直す", 108, 118, 88)
-    rounded_box(c, 14, 62, 182, 43, fill=WHITE, stroke=BORDER)
-    draw_text(c, 20, 95, "画面に表示される4つの選択肢", size=9.2, color=DARK)
-    draw_text(c, 20, 83, "問題のみ（未記入）", size=7.7, color=BLUE)
-    draw_text(c, 75, 83, "模範解答入り", size=7.7, color=GREEN)
-    draw_text(
-        c,
-        20,
-        72,
-        "記入済み答案（AIが正答を作成）",
-        size=7.7,
-        color=ORANGE,
-    )
-    draw_text(c, 115, 72, "別紙の模範解答", size=7.7, color=GREEN)
-    callout(
-        c,
-        14,
-        27,
-        182,
-        25,
-        "入力を増やさない",
-        "通常は題名や教科を手入力しません。自動提案が違う項目だけ直すと、そのままAI下書きへ進みます。",
-        tone="safe",
-    )
+    label_chip(c, 1, "試験タイプを選択", 14, 118, 88)
+    label_chip(c, 2, "教科を選択", 108, 118, 88)
+    rounded_box(c, 14, 70, 88, 35, fill=BLUE_PALE, stroke=BLUE)
+    draw_text(c, 20, 95, "HOP", size=9, color=DARK)
+    paragraph(c, "1ページを1件として作成します。", 20, 84, 76, size=7.2, leading=3.6)
+    rounded_box(c, 108, 70, 88, 35, fill=MINT, stroke=GREEN)
+    draw_text(c, 114, 95, "STEP", size=9, color=DARK)
+    paragraph(c, "2ページを1件、6ページごとに3件を作成します。", 114, 84, 76, size=7.2, leading=3.6)
+    rounded_box(c, 14, 27, 88, 35, fill=WHITE, stroke=BORDER)
+    draw_text(c, 20, 52, "クラス分けテスト", size=9, color=DARK)
+    paragraph(c, "PDF全体を分けずに1件として作成します。", 20, 41, 76, size=7.2, leading=3.6)
+    rounded_box(c, 108, 27, 88, 35, fill=ORANGE_PALE, stroke=ORANGE)
+    draw_text(c, 114, 52, "その他", size=9, color=DARK)
+    paragraph(c, "PDF全体で1件。通常／穴埋めも選びます。", 114, 41, 76, size=7.2, leading=3.6)
     new_page(c)
 
-    # 5. Compare source and AI draft
-    section_header(c, "04  AI下書きを確認", "元の資料と見比べ、要修正だけ直す", 5)
+    # 4. Upload and deterministic plan
+    section_header(c, "03  ひな形を作成", "設定 → PDF → 固定の作成予定", 4)
     paragraph(
         c,
-        "画面は「問題一覧」「元の資料」「選択中の問題」の3つだけです。AIがページ全体と自動拡大を照合するため、先生が問題枠や座標を描く必要はありません。",
+        "設定が決まるとPDF欄が表示されます。PDFを1件追加すると、サーバーがページ数を確認し、AIを呼ぶ前に固定の作成予定を表示します。",
         14,
         257,
         182,
@@ -2833,94 +2735,47 @@ def build_ai_first() -> None:
         leading=4.5,
         color=MUTED,
     )
-    editor_rect = place_image(
+    plan_rect = place_image(
         c,
-        SCREEN_DIR / "32b-template-editor-ai-proposal-wide.png",
+        SCREEN_DIR / "36-template-step-plan.png",
         14,
-        116,
+        85,
         182,
-        128,
+        158,
+        crop=(258, 65, 1440, 1365),
         border=GREEN,
     )
     marker(
         c,
         1,
-        editor_rect[0] + editor_rect[2] * 0.18,
-        editor_rect[1] + editor_rect[3] * 0.72,
+        plan_rect[0] + plan_rect[2] * 0.47,
+        plan_rect[1] + plan_rect[3] * 0.73,
     )
     marker(
         c,
         2,
-        editor_rect[0] + editor_rect[2] * 0.51,
-        editor_rect[1] + editor_rect[3] * 0.70,
+        plan_rect[0] + plan_rect[2] * 0.56,
+        plan_rect[1] + plan_rect[3] * 0.23,
     )
-    marker(
-        c,
-        3,
-        editor_rect[0] + editor_rect[2] * 0.86,
-        editor_rect[1] + editor_rect[3] * 0.65,
-    )
-    marker(
-        c,
-        4,
-        editor_rect[0] + editor_rect[2] * 0.92,
-        editor_rect[1] + editor_rect[3] * 0.91,
-    )
-    label_chip(c, 1, "問題一覧", 14, 102, 40)
-    label_chip(c, 2, "元の資料", 57, 102, 40)
-    label_chip(c, 3, "選択中の問題", 100, 102, 49)
-    label_chip(c, 4, "公開する", 152, 102, 44)
-    rounded_box(c, 14, 51, 88, 38, fill=ORANGE_PALE, stroke=ORANGE)
-    draw_text(c, 20, 79, "要修正だけ直す", size=9, color=DARK)
-    bullet_list(
-        c,
-        [
-            "左の「要修正」から順に開く",
-            "右側で問題文・正解・配点を修正",
-            "複数空欄や繰り返し番号も原本と照合",
-        ],
-        20,
-        69,
-        76,
-        size=7.1,
-        leading=3.6,
-        gap=0.8,
-        dot_color=ORANGE,
-    )
-    rounded_box(c, 108, 51, 88, 38, fill=MINT, stroke=GREEN)
-    draw_text(c, 114, 79, "警告なしはまとめて確認", size=9, color=DARK)
-    bullet_list(
-        c,
-        [
-            "元の資料とAI下書きを見比べる",
-            "警告のない問題は「まとめて確認」",
-            "要修正の問題は対象外のまま残る",
-        ],
-        114,
-        69,
-        76,
-        size=7.1,
-        leading=3.6,
-        gap=0.8,
-        dot_color=GREEN,
-    )
+    label_chip(c, 1, "種類・教科を確認してPDFを追加", 14, 70, 88)
+    label_chip(c, 2, "ページ範囲と枝番を確認", 108, 70, 88)
     callout(
         c,
         14,
-        23,
+        25,
         182,
-        18,
-        "公開",
-        "内容が整ったら、画面右上の「公開する」を押します。",
+        31,
+        "STEPのページ数",
+        "ひな形作成では6の倍数ページだけ受け付け、2ページずつ -1／-2／-3 を作ります。3種類は別々のテストです。答案受付では、選んだ1種類につき2ページを1答案にします。",
         tone="safe",
     )
     new_page(c)
 
-    # 6. Start receiving answers
-    section_header(c, "05  答案受付", "「答案受付を開始」からまとめて追加", 6)
+    # 5. Final check before creating templates
+    section_header(c, "04  生成結果の最終確認", "学年を確定し、自動名称を確認", 5)
     paragraph(
         c,
-        "ひな形を公開したら「テスト実施」を開き、「答案受付を開始」を押します。公開済みひな形、実施名、実施日を選ぶだけです。",
+        "全件の生成後、まず学年を確定します。HOP・STEP・クラス分けの名称は教科・学年・分割番号から自動作成され編集できません。AIが読んだ紙面名は参照だけに使います。",
         14,
         257,
         182,
@@ -2928,77 +2783,54 @@ def build_ai_first() -> None:
         leading=4.5,
         color=MUTED,
     )
-    automation_step(
+    final_rect = place_image(
+        c,
+        SCREEN_DIR / "37-template-final-check.png",
+        14,
+        91,
+        182,
+        153,
+        crop=(258, 260, 1440, 1350),
+        border=GREEN,
+    )
+    marker(
         c,
         1,
-        "ひな形を選ぶ",
-        "公開済みのひな形を選び、実施名と実施日を入力します。",
-        14,
-        211,
-        56,
-        tone="info",
+        final_rect[0] + final_rect[2] * 0.52,
+        final_rect[1] + final_rect[3] * 0.76,
     )
-    automation_step(
+    marker(
         c,
         2,
-        "受付を開始",
-        "「答案受付を開始」で追加画面を開きます。",
-        77,
-        211,
-        56,
-        tone="safe",
+        final_rect[0] + final_rect[2] * 0.74,
+        final_rect[1] + final_rect[3] * 0.27,
     )
-    automation_step(
+    marker(
         c,
         3,
-        "答案をまとめて追加",
-        "PDF・画像を一度に選び、その後はAIに任せます。",
-        140,
-        211,
-        56,
-        tone="safe",
+        final_rect[0] + final_rect[2] * 0.82,
+        final_rect[1] + final_rect[3] * 0.16,
     )
-    upload_rect = place_image(
-        c,
-        SCREEN_DIR / "13-upload-board.png",
-        14,
-        89,
-        182,
-        108,
-        crop=(250, 365, 1440, 1065),
-        border=BLUE,
-    )
-    marker(
-        c,
-        1,
-        upload_rect[0] + upload_rect[2] * 0.52,
-        upload_rect[1] + upload_rect[3] * 0.70,
-    )
-    marker(
-        c,
-        2,
-        upload_rect[0] + upload_rect[2] * 0.52,
-        upload_rect[1] + upload_rect[3] * 0.16,
-    )
-    label_chip(c, 1, "答案をここにドロップ", 14, 75, 88)
-    label_chip(c, 2, "処理状況は下に表示", 108, 75, 88)
+    label_chip(c, 1, "決定的な名称を確認", 14, 76, 56)
+    label_chip(c, 2, "学年の競合を選び直す", 77, 76, 56)
+    label_chip(c, 3, "向き補正の履歴を確認", 140, 76, 56)
     callout(
         c,
         14,
         28,
         182,
         34,
-        "アップロード後は待たなくて大丈夫",
-        "複数ファイルをまとめて選べます。画面を閉じても、送信済みの処理は続きます。同じ答案をもう一度追加しないでください。",
-        tone="info",
+        "確認後の流れ",
+        "警告がなくなると「確認してテンプレートを作成」が有効になります。作成後は編集画面で問題・正答・配点を照合し、先生が確認してから受付を開始します。",
+        tone="safe",
     )
     new_page(c)
 
-    # 7. Automatic grading
-    section_header(c, "06  自動採点", "アップロード後はAIが進める", 7)
+    # 6. Grading policies and recoverable archive
+    section_header(c, "05  採点ルールと整理", "3つの設定を確認し、履歴は残す", 6)
     paragraph(
         c,
-        "答案を送信すると、氏名と解答の読み取り、採点、あいまいな結果の再確認まで自動で進みます。",
+        "新しい問題は「AIで判定（おすすめ）」、部分点の単位は1点、先生の常時確認はオフで始まります。必要な問題だけ採点方法や詳細設定を変更します。",
         14,
         257,
         182,
@@ -3006,78 +2838,174 @@ def build_ai_first() -> None:
         leading=4.5,
         color=MUTED,
     )
-    ai_pipeline(
+
+    policy_cards = [
+        (
+            200,
+            MINT,
+            GREEN,
+            "完答",
+            "一部だけ正しくても部分点を付けず0点。読取不能・曖昧は確認待ちに残します。",
+        ),
+        (
+            147,
+            BLUE_PALE,
+            BLUE,
+            "順不同",
+            "「、」「／」「；」「・」または改行で区切った全項目を、重複回数も含めて照合します。",
+        ),
+        (
+            94,
+            ORANGE_PALE,
+            ORANGE,
+            "漢字必須",
+            "正解に漢字がある場合、かなだけの同じ読みは不正解。「漢字必須の例外（読み）」へ1行ずつ登録します。",
+        ),
+    ]
+    for y, fill, accent, title, body in policy_cards:
+        rounded_box(c, 14, y, 182, 43, fill=fill, stroke=accent)
+        c.setFillColor(WHITE)
+        c.setStrokeColor(accent)
+        c.setLineWidth(1.1)
+        c.roundRect(mm(21), mm(y + 26), mm(7), mm(7), mm(1.2), fill=1, stroke=1)
+        c.setStrokeColor(accent)
+        c.setLineWidth(1.4)
+        c.line(mm(22.6), mm(y + 29.1), mm(24.4), mm(y + 27.3))
+        c.line(mm(24.4), mm(y + 27.3), mm(27.1), mm(y + 31.5))
+        draw_text(c, 33, y + 29, title, size=10.2, color=DARK)
+        paragraph(c, body, 33, y + 19, 153, size=7.7, leading=4.0, color=MUTED)
+
+    callout(
         c,
-        [
-            "答案を受信",
-            "氏名・番号を読む",
-            "解答を読む",
-            "採点する",
-            "あいまいな結果を再確認",
-            "例外だけ確認待ちへ",
-        ],
         14,
-        217,
+        28,
         182,
+        51,
+        "削除ではなくアーカイブ",
+        "使わないひな形は、AI下書き処理の完了・失敗後に一覧で「アーカイブ」。履歴を残して「復元」できます。終了済みテスト実施は、全答案の確定・取消と、アップロード／重複確認／順番取込／採点の完了後に整理できます。アーカイブ後は読取専用になり、受付を再開できません。",
+        tone="safe",
     )
-    status_rect = place_image(
+    new_page(c)
+
+    # 7. Start receiving ordered one-page scans
+    section_header(c, "06  答案受付", "1ページPDFをスキャン順にまとめる", 7)
+    paragraph(
         c,
-        SCREEN_DIR / "13-upload-board.png",
+        "答案は、スキャナーが出力した1ページPDFだけを追加します。生徒1人分を1ページ目から最後のページまで続け、その後に次の生徒を並べます。氏名は各答案の1ページ目に記入してください。",
         14,
-        104,
+        257,
         182,
-        96,
-        crop=(285, 690, 1410, 1065),
-        border=GREEN,
+        size=8.6,
+        leading=4.4,
+        color=MUTED,
+    )
+    upload_rect = place_image(
+        c,
+        SCREEN_DIR / "38-ordered-scan-step.png",
+        14,
+        79,
+        182,
+        158,
+        border=BLUE,
     )
     marker(
         c,
         1,
-        status_rect[0] + status_rect[2] * 0.73,
-        status_rect[1] + status_rect[3] * 0.42,
+        upload_rect[0] + upload_rect[2] * 0.19,
+        upload_rect[1] + upload_rect[3] * 0.44,
     )
-    label_chip(c, 1, "答案ごとの状態を自動更新", 14, 90, 182)
-    rounded_box(c, 14, 39, 88, 38, fill=MINT, stroke=GREEN)
-    draw_text(c, 20, 67, "先生の操作がいらないもの", size=9, color=DARK)
-    bullet_list(
+    marker(
         c,
-        [
-            "読み取りが明確な氏名・番号",
-            "正解が明確な客観式",
-            "採点結果が一致した答案",
-        ],
-        20,
-        57,
-        76,
-        size=7.1,
-        leading=3.6,
-        gap=0.8,
-        dot_color=GREEN,
+        2,
+        upload_rect[0] + upload_rect[2] * 0.50,
+        upload_rect[1] + upload_rect[3] * 0.28,
     )
-    rounded_box(c, 108, 39, 88, 38, fill=ORANGE_PALE, stroke=ORANGE)
-    draw_text(c, 114, 67, "確認待ちに残るもの", size=9, color=DARK)
-    bullet_list(
+    marker(
         c,
-        [
-            "氏名候補がない、または複数",
-            "判読が難しい解答・部分点",
-            "再確認でも判断が分かれる項目",
-        ],
-        114,
-        57,
-        76,
-        size=7.1,
-        leading=3.6,
-        gap=0.8,
-        dot_color=ORANGE,
+        3,
+        upload_rect[0] + upload_rect[2] * 0.88,
+        upload_rect[1] + upload_rect[3] * 0.04,
+    )
+    label_chip(c, 1, "1ページ目の氏名を確認", 14, 65, 56)
+    label_chip(c, 2, "答案の区切りを確認", 77, 65, 56)
+    label_chip(c, 3, "この順番で送信", 140, 65, 56)
+    callout(
+        c,
+        14,
+        23,
+        182,
+        29,
+        "1答案のページ数",
+        "HOPは1ページ、STEPは選択した -1／-2／-3 ごとに2ページ。クラス分けと「その他」は確定済み版の全ページ数（1〜50ページ）です。",
+        tone="safe",
     )
     new_page(c)
 
-    # 8. Review only exceptions
-    section_header(c, "07  採点待ち・確認", "確認待ちの件数だけ処理", 8)
+    # 8. Deterministic assembly and automatic grading
+    section_header(c, "07  組み立てと自動採点", "順番を検証してからAIへ進む", 8)
     paragraph(
         c,
-        "不確かな項目だけが「採点待ち・確認」に並びます。最初から全答案を見直す必要はありません。",
+        "ファイル名の自然順は仮の並びです。移動・削除・追加で答案区切りを直し、「この順番でページを送信」を押します。送信後はページ役割を検証し、問題がないまとまりだけを1答案にします。",
+        14,
+        257,
+        182,
+        size=8.6,
+        leading=4.4,
+        color=MUTED,
+    )
+    ai_pipeline(
+        c,
+        [
+            "1ページPDFを受信",
+            "役割と順序を確認",
+            "1答案へ組み立て",
+            "1ページ目の氏名を読む",
+            "全ページを採点",
+            "例外だけ確認待ちへ",
+        ],
+        14,
+        218,
+        182,
+    )
+    rounded_box(c, 14, 170, 88, 32, fill=BLUE_PALE, stroke=BLUE)
+    draw_text(c, 20, 192, "HOP", size=9.2, color=DARK)
+    paragraph(c, "1ページごとに1答案", 20, 181, 76, size=7.4, leading=3.7)
+    rounded_box(c, 108, 170, 88, 32, fill=MINT, stroke=GREEN)
+    draw_text(c, 114, 192, "STEP", size=9.2, color=DARK)
+    paragraph(c, "選んだ登録済み種類ごとに2ページ", 114, 181, 76, size=7.4, leading=3.7)
+    rounded_box(c, 14, 130, 88, 32, fill=WHITE, stroke=BORDER)
+    draw_text(c, 20, 152, "クラス分けテスト", size=9.2, color=DARK)
+    paragraph(c, "確定済み版の全Nページ", 20, 141, 76, size=7.4, leading=3.7)
+    rounded_box(c, 108, 130, 88, 32, fill=ORANGE_PALE, stroke=ORANGE)
+    draw_text(c, 114, 152, "その他", size=9.2, color=DARK)
+    paragraph(c, "全Nページ（1〜50）。多ページも1答案として安全に採点", 114, 141, 76, size=7.4, leading=3.7)
+    callout(
+        c,
+        14,
+        75,
+        182,
+        41,
+        "検証で問題が見つかったとき",
+        "欠落、重複、順序違い、別テスト、判定不能がある場合は答案を作成・採点せず、確認が必要な読取順を表示します。2ページ目以降だけでは別生徒との取り違えを判定できないため、必ず生徒ごとに連続してスキャンしてください。",
+        tone="warn",
+    )
+    callout(
+        c,
+        14,
+        24,
+        182,
+        37,
+        "送信失敗と再開",
+        "新しいバッチを作らず「失敗したNページを再送」を使います。全ページ受信後は画面を閉じても復元でき、ファイルを選び直さず「答案を組み立てて採点へ」を押せます。",
+        tone="info",
+    )
+    new_page(c)
+
+    # 9. Review only exceptions
+    section_header(c, "08  採点待ち・確認", "確認待ちの件数だけ処理", 9)
+    paragraph(
+        c,
+        "不確かな項目だけが「採点待ち・確認」に並びます。生徒名候補は組み立てた答案の1ページ目から読み取り、採点結果は全ページをまとめて表示します。",
         14,
         257,
         182,
@@ -3117,7 +3045,7 @@ def build_ai_first() -> None:
         c,
         1,
         "生徒名",
-        "候補がある時は選択。ない時だけ名簿を検索します。",
+        "1ページ目の候補を確認。ない時だけ名簿を検索します。",
         14,
         69,
         56,
@@ -3155,20 +3083,20 @@ def build_ai_first() -> None:
     )
     new_page(c)
 
-    # 9. Quick reference
-    section_header(c, "08  クイックリファレンス", "最小操作チェックリスト", 9)
+    # 10. Quick reference
+    section_header(c, "09  クイックリファレンス", "最小操作チェックリスト", 10)
     rounded_box(c, 14, 167, 88, 89, fill=MINT, stroke=GREEN)
     draw_text(c, 20, 245, "ひな形を作る先生", size=10, color=DARK)
     bullet_list(
         c,
         [
-            "問題用紙と解答資料をまとめて追加",
-            "資料の種類が違う時だけ変更",
-            "問題枠・座標は描かない",
-            "元の資料とAI下書きを見比べる",
-            "「要修正」だけを直す",
-            "警告なしは「まとめて確認」",
-            "最後に「公開する」",
+            "試験タイプと教科を先に選ぶ",
+            "「その他」だけ問題形式も選ぶ",
+            "PDFを1件追加",
+            "固定のページ範囲・STEP枝番を確認",
+            "学年確定後の自動名称を確認",
+            "AI判定・正解・1点刻みを確認",
+            "最後に先生が受付を開始する",
         ],
         20,
         234,
@@ -3183,9 +3111,11 @@ def build_ai_first() -> None:
     bullet_list(
         c,
         [
-            "「答案受付を開始」で実施を作る",
-            "答案をまとめてアップロード",
-            "自動処理中は待たずに画面を閉じる",
+            "ひな形編集画面で「受付を開始」を押す",
+            "1ページPDFを生徒ごとに連続して選ぶ",
+            "読取順と答案区切りを確認して送信",
+            "失敗ページは同じバッチから再送",
+            "全ページ受信後は画面を閉じてよい",
             "採点待ち・確認の件数だけ処理",
             "未解決がない答案を確定",
         ],
@@ -3203,8 +3133,8 @@ def build_ai_first() -> None:
         109,
         182,
         43,
-        "分類で間違えやすい点",
-        "学校の正式な正解が書かれた用紙だけが「模範解答入り」です。生徒の答案や正誤不明の用紙は「記入済み答案（AIが正答を作成）」を選びます。",
+        "ひな形作成と答案受付は別の規則",
+        "ひな形作成はHOPを1ページずつ、STEPを6ページから3種類へ分割。答案受付はHOP 1ページ、STEP各種類2ページ、クラス分け・その他は確定済み版のNページでまとめます。",
         tone="warn",
     )
     rounded_box(c, 14, 38, 182, 57, fill=WHITE, stroke=BORDER)
@@ -3212,10 +3142,11 @@ def build_ai_first() -> None:
     bullet_list(
         c,
         [
-            "自動提案が正しいのに任意項目をすべて手入力する",
-            "「すべて」を上から順に開き、警告のない問題まで個別確認する",
-            "処理中の同じ資料・答案を繰り返しアップロードする",
-            "生徒答案を「模範解答入り」として公開する",
+            "設定を選ぶ前にPDFを追加する",
+            "PDFの内容から試験タイプや分割をAIに推測させる",
+            "STEPのページ範囲や -1 / -2 / -3 を変更する",
+            "生徒1人分の途中に別の生徒のページを挟む",
+            "順番を確認せず送信、または新しいバッチで重ねて送信する",
         ],
         20,
         73,
@@ -3230,4 +3161,13 @@ def build_ai_first() -> None:
 
 
 if __name__ == "__main__":
-    build_ai_first()
+    # The current deliverable is the screenshot-heavy, task-oriented guide.
+    # Keeping the drawing primitives and older layouts in this module lets the
+    # detailed builder reuse the established visual system without duplicating
+    # the legacy page implementations.
+    import runpy
+
+    runpy.run_path(
+        str(Path(__file__).with_name("build_detailed_user_guide.py")),
+        run_name="__main__",
+    )

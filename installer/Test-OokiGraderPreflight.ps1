@@ -25,6 +25,8 @@ param(
     })]
     [string] $ExpectedSignerThumbprint,
 
+    [switch] $AllowChecksumVerifiedOnSitePackage,
+
     [switch] $AllowUnsignedDevelopmentBuild
 )
 
@@ -33,13 +35,19 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
+if ($AllowChecksumVerifiedOnSitePackage -and
+    $AllowUnsignedDevelopmentBuild) {
+    throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
+}
+$allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
+    $AllowUnsignedDevelopmentBuild
 $resolvedDataRoot = Assert-OokiDataRoot -DataRoot $DataRoot
 $resolvedPackageRoot = Resolve-OokiExactPath -Path $PackageRoot `
     -Purpose 'Package root' -MustExist -PathType Directory
 $packageEvidence = Assert-OokiReleasePackage `
     -PackageRoot $resolvedPackageRoot -ExpectedVersion $Version `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $hostExecutable = Join-Path $resolvedPackageRoot 'OokiGrader.Host.exe'
 $toolExecutable = Join-Path $resolvedPackageRoot 'OokiGrader.Tool.exe'
 $checks = [Collections.Generic.List[object]]::new()
@@ -129,13 +137,17 @@ Add-PreflightCheck 'private-host-address' ($null -ne $privateAddress) $true `
 
 $signature = Assert-OokiAuthenticodeSignature -FilePath $hostExecutable `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $toolSignature = Assert-OokiAuthenticodeSignature -FilePath $toolExecutable `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 Add-PreflightCheck 'code-signature' ($signature.Status -eq 'Valid') (
-    -not $AllowUnsignedDevelopmentBuild) `
-    'Production release binaries must be Authenticode signed.'
+    -not $allowUnsignedPackage) `
+    $(if ($AllowChecksumVerifiedOnSitePackage) {
+        'The physically controlled on-site package is checksum-verified; Authenticode is recorded as an accepted external gate.'
+    } else {
+        'Production release binaries must be Authenticode signed.'
+    })
 Add-PreflightCheck 'release-package-integrity' (
     $packageEvidence.Version -eq $Version -and
     $packageEvidence.Runtime -eq 'win-x64' -and
@@ -174,6 +186,13 @@ $result = [pscustomobject]@{
         'Peer CA trust must be validated from an authorized classroom device.',
         'DHCP reservation, DNS, UPS, and school backup ownership require technician sign-off.'
     )
+    packageTrustMode = if ($AllowChecksumVerifiedOnSitePackage) {
+        'physically-controlled-checksum-verified-on-site-package'
+    } elseif ($AllowUnsignedDevelopmentBuild) {
+        'isolated-development-override'
+    } else {
+        'authenticode-signed-production-package'
+    }
 }
 if ($PassThru) {
     return $result

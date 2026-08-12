@@ -35,6 +35,100 @@ public sealed class TemplateExtractionJobWorkerTests
     ];
 
     [Fact]
+    public async Task ArchivedTemplateCancelsQueuedLegacyExtractionBeforeProviderDispatch()
+    {
+        await using var fixture = await ExtractionFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync(
+            sourceRole: "contains_model_answers");
+        await using (var arrange = await fixture.CreateDbContextAsync())
+        {
+            var template = await arrange.TestTemplates.SingleAsync(
+                item => item.Id == seeded.TemplateId);
+            template.State = "archived";
+            await arrange.SaveChangesAsync();
+        }
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var templateAfter = await db.TestTemplates
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.TemplateId);
+        var version = await db.TemplateVersions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.VersionId);
+        var job = await db.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.Equal("archived", templateAfter.State);
+        Assert.Equal("draft", version.State);
+        Assert.Null(version.AiGenerationProvenanceId);
+        Assert.Empty(await db.Questions.AsNoTracking().ToListAsync());
+        Assert.Empty(await db.AiRequests.AsNoTracking().ToListAsync());
+        Assert.Empty(fixture.Provider.Requests);
+        Assert.Equal("blocked", job.State);
+        Assert.Equal("template_extract_template_archived", job.ErrorCode);
+        Assert.Contains(
+            await db.AuditEvents.AsNoTracking().ToListAsync(),
+            item => item.EventType == "template.ai_generation_cancelled"
+                && item.ObjectId == seeded.VersionId
+                && item.ReasonCode == "template_extract_template_archived");
+    }
+
+    [Fact]
+    public async Task ArchiveRaceAfterDispatchDiscardsProviderDraftAtCompletion()
+    {
+        ExtractionFixture? fixtureReference = null;
+        SeededExtraction? seededReference = null;
+        await using var fixture = await ExtractionFixture.CreateAsync(request =>
+        {
+            using var db = fixtureReference!
+                .CreateDbContextAsync()
+                .GetAwaiter()
+                .GetResult();
+            var template = db.TestTemplates.Single(
+                item => item.Id == seededReference!.TemplateId);
+            template.State = "archived";
+            db.SaveChanges();
+            return CreateResponse(
+                request,
+                warnings: Array.Empty<string>(),
+                confidence: 0.99);
+        });
+        fixtureReference = fixture;
+        var seeded = await fixture.SeedAsync(
+            sourceRole: "contains_model_answers");
+        seededReference = seeded;
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var verify = await fixture.CreateDbContextAsync();
+        var templateAfter = await verify.TestTemplates
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.TemplateId);
+        var version = await verify.TemplateVersions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.VersionId);
+        var request = await verify.AiRequests
+            .AsNoTracking()
+            .SingleAsync(item => item.EntityId == seeded.VersionId);
+        var job = await verify.BackgroundJobs
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.JobId);
+        Assert.NotEmpty(fixture.Provider.Requests);
+        Assert.Equal("archived", templateAfter.State);
+        Assert.Equal("draft", version.State);
+        Assert.Null(version.AiGenerationProvenanceId);
+        Assert.Empty(await verify.Questions.AsNoTracking().ToListAsync());
+        Assert.Empty(await verify.AcceptedAnswers.AsNoTracking().ToListAsync());
+        Assert.Equal("cancelled", request.State);
+        Assert.Equal("template_extract_template_archived", request.ErrorCode);
+        Assert.Equal("blocked", job.State);
+        Assert.Equal("template_extract_template_archived", job.ErrorCode);
+        Assert.Single(await verify.AiUsage.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
     public async Task PreservesSuppliedAnswerAuthorityAndCreatesReviewOnlyDraft()
     {
         await using var fixture = await ExtractionFixture.CreateAsync();
@@ -73,7 +167,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Equal(request.Id, version.AiGenerationProvenanceId);
         Assert.Null(version.PublishedAt);
         Assert.False(question.TeacherVerified);
-        Assert.True(question.RequiresReviewAlways);
+        Assert.False(question.RequiresReviewAlways);
         Assert.Contains(
             "独立比較",
             question.TeacherNote,
@@ -253,12 +347,21 @@ public sealed class TemplateExtractionJobWorkerTests
             first =>
             {
                 Assert.Equal("基本①", first.DisplayLabel);
+                Assert.Equal("ai_rubric", first.GradingMode);
+                Assert.Contains("ASEAN", first.RubricText, StringComparison.Ordinal);
+                Assert.Equal(1_000, first.PointIncrementMilli);
                 Assert.Null(first.QuestionRegionId);
                 Assert.Null(first.AnswerRegionId);
             },
             second =>
             {
                 Assert.Equal("発展③", second.DisplayLabel);
+                Assert.Equal("ai_rubric", second.GradingMode);
+                Assert.Contains(
+                    "天然ゴム中心から機械類中心へ変化した。",
+                    second.RubricText,
+                    StringComparison.Ordinal);
+                Assert.Equal(1_000, second.PointIncrementMilli);
                 Assert.Null(second.QuestionRegionId);
                 Assert.Null(second.AnswerRegionId);
             });
@@ -266,7 +369,7 @@ public sealed class TemplateExtractionJobWorkerTests
             "Questions, reference maps/tables, and writable answer areas may be",
             Assert.Single(fixture.Provider.Requests).UserInstruction,
             StringComparison.Ordinal);
-        Assert.All(questions, item => Assert.True(item.RequiresReviewAlways));
+        Assert.All(questions, item => Assert.False(item.RequiresReviewAlways));
     }
 
     [Fact]
@@ -341,7 +444,7 @@ public sealed class TemplateExtractionJobWorkerTests
                     $"[{answers[question.Id].AnswerText}]",
                     question.QuestionText,
                     StringComparison.Ordinal);
-                Assert.True(question.RequiresReviewAlways);
+                Assert.False(question.RequiresReviewAlways);
                 Assert.Contains(
                     "question.filled_answer_redacted",
                     question.TeacherNote,
@@ -695,7 +798,7 @@ public sealed class TemplateExtractionJobWorkerTests
 
         Assert.Equal("draft", version.State);
         Assert.Equal("succeeded", request.State);
-        Assert.True(question.RequiresReviewAlways);
+        Assert.False(question.RequiresReviewAlways);
         Assert.Equal(1, question.QuestionText.Split("［　］").Length - 1);
         Assert.DoesNotContain("［反射］", question.QuestionText);
         Assert.Contains(
@@ -791,7 +894,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Null(canonical.SourceFileReferenceId);
         Assert.Null(canonical.SourcePageNumber);
         Assert.Null(canonical.SourceRegionId);
-        Assert.Equal("template-extract-v1.8.3", request.PromptVersion);
+        Assert.Equal("template-extract-v2.0.0", request.PromptVersion);
         Assert.Contains(
             "use your own subject-matter knowledge only",
             request.SystemInstruction,
@@ -972,7 +1075,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Null(request.ErrorCode);
         Assert.Equal("ai_proposed", answer.AnswerProvenance);
         Assert.Null(answer.SourceFileReferenceId);
-        Assert.True(question.RequiresReviewAlways);
+        Assert.False(question.RequiresReviewAlways);
         Assert.Contains(
             "answer.source_conflict_or_ambiguity",
             question.TeacherNote,
@@ -1052,7 +1155,7 @@ public sealed class TemplateExtractionJobWorkerTests
             .SingleAsync(item => item.TemplateVersionId == seeded.VersionId);
 
         Assert.Empty(await db.AcceptedAnswers.AsNoTracking().ToListAsync());
-        Assert.True(question.RequiresReviewAlways);
+        Assert.False(question.RequiresReviewAlways);
         Assert.Contains(
             "answer.supplied_answer_missing",
             question.TeacherNote,
@@ -1104,7 +1207,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.False(fixture.Provider.ObservedInsideWriteCoordinator);
         var providerRequest = Assert.Single(fixture.Provider.Requests);
         Assert.Equal(AiTaskTypes.TemplateExtraction, providerRequest.TaskType);
-        Assert.Equal("template_extract_v4", providerRequest.SchemaVersion);
+        Assert.Equal("template_extract_v5", providerRequest.SchemaVersion);
         Assert.Contains(
             "\"source_role\":\"contains_model_answers\"",
             providerRequest.UserInstruction,
@@ -1310,6 +1413,8 @@ public sealed class TemplateExtractionJobWorkerTests
                                     : acceptedVariants,
                                 suggested_points_milli = 1_000,
                                 allow_non_kanji_suggestion = false,
+                                requires_complete_answer_suggestion = false,
+                                answer_order_insensitive_suggestion = false,
                                 requires_teacher_answer = unavailable,
                                 confidence,
                                 warnings,
@@ -1380,7 +1485,9 @@ public sealed class TemplateExtractionJobWorkerTests
                                 accepted_variants = Array.Empty<string>(),
                                 suggested_points_milli = 1_000,
                                 allow_non_kanji_suggestion = false,
-                                requires_teacher_answer = true,
+                                requires_complete_answer_suggestion = false,
+                                answer_order_insensitive_suggestion = false,
+                                requires_teacher_answer = false,
                                 confidence = 0.95,
                                 warnings = Array.Empty<string>(),
                             },
@@ -1402,8 +1509,10 @@ public sealed class TemplateExtractionJobWorkerTests
                                 accepted_variants = Array.Empty<string>(),
                                 suggested_points_milli = 3_000,
                                 allow_non_kanji_suggestion = false,
-                                requires_teacher_answer = true,
-                                confidence = 0.91,
+                                requires_complete_answer_suggestion = false,
+                                answer_order_insensitive_suggestion = false,
+                                requires_teacher_answer = false,
+                                confidence = 0.99,
                                 warnings = Array.Empty<string>(),
                             },
                         },
@@ -1476,6 +1585,8 @@ public sealed class TemplateExtractionJobWorkerTests
                     accepted_variants = Array.Empty<string>(),
                     suggested_points_milli = 1_000,
                     allow_non_kanji_suggestion = false,
+                    requires_complete_answer_suggestion = false,
+                    answer_order_insensitive_suggestion = false,
                     requires_teacher_answer = false,
                     confidence = 0.99,
                     warnings = Array.Empty<string>(),
@@ -1511,6 +1622,8 @@ public sealed class TemplateExtractionJobWorkerTests
                 accepted_variants = Array.Empty<string>(),
                 suggested_points_milli = 1_000,
                 allow_non_kanji_suggestion = false,
+                requires_complete_answer_suggestion = false,
+                answer_order_insensitive_suggestion = false,
                 requires_teacher_answer = false,
                 confidence = 0.99,
                 warnings = Array.Empty<string>(),
@@ -1544,6 +1657,8 @@ public sealed class TemplateExtractionJobWorkerTests
                 accepted_variants = Array.Empty<string>(),
                 suggested_points_milli = 500,
                 allow_non_kanji_suggestion = false,
+                requires_complete_answer_suggestion = false,
+                answer_order_insensitive_suggestion = false,
                 requires_teacher_answer = false,
                 confidence = 0.99,
                 warnings = Array.Empty<string>(),

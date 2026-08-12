@@ -50,6 +50,8 @@ param(
     })]
     [string] $ExpectedSignerThumbprint,
 
+    [switch] $AllowChecksumVerifiedOnSitePackage,
+
     [switch] $AllowUnsignedDevelopmentBuild
 )
 
@@ -59,6 +61,12 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+if ($AllowChecksumVerifiedOnSitePackage -and
+    $AllowUnsignedDevelopmentBuild) {
+    throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
+}
+$allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
+    $AllowUnsignedDevelopmentBuild
 if (-not $MaintenanceConfirmed -or
     -not $OfflineConfirmed -or
     -not $FreshPreUpgradeBackupConfirmed) {
@@ -71,7 +79,7 @@ if ($ReadyUri.Scheme -ne 'https') {
 $packageEvidence = Assert-OokiReleasePackage -PackageRoot $PackageRoot `
     -ExpectedVersion $Version `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $package = $packageEvidence.Root
 $currentVersion = Resolve-OokiExactPath -Path $CurrentVersionRoot `
     -Purpose 'Current version root' -MustExist -PathType Directory
@@ -93,7 +101,7 @@ if ($null -eq $installation -or
     -not ([string] $installation.serviceName).Equals(
         $ServiceName,
         [StringComparison]::Ordinal) -or
-    (-not $AllowUnsignedDevelopmentBuild -and
+    (-not $allowUnsignedPackage -and
         -not ([string] $installation.expectedSignerThumbprint).Equals(
             $ExpectedSignerThumbprint,
             [StringComparison]::OrdinalIgnoreCase))) {
@@ -114,16 +122,16 @@ $installedNewHost = Join-Path $newVersionRoot 'OokiGrader.Host.exe'
 $installedNewTool = Join-Path $newVersionRoot 'OokiGrader.Tool.exe'
 Assert-OokiAuthenticodeSignature -FilePath $newHostSource `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild | Out-Null
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage | Out-Null
 Assert-OokiAuthenticodeSignature -FilePath $newToolSource `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild | Out-Null
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage | Out-Null
 Assert-OokiAuthenticodeSignature -FilePath $currentHost `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild | Out-Null
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage | Out-Null
 Assert-OokiAuthenticodeSignature -FilePath $currentTool `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild | Out-Null
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage | Out-Null
 
 $configuredExecutable = Get-OokiServiceExecutablePath `
     -ServiceName $ServiceName
@@ -208,11 +216,11 @@ if ($PSCmdlet.ShouldProcess(
     $newTool = Join-Path $newVersionRoot 'OokiGrader.Tool.exe'
     Assert-OokiAuthenticodeSignature -FilePath $newHost `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-        -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild |
+        -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage |
         Out-Null
     Assert-OokiAuthenticodeSignature -FilePath $newTool `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-        -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild |
+        -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage |
         Out-Null
     Set-OokiInstallAcl -VersionRoot $newVersionRoot `
         -ServiceName $ServiceName -Confirm:$false

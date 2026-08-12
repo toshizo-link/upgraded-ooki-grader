@@ -9,6 +9,7 @@ using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identity;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
@@ -104,6 +105,12 @@ internal sealed record NameAssignmentEvidence
     [JsonPropertyName("inputManifestHash")]
     public string InputManifestHash { get; init; } = string.Empty;
 
+    [JsonPropertyName("rosterManifestHash")]
+    public string? RosterManifestHash { get; init; }
+
+    [JsonPropertyName("identityPageNumber")]
+    public int? IdentityPageNumber { get; init; }
+
     [JsonPropertyName("transcription")]
     public NameTranscriptionEvidence Transcription { get; init; } = new();
 
@@ -164,6 +171,7 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AiNameTranscriptionJobWorker> _logger;
     private readonly AiNameTranscriptionJobWorkerOptions _options;
+    private readonly IConfiguration? _configuration;
     private readonly string _workerId = $"gemini-name-{Guid.NewGuid():N}";
 
     public AiNameTranscriptionJobWorker(
@@ -177,7 +185,8 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
         IOptions<AiNameTranscriptionJobWorkerOptions> options,
         ILogger<AiNameTranscriptionJobWorker> logger,
         IAiProviderClientResolver? providerResolver = null,
-        IAiProviderFeaturePolicy? providerFeaturePolicy = null)
+        IAiProviderFeaturePolicy? providerFeaturePolicy = null,
+        IConfiguration? configuration = null)
     {
         _dbContextFactory = dbContextFactory;
         _writeCoordinator = writeCoordinator;
@@ -191,13 +200,21 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
         _timeProvider = timeProvider;
         _logger = logger;
         _options = options.Value;
+        _configuration = configuration;
         _options.Validate();
     }
 
     public async Task<bool> ProcessNextAsync(
         CancellationToken cancellationToken = default)
     {
-        await EnsureQueuedJobsAsync(cancellationToken).ConfigureAwait(false);
+        // A legacy job may have been queued by an older process. Gate leasing as
+        // well as queue creation so a restart cannot spend a second provider call
+        // on identity after the combined identity + grading profile is ready.
+        if (await EnsureQueuedJobsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
         var lease = await LeaseNextAsync(cancellationToken).ConfigureAwait(false);
         if (lease is null)
         {
@@ -364,13 +381,19 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
         }
     }
 
-    private Task EnsureQueuedJobsAsync(CancellationToken cancellationToken)
+    private Task<bool> EnsureQueuedJobsAsync(CancellationToken cancellationToken)
     {
         return _writeCoordinator.ExecuteAsync(async token =>
         {
             await using var db = await _dbContextFactory
                 .CreateDbContextAsync(token)
                 .ConfigureAwait(false);
+            if (await CombinedAnalysisIsReadyAsync(db, token)
+                    .ConfigureAwait(false))
+            {
+                return true;
+            }
+
             var bundle = _promptCatalog.GetRequired(AiTaskTypes.NameTranscription);
             var profile = await db.AiTaskProfiles
                 .AsNoTracking()
@@ -385,7 +408,7 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
                     profile.AiConnection.Provider)
                 || !IsApprovedProfile(profile, bundle))
             {
-                return;
+                return false;
             }
 
             var eligible = await db.Submissions
@@ -410,7 +433,7 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
                 .ConfigureAwait(false);
             if (eligible.Length == 0)
             {
-                return;
+                return false;
             }
 
             var keys = eligible
@@ -460,7 +483,52 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             }
 
             await db.SaveChangesAsync(token).ConfigureAwait(false);
+            return false;
         }, cancellationToken);
+    }
+
+    private async Task<bool> CombinedAnalysisIsReadyAsync(
+        OokiGraderDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (_configuration is null
+            || !_configuration.GetValue("Features:Grading.Semantic", false))
+        {
+            return false;
+        }
+
+        var geminiEnabled = _configuration.GetValue(
+            "Features:Ai.GeminiDirect",
+            false);
+        var openRouterEnabled = _configuration.GetValue(
+            "Features:Ai.OpenRouter",
+            false);
+        var bundle = _promptCatalog.GetRequired(AiTaskTypes.InitialGrading);
+        var profile = await db.AiTaskProfiles
+            .AsNoTracking()
+            .Include(item => item.AiConnection)
+            .SingleOrDefaultAsync(
+                item => item.TaskType == AiTaskTypes.InitialGrading
+                    && item.Active,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return profile is not null
+            && _providerFeaturePolicy.IsEnabled(
+                profile.AiConnection.Provider)
+            && AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
+            && profile.PromptVersion == bundle.PromptVersion
+            && profile.SchemaVersion == bundle.SchemaVersion
+            && profile.PromptContentHash == bundle.ContentHash
+            && profile.ModelId == profile.AiConnection.ModelId
+            && profile.ConnectionRevision
+                == profile.AiConnection.CredentialRevision
+            && profile.AiConnection.State == "active"
+            && profile.AiConnection.LastCapabilityProbeState == "passed"
+            && ((profile.AiConnection.Provider == AiProviders.GeminiDirect
+                    && geminiEnabled)
+                || (profile.AiConnection.Provider == AiProviders.OpenRouter
+                    && openRouterEnabled));
     }
 
     private Task<JobLease?> LeaseNextAsync(CancellationToken cancellationToken)
@@ -577,7 +645,15 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
                 .ToListAsync(token)
                 .ConfigureAwait(false);
             ValidatePages(submission, pages);
-            var artifactSnapshots = pages
+            var identityPages = submission.OrderedScanBatchId is null
+                ? pages
+                : pages.Where(page => page.PageNumber == 1).ToList();
+            if (identityPages.Count == 0)
+            {
+                throw Permanent("ai_submission_name_page_missing");
+            }
+
+            var artifactSnapshots = identityPages
                 .Select(page => ToArtifactSnapshot(
                     page,
                     submission.PreprocessingManifestHash!))
@@ -1576,14 +1652,14 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             });
         return
             """
-            The attached media are every page of one completed Japanese test,
-            in page order. Find the printed fields used for the student's name
-            and student number and transcribe only characters visibly written
-            in those fields. Preserve Japanese script exactly and do not correct
-            a spelling to a common name. Do not infer identity, consult a roster,
-            or return a student identifier. Ignore all answers while performing
-            this identity task. Use null for a field that is not visible. Return
-            blank or unreadable instead of guessing.
+            The attached media are the identity-bearing page(s) selected from one
+            completed Japanese test, in page order. Find the printed fields used
+            for the student's name and student number and transcribe only
+            characters visibly written in those fields. Preserve Japanese script
+            exactly and do not correct a spelling to a common name. Do not infer
+            identity, consult a roster, or return a student identifier. Ignore all
+            answers while performing this identity task. Use null for a field that
+            is not visible. Return blank or unreadable instead of guessing.
 
             """
             + JsonSerializer.Serialize(new
@@ -1897,8 +1973,8 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
     {
         return profile.TaskType == AiTaskTypes.NameTranscription
             && profile.Active
-            && profile.ApprovalState is
-                "pilot_approved" or "production_approved"
+            && AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
             && AiProviderCatalog.IsSupportedProvider(
                 profile.AiConnection.Provider)
             && profile.ModelId == profile.AiConnection.ModelId

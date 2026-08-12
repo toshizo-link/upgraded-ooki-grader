@@ -167,7 +167,7 @@ internal static class AdminEndpoints
             ? "Gemini AI 機能はホスト設定で無効です。"
             : activeAiProfile is null
             ? aiConfigured
-                ? "有効な承認済み AI タスクプロファイルがありません。"
+                ? "利用できる AI 機能設定がありません。"
                 : "AI 接続プロファイルはまだ構成されていません。"
             : ambiguousAiRequests > 0
                 ? $"{ambiguousAiRequests} 件の AI 送信結果を手動確認してください。"

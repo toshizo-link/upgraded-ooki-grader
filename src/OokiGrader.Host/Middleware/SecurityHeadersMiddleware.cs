@@ -7,7 +7,7 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next)
         context.Response.OnStarting(() =>
         {
             var headers = context.Response.Headers;
-            headers.ContentSecurityPolicy = IsTemplateSourcePreview(context.Request.Path)
+            headers.ContentSecurityPolicy = IsSameOriginEmbeddableContent(context.Request.Path)
                 ? "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
                 : "default-src 'self'; script-src 'self'; style-src 'self'; " +
                     "img-src 'self' blob:; font-src 'self'; connect-src 'self'; " +
@@ -26,11 +26,12 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next)
         await next(context);
     }
 
-    private static bool IsTemplateSourcePreview(PathString path)
+    private static bool IsSameOriginEmbeddableContent(PathString path)
     {
         var segments = path.Value?
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
         return segments is
-            ["api", "v1", "templates", _, "versions", _, "sources", _, "content"];
+                ["api", "v1", "templates", _, "versions", _, "sources", _, "content"]
+            or ["api", "v1", "submissions", _, "original-pdf"];
     }
 }

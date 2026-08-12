@@ -833,6 +833,103 @@ function Set-OokiFirewallRule {
     }
 }
 
+function Set-OokiManagedHostsEntry {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')]
+        [string] $DnsName,
+
+        [Parameter(Mandatory)]
+        [string] $IpAddress,
+
+        [string] $Marker = 'Ooki-Grader-managed',
+
+        [string] $HostsPath = (
+            Join-Path $env:SystemRoot 'System32\drivers\etc\hosts')
+    )
+
+    $parsedAddress = $null
+    if (-not [Net.IPAddress]::TryParse($IpAddress, [ref] $parsedAddress)) {
+        throw 'The managed hosts entry requires an exact IP address.'
+    }
+    $resolvedHostsPath = Resolve-OokiExactPath -Path $HostsPath `
+        -Purpose 'Windows hosts file' -MustExist -PathType File
+    if ([string]::IsNullOrWhiteSpace($Marker) -or
+        $Marker -notmatch '^[A-Za-z0-9._-]{1,64}$') {
+        throw 'The managed hosts marker contains unsupported characters.'
+    }
+
+    $markerText = "# $Marker $DnsName"
+    $lines = @(Get-Content -LiteralPath $resolvedHostsPath)
+    $updatedLines = [Collections.Generic.List[string]]::new()
+    $managedEntryFound = $false
+    foreach ($line in $lines) {
+        if ($line.TrimEnd().EndsWith(
+            $markerText,
+            [StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $managedEntryFound) {
+                $updatedLines.Add("$IpAddress`t$DnsName`t$markerText")
+                $managedEntryFound = $true
+            }
+            continue
+        }
+
+        $addressAndNames = ($line -split '#', 2)[0].Trim()
+        if (-not [string]::IsNullOrWhiteSpace($addressAndNames)) {
+            $parts = @($addressAndNames -split '\s+' | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })
+            if ($parts.Count -gt 1) {
+                $aliases = @($parts[1..($parts.Count - 1)])
+                if ($null -ne ($aliases | Where-Object {
+                    $_.Equals(
+                        $DnsName,
+                        [StringComparison]::OrdinalIgnoreCase)
+                } | Select-Object -First 1)) {
+                    throw "The hosts file already contains an unmanaged entry for $DnsName. Resolve it explicitly before continuing."
+                }
+            }
+        }
+        $updatedLines.Add($line)
+    }
+    if (-not $managedEntryFound) {
+        $updatedLines.Add("$IpAddress`t$DnsName`t$markerText")
+    }
+
+    $desiredText = ($updatedLines -join "`r`n") + "`r`n"
+    $currentText = [IO.File]::ReadAllText($resolvedHostsPath)
+    if ($currentText -ceq $desiredText) {
+        return [pscustomobject]@{
+            state = 'already-current'
+            dnsName = $DnsName
+            ipAddress = $IpAddress
+            hostsPath = $resolvedHostsPath
+        }
+    }
+
+    if ($PSCmdlet.ShouldProcess(
+        $resolvedHostsPath,
+        "Set managed hosts entry $DnsName to $IpAddress")) {
+        $backupPath = "$resolvedHostsPath.ooki-grader-before-first-change.bak"
+        if (-not [IO.File]::Exists($backupPath)) {
+            [IO.File]::Copy($resolvedHostsPath, $backupPath, $false)
+        }
+        [IO.File]::WriteAllText(
+            $resolvedHostsPath,
+            $desiredText,
+            [Text.ASCIIEncoding]::new())
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+    }
+
+    return [pscustomobject]@{
+        state = if ($WhatIfPreference) { 'would-update' } else { 'updated' }
+        dnsName = $DnsName
+        ipAddress = $IpAddress
+        hostsPath = $resolvedHostsPath
+    }
+}
+
 function Write-OokiJsonFile {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -1141,6 +1238,7 @@ Export-ModuleMember -Function @(
     'Set-OokiCertificateAcl',
     'Set-OokiWindowsService',
     'Set-OokiFirewallRule',
+    'Set-OokiManagedHostsEntry',
     'Write-OokiJsonFile',
     'Get-OokiServiceImagePath',
     'Get-OokiServiceExecutablePath',

@@ -332,6 +332,22 @@ public sealed class TemplateVersionTests
     }
 
     [Fact]
+    public void GradingRuleFlagsParticipateInPublishedContentHash()
+    {
+        var baseline = ValidDraft().Publish("teacher-1", PublishTime);
+        var complete = DraftWithRuleFlags(
+            requiresCompleteAnswer: true,
+            answerOrderInsensitive: false).Publish("teacher-1", PublishTime);
+        var unordered = DraftWithRuleFlags(
+            requiresCompleteAnswer: false,
+            answerOrderInsensitive: true).Publish("teacher-1", PublishTime);
+
+        Assert.NotEqual(baseline.ContentHash, complete.ContentHash);
+        Assert.NotEqual(baseline.ContentHash, unordered.ContentHash);
+        Assert.NotEqual(complete.ContentHash, unordered.ContentHash);
+    }
+
+    [Fact]
     public void RubricTotalCannotExceedQuestionMaximum()
     {
         var question = new QuestionDefinition(
@@ -508,6 +524,68 @@ public sealed class TemplateVersionTests
             error => error.Code == "template.total_overflow");
     }
 
+    [Theory]
+    [InlineData(QuestionType.MultipleChoice, GradingMode.AiRubric)]
+    [InlineData(QuestionType.Boolean, GradingMode.AiRubric)]
+    [InlineData(QuestionType.Numeric, GradingMode.AiRubric)]
+    [InlineData(QuestionType.ExactShortText, GradingMode.AiRubric)]
+    [InlineData(QuestionType.SemanticShortText, GradingMode.AiRubric)]
+    [InlineData(QuestionType.Subjective, GradingMode.AiRubric)]
+    [InlineData(QuestionType.MultiPart, GradingMode.AiRubric)]
+    [InlineData(QuestionType.Unsupported, GradingMode.Manual)]
+    public void QuestionTypesHaveSafeDefaultGradingModes(
+        QuestionType questionType,
+        GradingMode expected)
+    {
+        Assert.Equal(expected, QuestionGradingDefaults.For(questionType));
+    }
+
+    [Fact]
+    public void SubjectiveQuestionCanUseAiRubricWithoutPermanentReview()
+    {
+        var valid = SubjectiveQuestion(
+            GradingMode.AiRubric,
+            requiresReviewAlways: true);
+        var automatic = SubjectiveQuestion(
+            GradingMode.AiRubric,
+            requiresReviewAlways: false);
+
+        Assert.True(valid.ValidateForPublish("questions[0]").IsValid);
+        Assert.True(automatic.ValidateForPublish("questions[0]").IsValid);
+    }
+
+    [Fact]
+    public void UnsupportedQuestionRemainsManualAndAlwaysReviewed()
+    {
+        var question = new QuestionDefinition(
+            "q-unsupported",
+            "logical-q-unsupported",
+            0,
+            "問未",
+            "未対応形式",
+            QuestionType.Unsupported,
+            GradingMode.AiRubric,
+            new MilliPoints(1000),
+            new MilliPoints(1000),
+            allowNonKanji: true,
+            requiresReviewAlways: true,
+            teacherVerified: true,
+            rubricRules:
+            [
+                new RubricRule(
+                    "rubric-unsupported",
+                    0,
+                    RubricConditionType.ModelAssessed,
+                    "確認する。",
+                    new MilliPoints(1000),
+                    teacherVerified: true),
+            ]);
+
+        Assert.Contains(
+            question.ValidateForPublish("questions[0]").Errors,
+            error => error.Code == "question.manual_review_required");
+    }
+
     private static TemplateVersion ValidDraft() =>
         TemplateVersion.CreateDraft(
             "version-1",
@@ -515,6 +593,48 @@ public sealed class TemplateVersionTests
             1,
             "pipeline-v1",
             [TestQuestionFactory.ExactText()],
+            targetTotalPoints: new MilliPoints(1000));
+
+    private static QuestionDefinition SubjectiveQuestion(
+        GradingMode gradingMode,
+        bool requiresReviewAlways) =>
+        new(
+            "q-subjective",
+            "logical-q-subjective",
+            0,
+            "問記",
+            "理由を説明しなさい。",
+            QuestionType.Subjective,
+            gradingMode,
+            new MilliPoints(1000),
+            new MilliPoints(1000),
+            allowNonKanji: true,
+            requiresReviewAlways,
+            teacherVerified: true,
+            rubricRules:
+            [
+                new RubricRule(
+                    "rubric-subjective",
+                    0,
+                    RubricConditionType.ModelAssessed,
+                    "模範解答の要点を満たす。",
+                    new MilliPoints(1000),
+                    teacherVerified: true),
+            ]);
+
+    private static TemplateVersion DraftWithRuleFlags(
+        bool requiresCompleteAnswer,
+        bool answerOrderInsensitive) =>
+        TemplateVersion.CreateDraft(
+            "version-1",
+            "template-1",
+            1,
+            "pipeline-v1",
+            [
+                TestQuestionFactory.ExactText(
+                    requiresCompleteAnswer: requiresCompleteAnswer,
+                    answerOrderInsensitive: answerOrderInsensitive),
+            ],
             targetTotalPoints: new MilliPoints(1000));
 
     private static TemplateVersion DraftWithAnswer(AcceptedAnswer answer)

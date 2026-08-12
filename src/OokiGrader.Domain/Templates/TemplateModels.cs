@@ -42,6 +42,26 @@ public enum GradingMode
     Manual,
 }
 
+public static class QuestionGradingDefaults
+{
+    public static GradingMode For(QuestionType questionType) =>
+        questionType switch
+        {
+            QuestionType.MultipleChoice
+                or QuestionType.Boolean
+                or QuestionType.Numeric
+                or QuestionType.ExactShortText
+                or QuestionType.SemanticShortText
+                or QuestionType.MultiPart
+                or QuestionType.Subjective => GradingMode.AiRubric,
+            QuestionType.Unsupported => GradingMode.Manual,
+            _ => throw new ArgumentOutOfRangeException(nameof(questionType)),
+        };
+
+    public static bool RequiresReviewAlwaysByDefault(QuestionType questionType) =>
+        questionType == QuestionType.Unsupported;
+}
+
 public enum AcceptedAnswerVariantType
 {
     Canonical,

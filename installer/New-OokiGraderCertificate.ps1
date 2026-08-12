@@ -138,7 +138,7 @@ if (-not [string]::IsNullOrWhiteSpace($CaCertificateThumbprint)) {
     }
 } elseif ($CreateLocalCa) {
     if (-not $AcknowledgeLocalCaPrivateKeyRisk) {
-        throw 'Creating a host-local CA requires -AcknowledgeLocalCaPrivateKeyRisk. Protect and move the CA private key offline for production.'
+        throw 'Creating a host-local CA requires -AcknowledgeLocalCaPrivateKeyRisk. The non-exportable CA key remains protected on this Windows host; losing the host requires re-trusting a new CA.'
     }
     if ($PSCmdlet.ShouldProcess(
         'LocalMachine certificate store',
@@ -148,7 +148,7 @@ if (-not [string]::IsNullOrWhiteSpace($CaCertificateThumbprint)) {
             -FriendlyName 'Ooki Grader Local CA' `
             -CertStoreLocation 'Cert:\LocalMachine\My' `
             -KeyAlgorithm RSA -KeyLength 4096 -HashAlgorithm SHA256 `
-            -KeyExportPolicy Exportable `
+            -KeyExportPolicy NonExportable `
             -KeyUsage CertSign, CRLSign, DigitalSignature `
             -NotAfter ([DateTimeOffset]::UtcNow.AddDays(
                 $CaValidityDays).UtcDateTime) `
@@ -223,8 +223,14 @@ if ($PSCmdlet.ShouldProcess(
         Import-Certificate -FilePath $caPath `
             -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
     }
-    Set-OokiCertificateAcl -CertificatePath $pfxPath `
-        -ServiceName $ServiceName -Confirm:$false
+    # The issuance folder is restricted to SYSTEM and Administrators. The
+    # service receives read access only after its virtual account exists and
+    # Install-OokiGrader copies the PFX into the managed certificate path.
+    if ($null -ne (Get-Service -Name $ServiceName `
+        -ErrorAction SilentlyContinue)) {
+        Set-OokiCertificateAcl -CertificatePath $pfxPath `
+            -ServiceName $ServiceName -Confirm:$false
+    }
     $metadata = [ordered]@{
         state = if ($Renew) { 'renewed' } else { 'issued' }
         primaryDnsName = $PrimaryDnsName
@@ -233,6 +239,8 @@ if ($PSCmdlet.ShouldProcess(
         caPublicCertificatePath = $caPath
         caThumbprint = $ca.Thumbprint
         hostTrustInstalled = $true
+        caPrivateKeyExportable = $false
+        caPrivateKeyLocation = 'LocalMachine certificate store on the Ooki Grader host only'
         dnsSans = $dnsNames
         ipSans = $IpAddress
         peerTrustExternalGate = 'Install only the exported public CA on authorized peers, then validate DNS and TLS without bypasses.'

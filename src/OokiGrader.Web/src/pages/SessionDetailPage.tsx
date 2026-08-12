@@ -1,13 +1,8 @@
-import {
-  useCallback,
-  useRef,
-  useState,
-  type DragEvent,
-  type ChangeEvent,
-} from "react";
+import { useState } from "react";
 import { Link, useParams } from "../router";
 import { useSession } from "../auth/SessionContext";
 import { Icon } from "../components/Icon";
+import { OrderedScanUploadBoard } from "../components/OrderedScanUploadBoard";
 import {
   Badge,
   Button,
@@ -23,14 +18,11 @@ import {
 } from "../components/ui";
 import { useApiQuery } from "../hooks/useApiQuery";
 import {
-  ApiError,
   api,
   asPaged,
   newIdempotencyKey,
-  uploadFile,
 } from "../lib/api";
 import {
-  classNames,
   formatDate,
   formatDateTime,
   formatPercentageBasisPoints,
@@ -41,19 +33,7 @@ import type {
   PagedResponse,
   SubmissionSummary,
   TestSessionSummary,
-  UploadFinalizeResponse,
 } from "../types";
-
-interface LocalUpload {
-  id: string;
-  file: File;
-  progress: number;
-  state: "ready" | "uploading" | "completed" | "failed" | "duplicate";
-  message?: string;
-  submissionId?: string;
-  duplicateUploadId?: string;
-  existingSubmissionId?: string;
-}
 
 interface SessionSummary {
   submissionCount: number;
@@ -75,32 +55,6 @@ interface SubmissionStatusResponse extends PagedResponse<SubmissionSummary> {
   summary?: OperatorStatusSummary;
 }
 
-const maximumUploadBytes = 250_000_000;
-const supportedUploadTypes = new Set([
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "image/tiff",
-]);
-const supportedUploadExtensions = new Set([
-  ".pdf",
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".tif",
-  ".tiff",
-]);
-
-function canUpload(file: File) {
-  const extension = file.name
-    .slice(file.name.lastIndexOf("."))
-    .toLocaleLowerCase("en-US");
-  return (
-    file.size <= maximumUploadBytes &&
-    (supportedUploadTypes.has(file.type) ||
-      supportedUploadExtensions.has(extension))
-  );
-}
 
 export function SessionDetailPage() {
   const { sessionId = "" } = useParams();
@@ -110,14 +64,10 @@ export function SessionDetailPage() {
     hasAnyRole("scanOperator") && !canManageSession;
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
-  const [uploads, setUploads] = useState<LocalUpload[]>([]);
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [resolvingUploadId, setResolvingUploadId] = useState<string>();
   const [sessionStateWorking, setSessionStateWorking] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [closeOpen, setCloseOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const session = useApiQuery<TestSessionSummary>(
     `session:${sessionId}`,
@@ -165,157 +115,10 @@ export function SessionDetailPage() {
     Boolean(sessionId),
   );
 
-  const updateUpload = useCallback(
-    (id: string, changes: Partial<LocalUpload>) => {
-      setUploads((current) =>
-        current.map((item) =>
-          item.id === id ? { ...item, ...changes } : item,
-        ),
-      );
-    },
-    [],
-  );
-
-  function addFiles(files: File[]) {
-    const accepted = files.filter(canUpload);
-    const rejected = files.filter((file) => !canUpload(file));
-    if (rejected.length) {
-      setActionError(
-        `${rejected.map((file) => file.name).join("、")} は追加できません。PDF・JPEG・PNG・TIFF（1ファイル250 MB以下）を選択してください。`,
-      );
-    } else {
-      setActionError(undefined);
-    }
-    setUploads((current) => [
-      ...current,
-      ...accepted.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        progress: 0,
-        state: "ready" as const,
-      })),
-    ]);
-  }
-
-  function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
-    addFiles(Array.from(event.target.files || []));
-    event.target.value = "";
-  }
-
-  function handleDrop(event: DragEvent) {
-    event.preventDefault();
-    setDragging(false);
-    addFiles(Array.from(event.dataTransfer.files));
-  }
-
-  async function startUploads() {
-    const pending = uploads.filter(
-      (item) => item.state === "ready" || item.state === "failed",
-    );
-    if (!pending.length) return;
-    setUploading(true);
-    setActionError(undefined);
-    let cursor = 0;
-
-    async function worker() {
-      while (cursor < pending.length) {
-        const item = pending[cursor++];
-        if (!item) return;
-        updateUpload(item.id, {
-          state: "uploading",
-          progress: 0,
-          message: undefined,
-        });
-        try {
-          const result = await uploadFile(item.file, {
-            purpose: "completedTest",
-            testSessionId: sessionId,
-            onProgress: (uploaded, total) =>
-              updateUpload(item.id, {
-                progress: total ? Math.round((uploaded / total) * 100) : 0,
-              }),
-          });
-          updateUpload(item.id, {
-            state: "completed",
-            progress: 100,
-            submissionId: result.submissionId,
-          });
-        } catch (reason) {
-          const duplicate =
-            reason instanceof ApiError &&
-            (reason.problem.code === "DUPLICATE_UPLOAD" ||
-              reason.problem.code === "EXACT_DUPLICATE");
-          updateUpload(item.id, {
-            state: duplicate ? "duplicate" : "failed",
-            message:
-              reason instanceof Error
-                ? reason.message
-                : "アップロードできませんでした。",
-            duplicateUploadId:
-              reason instanceof ApiError
-                ? reason.problem.uploadId
-                : undefined,
-            existingSubmissionId:
-              reason instanceof ApiError
-                ? reason.problem.existingSubmissionId
-                : undefined,
-          });
-        }
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(3, pending.length) }, () => worker()),
-    );
-    setUploading(false);
-    submissions.reload();
-    if (!scanOperatorOnly) summary.reload();
-  }
-
-  async function resolveDuplicate(
-    item: LocalUpload,
-    action: "useExisting" | "createAttempt" | "cancel",
-  ) {
-    if (!item.duplicateUploadId) return;
-    setResolvingUploadId(item.id);
-    setActionError(undefined);
-    try {
-      const result = await api.post<UploadFinalizeResponse | undefined>(
-        `/uploads/${encodeURIComponent(item.duplicateUploadId)}:resolveDuplicate`,
-        { action },
-        { idempotencyKey: newIdempotencyKey() },
-      );
-      if (action === "cancel") {
-        setUploads((current) =>
-          current.filter((upload) => upload.id !== item.id),
-        );
-      } else {
-        updateUpload(item.id, {
-          state: "completed",
-          progress: 100,
-          submissionId:
-            result?.submissionId || item.existingSubmissionId,
-          message:
-            action === "useExisting"
-              ? "既存の答案として処理済みにしました。"
-              : "別の受験回として追加しました。生徒名の確認が必要です。",
-        });
-      }
-      submissions.reload();
-      if (!scanOperatorOnly) summary.reload();
-    } catch (reason) {
-      setActionError(
-        reason instanceof Error
-          ? reason.message
-          : "重複答案の扱いを保存できませんでした。",
-      );
-    } finally {
-      setResolvingUploadId(undefined);
-    }
-  }
 
   async function toggleSessionState() {
     if (!session.data || sessionStateWorking) return;
+    if (!["draft", "open", "closed"].includes(session.data.state)) return;
     setSessionStateWorking(true);
     setActionError(undefined);
     const action = session.data.state === "open" ? "close" : "open";
@@ -339,6 +142,30 @@ export function SessionDetailPage() {
     }
   }
 
+  async function archiveSession() {
+    if (session.data?.state !== "closed" || sessionStateWorking) return;
+    setSessionStateWorking(true);
+    setActionError(undefined);
+    try {
+      await api.post(
+        `/test-sessions/${encodeURIComponent(sessionId)}:archive`,
+        {},
+        { idempotencyKey: newIdempotencyKey() },
+      );
+      setArchiveOpen(false);
+      session.reload();
+      if (!scanOperatorOnly) summary.reload();
+    } catch (reason) {
+      setActionError(
+        reason instanceof Error
+          ? reason.message
+          : "テスト実施をアーカイブできませんでした。",
+      );
+    } finally {
+      setSessionStateWorking(false);
+    }
+  }
+
   if (session.status === "loading") {
     return (
       <div className="page">
@@ -356,7 +183,8 @@ export function SessionDetailPage() {
 
   const data = session.data;
   const isOpen = data.state === "open";
-  const localDone = uploads.filter((item) => item.state === "completed").length;
+  const isClosed = data.state === "closed";
+  const isArchived = data.state === "archived";
   const operatorSummary = submissions.data?.summary;
 
   return (
@@ -364,14 +192,17 @@ export function SessionDetailPage() {
       <PageHeader
         eyebrow={`${formatDate(data.testDate)} 実施`}
         title={
-          data.sessionName ||
-          data.name ||
           data.templateTitle ||
+          data.title ||
+          data.name ||
+          data.sessionName ||
           "テスト実施"
         }
         description={
           [
-            data.templateTitle,
+            data.subject,
+            data.gradeLabel,
+            data.category,
             data.templateVersionNumber
               ? `第${data.templateVersionNumber}版`
               : undefined,
@@ -390,32 +221,55 @@ export function SessionDetailPage() {
         actions={
           <>
             <StatusBadge status={data.state} />
-            {canManageSession ? (
-              <Button
-                variant="secondary"
-                disabled={sessionStateWorking}
-                onClick={() => {
-                  if (isOpen) {
-                    setActionError(undefined);
-                    setCloseOpen(true);
-                  } else {
-                    void toggleSessionState();
-                  }
-                }}
-              >
-                {sessionStateWorking
-                  ? "変更しています…"
-                  : isOpen
-                    ? "受付を終了"
-                    : "受付を再開"}
-              </Button>
+            {canManageSession && !isArchived ? (
+              <>
+                {isClosed ? (
+                  <Button
+                    variant="quiet"
+                    disabled={sessionStateWorking}
+                    onClick={() => {
+                      setActionError(undefined);
+                      setArchiveOpen(true);
+                    }}
+                  >
+                    アーカイブ
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  disabled={sessionStateWorking}
+                  onClick={() => {
+                    if (isOpen) {
+                      setActionError(undefined);
+                      setCloseOpen(true);
+                    } else {
+                      void toggleSessionState();
+                    }
+                  }}
+                >
+                  {sessionStateWorking
+                    ? "変更しています…"
+                    : isOpen
+                      ? "受付を終了"
+                      : data.state === "draft"
+                        ? "受付を開始"
+                        : "受付を再開"}
+                </Button>
+              </>
             ) : null}
           </>
         }
       />
-      {actionError && !closeOpen ? (
+      {actionError && !closeOpen && !archiveOpen ? (
         <InlineAlert tone="danger">
           <p>{actionError}</p>
+        </InlineAlert>
+      ) : null}
+      {isArchived ? (
+        <InlineAlert tone="info" title="このテスト実施はアーカイブされています">
+          <p>
+            新しい答案の受付や状態変更はできません。答案と採点結果は引き続き確認できます。
+          </p>
         </InlineAlert>
       ) : null}
 
@@ -489,183 +343,15 @@ export function SessionDetailPage() {
         </section>
       )}
 
-      <Card className="upload-board">
-        <div className="card__header">
-          <div>
-            <h2>答案をアップロード</h2>
-            <p>
-              複数ファイルをまとめて選択できます。画面を閉じても、送信済みの処理は続きます。
-            </p>
-          </div>
-          {uploads.length ? (
-            <Badge tone="neutral">
-              {localDone} / {uploads.length}件完了
-            </Badge>
-          ) : null}
-        </div>
-        {!isOpen ? (
-          <InlineAlert tone="warning" title="答案の受付は終了しています">
-            <p>
-              {canManageSession
-                ? "アップロードするには、右上の「受付を再開」を選択してください。"
-                : "受付の再開が必要な場合は、先生に連絡してください。"}
-            </p>
-          </InlineAlert>
-        ) : (
-          <>
-            <div
-              className={classNames(
-                "file-drop-zone",
-                "file-drop-zone--session",
-                dragging && "is-dragging",
-              )}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,application/pdf,image/jpeg,image/png,image/tiff"
-                multiple
-                onChange={handleFileInput}
-                disabled={uploading}
-              />
-              <span className="file-drop-zone__icon">
-                <Icon name="upload" size={28} />
-              </span>
-              <strong>答案をここにドロップ</strong>
-              <span>または</span>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                ファイルを選択
-              </Button>
-              <small>PDF・JPEG・PNG・TIFF / 1ファイル250 MBまで</small>
-            </div>
-            {uploads.length ? (
-              <div className="local-upload-list">
-                {uploads.map((item) => (
-                  <div
-                    className={classNames(
-                      "local-upload-row",
-                      `local-upload-row--${item.state}`,
-                    )}
-                    key={item.id}
-                  >
-                    <span className="file-icon">
-                      <Icon name="file" />
-                    </span>
-                    <div className="local-upload-row__copy">
-                      <strong>{item.file.name}</strong>
-                      <span>
-                        {(item.file.size / 1_000_000).toFixed(1)} MB
-                        {item.state === "uploading"
-                          ? `・${item.progress}%`
-                          : ""}
-                      </span>
-                      {item.state === "uploading" ? (
-                        <div
-                          className="upload-progress"
-                          role="progressbar"
-                          aria-valuenow={item.progress}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                        >
-                          <span style={{ width: `${item.progress}%` }} />
-                        </div>
-                      ) : null}
-                      {item.message ? <small>{item.message}</small> : null}
-                      {item.state === "duplicate" &&
-                      item.duplicateUploadId ? (
-                        <div className="duplicate-upload-actions">
-                          <Button
-                            size="small"
-                            variant="secondary"
-                            disabled={resolvingUploadId === item.id}
-                            onClick={() =>
-                              void resolveDuplicate(item, "useExisting")
-                            }
-                          >
-                            既存の答案を使用
-                          </Button>
-                          {canManageSession ? (
-                            <Button
-                              size="small"
-                              variant="quiet"
-                              disabled={resolvingUploadId === item.id}
-                              onClick={() =>
-                                void resolveDuplicate(item, "createAttempt")
-                              }
-                            >
-                              別の受験回として追加
-                            </Button>
-                          ) : null}
-                          <Button
-                            size="small"
-                            variant="quiet"
-                            disabled={resolvingUploadId === item.id}
-                            onClick={() =>
-                              void resolveDuplicate(item, "cancel")
-                            }
-                          >
-                            取消
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
-                    <UploadState state={item.state} />
-                    {!uploading &&
-                    item.state !== "completed" &&
-                    item.state !== "duplicate" ? (
-                      <button
-                        type="button"
-                        aria-label={`${item.file.name}を一覧から削除`}
-                        onClick={() =>
-                          setUploads((current) =>
-                            current.filter((upload) => upload.id !== item.id),
-                          )
-                        }
-                      >
-                        <Icon name="close" size={17} />
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-                <div className="upload-list-actions">
-                  <Button
-                    variant="secondary"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    leadingIcon="plus"
-                  >
-                    ファイルを追加
-                  </Button>
-                  <Button
-                    onClick={() => void startUploads()}
-                    disabled={
-                      uploading ||
-                      !uploads.some(
-                        (item) =>
-                          item.state === "ready" || item.state === "failed",
-                      )
-                    }
-                    leadingIcon="upload"
-                  >
-                    {uploading ? "アップロード中…" : "アップロード開始"}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </>
-        )}
-      </Card>
+      <OrderedScanUploadBoard
+        sessionId={sessionId}
+        expectedPageCount={data.expectedSubmissionPageCount ?? undefined}
+        isOpen={isOpen}
+        onBatchChanged={() => {
+          submissions.reload();
+          if (!scanOperatorOnly) summary.reload();
+        }}
+      />
 
       <Card>
         <div className="card__header">
@@ -846,39 +532,80 @@ export function SessionDetailPage() {
       </Card>
 
       {canManageSession ? (
-        <Modal
-          open={closeOpen}
-          onClose={() => !sessionStateWorking && setCloseOpen(false)}
-          title="答案の受付を終了しますか？"
-          description="新しいアップロードを停止します。送信済みの答案処理はそのまま続きます。"
-          size="small"
-          footer={
-            <>
-              <Button
-                variant="secondary"
-                onClick={() => setCloseOpen(false)}
-                disabled={sessionStateWorking}
-              >
-                キャンセル
-              </Button>
-              <Button
-                onClick={() => void toggleSessionState()}
-                disabled={sessionStateWorking}
-              >
-                {sessionStateWorking ? "変更しています…" : "受付を終了"}
-              </Button>
-            </>
-          }
-        >
-          {actionError ? (
-            <InlineAlert tone="danger">
-              <p>{actionError}</p>
-            </InlineAlert>
-          ) : null}
-          <p>
-            終了後も、先生は答案の確認・確定を続けられます。必要な場合は後から受付を再開できます。
-          </p>
-        </Modal>
+        <>
+          <Modal
+            open={closeOpen}
+            onClose={() => !sessionStateWorking && setCloseOpen(false)}
+            title="答案の受付を終了しますか？"
+            description="新しいアップロードを停止します。送信済みの答案処理はそのまま続きます。"
+            size="small"
+            footer={
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => setCloseOpen(false)}
+                  disabled={sessionStateWorking}
+                >
+                  キャンセル
+                </Button>
+                <Button
+                  onClick={() => void toggleSessionState()}
+                  disabled={sessionStateWorking}
+                >
+                  {sessionStateWorking ? "変更しています…" : "受付を終了"}
+                </Button>
+              </>
+            }
+          >
+            {actionError ? (
+              <InlineAlert tone="danger">
+                <p>{actionError}</p>
+              </InlineAlert>
+            ) : null}
+            <p>
+              終了後も、先生は答案の確認・確定を続けられます。必要な場合は後から受付を再開できます。
+            </p>
+          </Modal>
+          <Modal
+            open={archiveOpen}
+            onClose={() => !sessionStateWorking && setArchiveOpen(false)}
+            title="このテスト実施をアーカイブしますか？"
+            description="通常の運用対象から外し、読み取り専用にします。"
+            size="small"
+            footer={
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => setArchiveOpen(false)}
+                  disabled={sessionStateWorking}
+                >
+                  キャンセル
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void archiveSession()}
+                  disabled={sessionStateWorking}
+                >
+                  {sessionStateWorking
+                    ? "変更しています…"
+                    : "アーカイブする"}
+                </Button>
+              </>
+            }
+          >
+            {actionError ? (
+              <InlineAlert tone="danger">
+                <p>{actionError}</p>
+              </InlineAlert>
+            ) : null}
+            <p>
+              すべての答案が確定または取消済みになり、アップロード、重複確認、順番取り込み、採点処理が完了してから実行できます。
+            </p>
+            <p>
+              アーカイブ後は答案受付を再開できません。答案、採点結果、訂正履歴は削除されず、引き続き閲覧できます。
+            </p>
+          </Modal>
+        </>
       ) : null}
     </div>
   );
@@ -917,14 +644,6 @@ function SummaryMetric({
       </div>
     </Card>
   );
-}
-
-function UploadState({ state }: { state: LocalUpload["state"] }) {
-  if (state === "ready") return <Badge tone="neutral">送信待ち</Badge>;
-  if (state === "uploading") return <Badge tone="info">送信中</Badge>;
-  if (state === "completed") return <Badge tone="success">送信済み</Badge>;
-  if (state === "duplicate") return <Badge tone="warning">重複</Badge>;
-  return <Badge tone="danger">失敗</Badge>;
 }
 
 function statusHelp(state: string) {

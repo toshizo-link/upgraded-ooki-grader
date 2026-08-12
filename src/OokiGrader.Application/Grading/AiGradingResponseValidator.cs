@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.Json;
 using OokiGrader.Domain.Grading;
 using OokiGrader.Domain.Scoring;
+using DomainAcceptedAnswerVariantType = OokiGrader.Domain.Templates.AcceptedAnswerVariantType;
 using DomainQuestionDefinition = OokiGrader.Domain.Templates.QuestionDefinition;
 using DomainGradingMode = OokiGrader.Domain.Templates.GradingMode;
 
@@ -15,12 +17,28 @@ public sealed record ValidatedAiQuestionObservation(
     bool ProviderReviewRecommended,
     string? ProviderReasonCode,
     string? BoundedExplanation,
-    string CanonicalItemHash);
+    string CanonicalItemHash,
+    int? EvidenceMediaIndex = null);
+
+public sealed record ValidatedAiIdentityTranscription(
+    string? VisibleName,
+    string? VisibleStudentNumber,
+    string Legibility,
+    int ProviderConfidenceBasisPoints,
+    bool UnexpectedContent);
+
+public sealed record AiIdentityComponentValidation(
+    bool IsApplicable,
+    bool IsValid,
+    ValidatedAiIdentityTranscription? Transcription,
+    string? ErrorCode);
 
 public sealed record ValidatedAiGradingResponse(
     string RequestKey,
     IReadOnlyList<ValidatedAiQuestionObservation> Observations,
-    bool UnexpectedContent);
+    bool UnexpectedContent,
+    ValidatedAiIdentityTranscription? Identity = null,
+    string? IdentityValidationError = null);
 
 public static class AiGradingResponseValidator
 {
@@ -28,6 +46,7 @@ public static class AiGradingResponseValidator
     private const int MaximumRequestKeyLength = 200;
     private const int MaximumQuestionIdLength = 200;
     private const int MaximumTranscriptionLength = 20_000;
+    private const double MinimumAutomaticConfidence = 0.80;
     private static readonly HashSet<string> AllowedOutcomes =
     [
         "correct",
@@ -40,13 +59,17 @@ public static class AiGradingResponseValidator
     public static ValidatedAiGradingResponse Validate(
         JsonElement response,
         string expectedRequestKey,
-        IReadOnlyDictionary<string, DomainQuestionDefinition> questions)
+        IReadOnlyDictionary<string, DomainQuestionDefinition> questions,
+        int? mediaPartCount = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedRequestKey);
         ArgumentNullException.ThrowIfNull(questions);
+        var schemaVersion = response.ValueKind is JsonValueKind.Object
+            ? RequiredString(response, "schema_version")
+            : string.Empty;
         if (response.ValueKind is not JsonValueKind.Object
-            || RequiredString(response, "schema_version")
-                is not "answer_transcribe_grade_v1"
+            || schemaVersion is not (
+                "answer_transcribe_grade_v1" or "submission_analysis_v2")
             || expectedRequestKey.Length > MaximumRequestKeyLength
             || RequiredBoundedString(
                     response,
@@ -84,6 +107,22 @@ public static class AiGradingResponseValidator
                 throw Invalid("ai_response_question_coverage_invalid");
             }
 
+            int? evidenceMediaIndex = null;
+            if (schemaVersion == "submission_analysis_v2")
+            {
+                var parsedIndex = RequiredInt32(
+                    result,
+                    "evidence_media_index");
+                if (parsedIndex < 0
+                    || (mediaPartCount is not null
+                        && parsedIndex >= mediaPartCount.Value))
+                {
+                    throw Invalid("ai_response_evidence_media_invalid");
+                }
+
+                evidenceMediaIndex = parsedIndex;
+            }
+
             var transcription = RequiredBoundedString(
                 result,
                 "transcription",
@@ -95,7 +134,7 @@ public static class AiGradingResponseValidator
             var proposedPoints = RequiredInt64(result, "proposed_points_milli");
             var confidence = RequiredDouble(result, "confidence");
             var reviewRecommended = question.RequiresReviewAlways
-                || question.GradingMode is DomainGradingMode.AiRubric
+                || confidence < MinimumAutomaticConfidence
                 || legibility != "clear"
                 || outcome is "partial" or "review" or "unreadable";
             var pointAwardValid = proposedPoints >= 0
@@ -156,7 +195,8 @@ public static class AiGradingResponseValidator
                 null,
                 Convert.ToHexString(
                         System.Security.Cryptography.SHA256.HashData(canonicalItem))
-                    .ToLowerInvariant()));
+                    .ToLowerInvariant(),
+                evidenceMediaIndex));
         }
 
         if (!response.TryGetProperty("missing_question_ids", out var missing)
@@ -189,6 +229,114 @@ public static class AiGradingResponseValidator
             expectedRequestKey,
             observations,
             RequiredBoolean(response, "unexpected_content"));
+    }
+
+    public static AiIdentityComponentValidation ValidateIdentityComponent(
+        JsonElement response,
+        string expectedRequestKey,
+        bool identityExpected)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedRequestKey);
+        try
+        {
+            if (response.ValueKind is not JsonValueKind.Object)
+            {
+                return InvalidIdentity(
+                    identityExpected,
+                    "ai_identity_response_invalid");
+            }
+
+            var schemaVersion = RequiredString(response, "schema_version");
+            if (schemaVersion == "answer_transcribe_grade_v1")
+            {
+                return new AiIdentityComponentValidation(
+                    IsApplicable: false,
+                    IsValid: true,
+                    Transcription: null,
+                    ErrorCode: null);
+            }
+
+            if (schemaVersion != "submission_analysis_v2"
+                || RequiredBoundedString(
+                        response,
+                        "request_key",
+                        MaximumRequestKeyLength)
+                    != expectedRequestKey
+                || !response.TryGetProperty("identity", out var identity))
+            {
+                return InvalidIdentity(
+                    identityExpected,
+                    "ai_identity_response_invalid");
+            }
+
+            if (!identityExpected)
+            {
+                return identity.ValueKind is JsonValueKind.Null
+                    ? new AiIdentityComponentValidation(
+                        IsApplicable: true,
+                        IsValid: true,
+                        Transcription: null,
+                        ErrorCode: null)
+                    : InvalidIdentity(
+                        identityExpected: false,
+                        "ai_identity_unexpected_chunk");
+            }
+
+            if (identity.ValueKind is not JsonValueKind.Object)
+            {
+                return InvalidIdentity(
+                    identityExpected: true,
+                    "ai_identity_missing_first_chunk");
+            }
+
+            var name = NullableBoundedString(
+                identity,
+                "transcribed_name",
+                400);
+            var studentNumber = NullableBoundedString(
+                identity,
+                "transcribed_student_number",
+                200);
+            var legibility = RequiredString(identity, "legibility");
+            var confidence = RequiredDouble(identity, "confidence");
+            var unexpected = RequiredBoolean(identity, "unexpected_content");
+            if (legibility is not (
+                    "clear" or "ambiguous" or "unreadable" or "blank" or
+                    "cropped")
+                || confidence is < 0 or > 1
+                || (legibility is "blank" or "unreadable"
+                    && (name is not null || studentNumber is not null))
+                || (legibility == "clear"
+                    && name is null
+                    && studentNumber is null))
+            {
+                return InvalidIdentity(
+                    identityExpected: true,
+                    "ai_identity_semantics_invalid");
+            }
+
+            return new AiIdentityComponentValidation(
+                IsApplicable: true,
+                IsValid: true,
+                new ValidatedAiIdentityTranscription(
+                    name,
+                    studentNumber,
+                    legibility,
+                    Math.Clamp(
+                        (int)Math.Round(
+                            confidence * 10_000,
+                            MidpointRounding.AwayFromZero),
+                        0,
+                        10_000),
+                    unexpected),
+                ErrorCode: null);
+        }
+        catch (InvalidDataException)
+        {
+            return InvalidIdentity(
+                identityExpected,
+                "ai_identity_response_invalid");
+        }
     }
 
     private static string RequiredString(JsonElement value, string name)
@@ -241,6 +389,43 @@ public static class AiGradingResponseValidator
         return result;
     }
 
+    private static int RequiredInt32(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property)
+            || !property.TryGetInt32(out var result))
+        {
+            throw Invalid("ai_response_field_invalid");
+        }
+
+        return result;
+    }
+
+    private static string? NullableBoundedString(
+        JsonElement value,
+        string name,
+        int maximumLength)
+    {
+        if (!value.TryGetProperty(name, out var property))
+        {
+            throw Invalid("ai_response_field_invalid");
+        }
+
+        if (property.ValueKind is JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (property.ValueKind is not JsonValueKind.String
+            || property.GetString() is not { } result
+            || result.Length > maximumLength)
+        {
+            throw Invalid("ai_response_field_invalid");
+        }
+
+        result = result.Trim();
+        return result.Length == 0 ? null : result;
+    }
+
     private static double RequiredDouble(JsonElement value, string name)
     {
         if (!value.TryGetProperty(name, out var property)
@@ -270,6 +455,21 @@ public static class AiGradingResponseValidator
                 "ai_manual_question");
         }
 
+        if (question.GradingMode is DomainGradingMode.AiRubric
+            && observation.Quality is AnswerQuality.Clear
+            && !observation.ExplicitlyBlank
+            && proposedOutcome == "incorrect"
+            && MatchesAcceptedAnswerIgnoringLayoutLineBreaks(
+                question,
+                observation.Transcription))
+        {
+            return new ReconciledProposal(
+                question.MaximumPoints.Value,
+                "correct",
+                reviewRecommended,
+                "ai_layout_line_wrap_reconciled");
+        }
+
         var useLocalRules = question.GradingMode is
                 DomainGradingMode.Deterministic
                 or DomainGradingMode.TranscribeThenRules
@@ -277,6 +477,18 @@ public static class AiGradingResponseValidator
             || observation.Quality is not AnswerQuality.Clear;
         if (!useLocalRules)
         {
+            if (question.RequiresCompleteAnswer
+                && pointAwardValid
+                && proposedPoints > 0
+                && proposedPoints < question.MaximumPoints.Value)
+            {
+                return new ReconciledProposal(
+                    0,
+                    "incorrect",
+                    true,
+                    "ai_complete_answer_required");
+            }
+
             return pointAwardValid
                 ? new ReconciledProposal(
                     proposedPoints,
@@ -324,11 +536,92 @@ public static class AiGradingResponseValidator
                 : null);
     }
 
+    private static bool MatchesAcceptedAnswerIgnoringLayoutLineBreaks(
+        DomainQuestionDefinition question,
+        string transcription)
+    {
+        if (question.AnswerOrderInsensitive)
+        {
+            return false;
+        }
+
+        var normalizedTranscription = NormalizeLayoutLineBreaks(transcription);
+        if (normalizedTranscription.Length == 0)
+        {
+            return false;
+        }
+
+        var canonicalRequiresKanji = !question.AllowNonKanji
+            && question.CanonicalAnswer is { } canonical
+            && KanjiDetector.ContainsKanji(canonical.AnswerText);
+        var transcriptionHasKanji = KanjiDetector.ContainsKanji(transcription);
+
+        return question.AcceptedAnswers.Any(answer =>
+            answer.VariantType is DomainAcceptedAnswerVariantType.Canonical
+                or DomainAcceptedAnswerVariantType.Equivalent
+                or DomainAcceptedAnswerVariantType.PhoneticException
+            && (!canonicalRequiresKanji
+                || transcriptionHasKanji
+                || answer.VariantType
+                    == DomainAcceptedAnswerVariantType.PhoneticException)
+            && string.Equals(
+                NormalizeLayoutLineBreaks(answer.AnswerText),
+                normalizedTranscription,
+                StringComparison.Ordinal));
+    }
+
+    private static string NormalizeLayoutLineBreaks(string value)
+    {
+        var normalized = value.Normalize(NormalizationForm.FormKC);
+        var builder = new StringBuilder(normalized.Length);
+        var trimLineIndent = false;
+        foreach (var character in normalized)
+        {
+            if (character is '\r' or '\n' or '\u0085' or '\u2028' or '\u2029')
+            {
+                while (builder.Length > 0
+                       && builder[^1] is ' ' or '\t' or '\u00A0')
+                {
+                    builder.Length--;
+                }
+
+                trimLineIndent = true;
+                continue;
+            }
+
+            if (trimLineIndent && character is ' ' or '\t' or '\u00A0')
+            {
+                continue;
+            }
+
+            trimLineIndent = false;
+            builder.Append(character);
+        }
+
+        return JapaneseTextNormalizer.NormalizeForComparison(builder.ToString());
+    }
+
     private sealed record ReconciledProposal(
         long ProposedPointsMilli,
         string ProposedOutcome,
         bool ReviewRecommended,
         string? ReasonCode);
+
+    private static AiIdentityComponentValidation InvalidIdentity(
+        bool identityExpected,
+        string errorCode) =>
+        new(
+            IsApplicable: true,
+            IsValid: false,
+            identityExpected
+                ? new ValidatedAiIdentityTranscription(
+                    VisibleName: null,
+                    VisibleStudentNumber: null,
+                    Legibility: "unreadable",
+                    ProviderConfidenceBasisPoints: 0,
+                    UnexpectedContent: true)
+                : null,
+            errorCode);
 
     private static InvalidDataException Invalid(string code) => new(code);
 }

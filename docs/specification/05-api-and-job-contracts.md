@@ -85,7 +85,23 @@ Lists return cursor pagination:
 }
 ```
 
-Default page size is 50, maximum 200. Cursor encodes stable sort key and ID and is integrity-protected. Search strings are max 200 Unicode characters.
+Default page size is 50, maximum 200. Supported page sizes in the staff UI are
+25, 50, 100, and 200. `sort` is an endpoint-specific allowlisted field; a
+leading `-` means descending. Every effective order ends with the immutable ID
+as a deterministic tie-breaker. The integrity-protected cursor binds the route,
+normalized search terms, filters, visibility scope, sort, and last stable key,
+so it cannot be replayed against a different query. Search strings are at most
+200 Unicode characters and 20 normalized terms. Invalid filters, date ranges,
+sorts, page cursors, or overlong values return `400 LIST_QUERY_INVALID` (an
+invalid/rebound cursor may use the cursor-specific typed problem).
+Supplying `pageSize`/legacy `limit` below 1 or above 200 is invalid rather than
+silently clamped.
+
+Major list endpoints accept `includeFacets=true`. The optional `facets` object
+contains at most 200 sorted `{value,label,count}` values per relevant field,
+computed from the complete authorized corpus rather than only the returned
+page. Current clients may fall back to values on the page when talking to an
+older host, but MUST treat returned facets as authoritative.
 
 ### 2.7 Problem response
 
@@ -194,12 +210,14 @@ Create example:
 |---|---|---|
 | `GET/POST` | `/templates` | list/create metadata |
 | `GET/PATCH` | `/templates/{templateId}` | detail/edit metadata |
+| `DELETE` | `/templates/{templateId}` | revision-protected soft archive; versions/history remain |
+| `POST` | `/templates/{templateId}:restore` | restore archived template to `active` or `draft` |
 | `POST` | `/templates/{templateId}/versions` | create empty/clone draft |
 | `GET/PATCH` | `/templates/{templateId}/versions/{versionId}` | draft detail/update defaults |
 | `POST` | `/templates/{templateId}/versions/{versionId}/sources` | attach upload with `blankTest`, `containsModelAnswers`, `containsNonModelAnswers`, or `separateAnswerKey` role |
 | `POST` | `/templates/{templateId}/versions/{versionId}:generateDraft` | enqueue AI draft |
 | `GET` | `/templates/source-match?uploadIds=...&sourceRoles=...` | find an exact published source-set-and-role match before creating a redundant draft |
-| `POST` | `/templates/{templateId}/versions/{versionId}/questions:verifyProposals` | atomically verify the non-blocking generated proposals and return skipped issues |
+| `POST` | `/templates/{templateId}/versions/{versionId}/questions:verifyProposals` | atomically verify proposals; `selectionMode: "all"` acknowledges complete reviewable proposals while returning every structural/global skip, and legacy `allNonBlocking` remains supported |
 | `GET` | `/templates/{templateId}/versions/{versionId}/generation` | proposal/status |
 | `POST` | `/templates/{templateId}/versions/{versionId}:acceptProposal` | copy selected proposal fields |
 | `GET/POST` | `/templates/{templateId}/versions/{versionId}/questions` | list/add |
@@ -207,8 +225,14 @@ Create example:
 | `POST` | `/templates/{templateId}/versions/{versionId}/questions:reorder` | reorder |
 | `GET/PUT` | `/templates/{templateId}/versions/{versionId}/regions` | region set |
 | `POST` | `/templates/{templateId}/versions/{versionId}:validate` | validation report |
-| `POST` | `/templates/{templateId}/versions/{versionId}:publish` | immutable publish |
-| `POST` | `/templates/{templateId}:retire` | prevent new sessions |
+| `POST` | `/templates/{templateId}/versions/{versionId}:publish` | normal `受付を開始` contract: atomically make a valid draft immutable and create/open its canonical first test session; accepts revision plus test date/optional class and returns `testSession` |
+
+`DELETE /templates/{templateId}` requires `If-Match: "rev-N"` on the first
+archive and returns `204` with the new ETag. A repeated archive is idempotent.
+Restore accepts the ETag or `{ "revision": N }` and returns the restored
+template summary. The normal list excludes archived templates; use
+`?state=archived` to retrieve the recoverable archive. Archive returns `409`
+with `TEMPLATE_EXTRACTION_IN_PROGRESS` while any child version is generating.
 
 `uploadIds` and `sourceRoles` contain the same number of comma-separated
 values in the same order. Reuse identity includes both the stored file object
@@ -225,6 +249,8 @@ Question update:
   "gradingMode": "transcribe_then_rules",
   "maxPointsMilli": 2000,
   "allowNonKanji": false,
+  "requiresCompleteAnswer": true,
+  "answerOrderInsensitive": false,
   "acceptedAnswers": [
     {"text": "大木", "variantType": "canonical"}
   ],
@@ -238,6 +264,15 @@ Question update:
   "requiresReviewAlways": false
 }
 ```
+
+The editor labels `allowNonKanji: false` positively as `漢字必須`. `完答`
+maps to `requiresCompleteAnswer`; `順不同` maps to
+`answerOrderInsensitive`. Legacy clients that omit the two new fields receive
+`false` defaults. Order-insensitive values use explicit list separators; the
+server preserves duplicate component counts. The dedicated
+`漢字必須の例外（読み）` rows use answer `variantType: "explicitException"`
+(stored as `phonetic_exception`); ordinary `accepted` variants do not bypass
+the Kanji requirement.
 
 Attach-source metadata example:
 
@@ -270,13 +305,19 @@ Published-version `PATCH` returns `409 TEMPLATE_VERSION_IMMUTABLE`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET/POST` | `/test-sessions` | list/create |
+| `GET/POST` | `/test-sessions` | list/create another administration from an immutable version; normal request supplies version, date, optional class, and `openImmediately: true`, while canonical display metadata comes from the template snapshot |
 | `GET/PATCH` | `/test-sessions/{sessionId}` | detail/edit draft/open |
 | `PUT` | `/test-sessions/{sessionId}/roster` | replace expected roster with revision |
 | `POST` | `/test-sessions/{sessionId}:open` | allow uploads |
 | `POST` | `/test-sessions/{sessionId}:close` | stop normal uploads |
-| `POST` | `/test-sessions/{sessionId}:archive` | archive UI |
+| `POST` | `/test-sessions/{sessionId}:archive` | archive a closed, terminal-work session |
 | `GET` | `/test-sessions/{sessionId}/summary` | counts/status/cost |
+
+Session archive returns a typed `409` until every submission is finalized or
+voided and no related upload, duplicate-pending upload, ordered-scan batch, or
+grading job remains nonterminal. After success, mutation endpoints return
+`TEST_SESSION_ARCHIVED_READ_ONLY`; historical detail/summary/result reads remain
+available and archived work is excluded from review/finalization queues.
 
 ### 3.6 Resumable uploads
 
@@ -354,6 +395,84 @@ Finalize returns:
 }
 ```
 
+#### Ordered one-page scan batches
+
+The session detail exposes `expectedSubmissionPageCount`. Clients freeze the
+complete one-page manifest before starting parallel uploads:
+
+| Selected published test | `expectedSubmissionPageCount` |
+|---|---:|
+| HOP | 1 |
+| STEP `-1`, `-2`, or `-3` variation/session | 2 |
+| Class placement | complete published template count, 1–50 |
+| Other | complete published template count, 1–50 |
+
+A registered STEP variation is an independent test/session; clients must not
+submit the original six-page source set as one answer. The ordered manifest is
+the ownership authority. It must use unique, gap-free one-based ordinals, may
+contain at most 1,000 items, and its item count must be an exact multiple of the
+expected submission page count.
+
+```http
+POST /test-sessions/{sessionId}/ordered-scan-batches
+Idempotency-Key: ...
+```
+
+```json
+{
+  "items": [
+    {"clientItemId":"uuid-1","fileName":"SCAN_0001.pdf","inputOrdinal":1},
+    {"clientItemId":"uuid-2","fileName":"SCAN_0002.pdf","inputOrdinal":2}
+  ]
+}
+```
+
+Each upload uses purpose `completedTestPage` and repeats the immutable binding:
+
+```json
+{
+  "purpose": "completedTestPage",
+  "testSessionId": "01JSESSION...",
+  "orderedScanBatchId": "01JBATCH...",
+  "inputOrdinal": 1,
+  "clientItemId": "uuid-1",
+  "fileName": "SCAN_0001.pdf",
+  "declaredMimeType": "application/pdf",
+  "length": 842113
+}
+```
+
+The host returns `orderedScanItemId` instead of creating a submission at upload
+finalization. After every item is durable, the client uses the latest row
+version:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/ordered-scan-batches/{batchId}` | manifest, items, groups, issues, submissions |
+| `POST` | `/ordered-scan-batches/{batchId}:finalize` | freeze/queue local classification and assembly |
+| `POST` | `/ordered-scan-batches/{batchId}:cancel` | release staged pages before assembly |
+
+Finalize/cancel bodies are `{ "expectedRowVersion": 7 }`. Batch statuses are
+`draft`, `processing`, `completed`, `needsReview`, `failed`, `cancelled`, and
+`expired`. Input and group ordinals are one-based; submission page numbers are
+one-based. Replaying the same batch/manifest is idempotent and never creates a
+second logical submission.
+
+Every `completedTestPage` upload must verify as exactly one PDF page and must
+match the batch's immutable session, item ID, ordinal, filename, length, and
+declared type. During `ordered_scan.assemble`, the host—not an external
+provider—matches each input against published template pages and requires an
+unambiguous role in exact page order. Missing, repeated, foreign, ambiguous, or
+out-of-order roles move the batch to review without creating a logical
+submission. Valid groups retain source ordinal/page/hash lineage, and ordered
+submission analysis reads identity only from logical page 1 in its first chunk.
+Legacy/name-only fallback also receives logical page 1 only.
+
+The API cannot authenticate the student identity of page 2 or later from order
+alone. If a different student's later page has no identifier and occupies the
+correct template role, structural validation succeeds; the school must enforce
+consecutive per-student scanning or use a separate manual/identified workflow.
+
 ### 3.7 Submissions, assignment, and grading
 
 | Method | Path | Role/purpose |
@@ -371,7 +490,11 @@ Finalize returns:
 | `POST` | `/submissions/{submissionId}:changePriority` | economy/expedite |
 | `GET` | `/submissions/{submissionId}/grading-runs` | provenance/history |
 | `GET` | `/submissions/{submissionId}/grading-runs/{runId}` | question results |
+| `GET` | `/submissions/{submissionId}/grading-workspace` | one submission's complete current run, pages, metadata, and exact unresolved snapshot |
+| `GET` | `/submissions/{submissionId}/original-pdf` | authorized original/assembled multipage PDF with range support |
+| `GET` | `/submissions/{submissionId}/pages/{pageId}/thumbnail` | submission-scoped lazy thumbnail |
 | `POST` | `/submissions/{submissionId}/results/{resultId}:override` | append teacher revision |
+| `POST` | `/submissions/{submissionId}/results:confirm-unresolved` | preserve values and resolve the exact current unresolved set; does not finalize |
 | `POST` | `/submissions/{submissionId}:finalize` | finalize current run |
 | `POST` | `/submissions/{submissionId}:reopen` | reason required |
 | `POST` | `/submissions/{submissionId}:void` | reason required |
@@ -424,6 +547,72 @@ Claiming prevents accidental simultaneous edits but never prevents an administra
 | `GET` | `/exports/{exportId}` | status/provenance |
 | `GET` | `/exports/{exportId}/file` | secure PDF download |
 | `POST` | `/exports/{exportId}:regenerate` | new revision if allowed |
+| `POST` | `/transcript-exports:preview` | resolve checked rows or all current report matches and return exact counts/fingerprint |
+| `POST` | `/transcript-exports` | enqueue a verified ZIP of canonical per-result PDFs; teacher/admin only |
+| `GET` | `/transcript-exports/{exportId}` | bulk-package state, progress, counts, and safe error |
+| `GET` | `/transcript-exports/{exportId}/file` | secure verified ZIP download |
+
+Bulk preview accepts exactly one selector. Explicit selection uses distinct
+submission IDs:
+
+```json
+{
+  "selector": {
+    "submissionIds": ["01J...", "01K..."]
+  }
+}
+```
+
+All-matches selection uses the same membership fields as the finalized
+`GET /submissions` report list:
+
+```json
+{
+  "selector": {
+    "filter": {
+      "search": "大木 国語",
+      "from": "2026-04-01",
+      "to": "2026-08-10",
+      "studentId": null,
+      "templateId": "01J...",
+      "subject": "国語",
+      "category": "漢字",
+      "course": "本科",
+      "class": "A組",
+      "sort": "-testDate"
+    }
+  }
+}
+```
+
+Preview returns a server-normalized selector, `studentCount`, `resultCount`,
+`sourceFingerprint`, and the enforced student/result/archive-size limits.
+Creation repeats that selector and fingerprint and supplies the normal
+`Idempotency-Key` request header. The export stores that key and a request
+fingerprint in the same transaction as the export/job; uniqueness is scoped to
+the creating staff user. The same key plus identical request recovers the same
+export even if the HTTP replay record was not written, while the same key with
+different input is rejected. A changed source returns
+`412 BULK_EXPORT_SOURCE_SNAPSHOT_STALE`; an empty, duplicate, ineligible, or
+over-limit selection returns a typed 422 problem. In all-matches mode, if even
+one matched finalized row is unassigned or otherwise unsafe to export, the
+whole request fails atomically with
+`422 BULK_EXPORT_FILTER_HAS_NON_EXPORTABLE_RESULTS` and a non-PII count; the
+server must not silently create a partial archive. Status is one of `queued`,
+`rendering`, `verified`, `failed`, or `superseded`, with
+`progressBasisPoints`, processed/total counts, provenance hashes/versions, safe
+error fields, timestamps, and a `fileUrl` only when verified. ZIP downloads use
+`application/zip`, private/no-store caching, `nosniff`, an SHA-256 ETag, and
+range requests.
+
+Create uses the low-cardinality site policy `bulk-transcript-export-create`:
+burst 3, refill 1 request/minute, no queue. The create transaction additionally
+permits at most 2 active (`queued`/`rendering`) exports for one staff actor and
+4 for the site. A cap returns `429 BULK_EXPORT_ACTIVE_LIMIT_REACHED`,
+`retryable: true`, and `Retry-After: 60`. Preview, status, and download use the
+normal authenticated `search` limiter. Status revalidates a verified source
+snapshot before returning `fileUrl`; drift durably changes the export to
+`superseded`, so a stale archive is never advertised as downloadable.
 
 Progress query:
 
@@ -463,9 +652,9 @@ Response:
 |---|---|---|
 | `GET/PATCH` | `/admin/settings/site` | administrator |
 | `GET` | `/admin/ai-connections` | masked Gemini/OpenRouter connections |
-| `POST` | `/admin/ai-connections` | create connection/secret |
-| `PUT` | `/admin/ai-connections/{id}` | replace key/settings |
-| `POST` | `/admin/ai-connections/{id}:test` | synthetic capability probe |
+| `POST` | `/admin/ai-connections` | create connection/secret; Gemini optionally tests-and-enables before commit |
+| `PUT` | `/admin/ai-connections/{id}` | replace key/settings; Gemini optionally tests-and-enables before commit |
+| `POST` | `/admin/ai-connections/{id}:test` | synthetic capability probe; successful Gemini test self-heals current profiles |
 | `GET/POST` | `/admin/ai-task-profiles` | list/create per-task profiles |
 | `PATCH` | `/admin/ai-task-profiles/{id}` | update draft profile |
 | `POST` | `/admin/ai-task-profiles/{id}:validate` | capability + accuracy fixture run |
@@ -489,32 +678,61 @@ Response:
 | `GET` | `/admin/audit-events` | filtered audit |
 | `POST` | `/admin/diagnostic-bundles` | redacted support bundle |
 
-The API never offers “show API key.” `GET /admin/settings/ai` returns:
+Gemini `POST`/`PUT` accepts optional `testAndEnable`; the normal Web flow sends
+`true`. That request is candidate-first: the supplied key must pass
+authentication, exact-model, image-input, strict-structured-output,
+usage-metadata, and representative image-task checks before any secret,
+connection revision, or profile pointer is persisted. On full success the same
+transaction encrypts/persists the key and activates the exact current
+`templateExtraction`, `nameTranscription`, `initialGrading`, and `adjudication`
+profiles with `approval_state=capability_passed`. Failure, timeout, cancellation,
+or an ambiguous replace result returns a typed error and leaves the former key,
+connection, and active profiles byte-for-byte/revision-for-revision unchanged.
+
+The existing `:test` route uses the stored Gemini key and the same full probe;
+success repairs missing or stale exact-current Gemini profiles atomically.
+Startup performs the same active-profile reconciliation after checked-in
+prompt/schema/configuration-hash changes. Jobs already queued remain pinned to
+their recorded immutable profile revision. `testAndEnable` is not the normal
+OpenRouter contract. OpenRouter is saved first, then explicitly rechecked by the
+administrator; OpenRouter and legacy callers keep the advanced profile create,
+validate, approve, activate, and rollback routes in this table.
+
+The API never offers “show API key.” `GET /admin/ai-connections` returns a
+paged masked connection collection, for example:
 
 ```json
 {
-  "connections": [
+  "items": [
     {
       "id": "01JCONNECTION...",
       "provider": "geminiDirect",
       "configured": true,
       "keyFingerprint": "sha256:7fa1…91c2",
-      "lastCapabilityProbe": {"state": "passed", "checkedAt": "2026-07-27T03:15:22Z"}
-    },
-    {
-      "id": "01JCONNECTION2...",
-      "provider": "openRouter",
-      "configured": true,
-      "keyFingerprint": "sha256:02b4…3ae8",
-      "lastCapabilityProbe": {"state": "passed", "checkedAt": "2026-07-27T03:17:10Z"}
+      "lastCapabilityProbe": {
+        "state": "passed",
+        "checkedAt": "2026-07-27T03:15:22Z",
+        "imageInput": true,
+        "structuredOutput": true
+      }
     }
   ],
-  "activeProfiles": {
-    "templateExtraction": "01JPROFILE...",
-    "nameTranscription": "01JPROFILE2...",
-    "initialGrading": "01JPROFILE3...",
-    "adjudication": "01JPROFILE4..."
-  }
+  "nextCursor": null,
+  "totalApproximate": 1
+}
+```
+
+`GET /admin/ai-task-profiles` separately returns the paged profile collection.
+The Web derives the four read-only current-task states from active entries such
+as:
+
+```json
+{
+  "taskType": "templateExtraction",
+  "approvalState": "capability_passed",
+  "active": true,
+  "stale": false,
+  "connectionId": "01JCONNECTION..."
 }
 ```
 
@@ -584,9 +802,11 @@ Every handler:
 | `PreprocessTemplate` | `template-version:{id}:preprocess:{sourceHash}` | normalized blank pages |
 | `GenerateTemplateProposal` | `template-version:{id}:generate:{inputHash}:{promptVersion}` | proposal |
 | `PreprocessSubmission` | `submission:{id}:preprocess:{inputHash}:{pipeline}` | pages/quality/crops |
-| `PrepareNameRequest` | `submission:{id}:name:{cropHash}:{schema}` | AI request |
+| `ordered_scan.assemble` | `ordered-scan:{batchId}:assemble` | classified groups, source lineage, logical submissions |
+| `PrepareSubmissionAnalysis` | `submission:{id}:gemini-analyze:{manifestHash}:{profile}:{revision}:{promptHash}` plus deterministic chunk manifest | chunk 1 identity + grading, later grading-only chunks |
+| `PrepareNameRequest` | `submission:{id}:name:{pageManifestHash}:{schema}` | fallback/legacy page-1 name request |
 | `MatchStudentLocally` | `submission:{id}:match:{recognitionId}:{rosterRevision}` | candidates/disposition |
-| `PrepareGradingRequest` | `submission:{id}:grade:{manifestHash}` | AI request |
+| `PrepareGradingRequest` | `submission:{id}:grade:{manifestHash}` plus deterministic chunk manifest | one durable AI request per consecutive page chunk |
 | `AssembleAiBatch` | compatibility key + assembly epoch | prepared batch |
 | `SubmitAiBatch` | `ai-batch:{id}:submitEpoch` | provider operation ID |
 | `ReconcileAiBatch` | `ai-batch:{id}:operation` | terminal/next poll |
@@ -603,6 +823,49 @@ Every handler:
 | `CreateBackup` | scheduled backup ID | verified backup |
 | `VerifyBackup` | backup manifest hash | verification state |
 | `DatabaseIntegrityCheck` | maintenance window | check report |
+
+Initial grading uses pipeline `gemini-submission-analysis-page-chunks-v5` and
+schema `submission_analysis_v2`. Chunk 1 returns the page-1 identity component
+and grading observations; later chunks require `identity=null`. Identity and
+grading components are validated and persisted independently. A chunk
+contains at most 32 page media parts and raw bytes no greater than the smallest
+of the configured media cap, 12 MiB, and the dynamic base64-aware allowance
+under the Gemini client's 18 MiB complete serialized-request limit. The dynamic
+calculation reserves one MiB for the JSON envelope after counting UTF-8 system
+instruction, user instruction, and schema bytes. More than 300 questions,
+system/user instructions above 20,000/100,000 characters, exhausted serialized
+overhead, or one page above the effective allowance fails locally before
+provider media I/O.
+
+Each chunk is keyed by its immutable manifest hash. Redelivery, partial retry,
+and the retained direct/legacy dispatch continuations reuse terminal chunks and
+settle usage once. Only after every chunk succeeds does the apply path create
+one grading run. A question observed by exactly one chunk uses that evidence;
+missing observations from other chunks are neutral; multiple observations
+produce `ai_chunk_observation_conflict` and mandatory manual review.
+
+If all chunks finish before student confirmation, the host stores one
+non-current `awaiting_identity` run. It cannot appear in grade/finalization
+queues. Assigning a student or explicitly marking the paper unidentified
+activates that same run and any parked adjudication work without another
+initial-grading request. Marking it as a non-student sample discards the staged
+run and cancels pending apply/recheck work while retaining request usage ledgers.
+
+The grading-workspace bulk confirmation request carries submission revision,
+run ID, result-source revision, and every unresolved result/revision pair (at
+most 300). The server requires that set to equal the current unresolved set and
+commits append-only teacher-confirmation revisions in one transaction. Any
+changed, missing, finalized, voided, or archived item rejects the whole action
+with no partial writes. A semantic replay is harmless. This operation is
+separate from submission finalization.
+
+`RunRetention` includes every live managed-scan reference owned by the selected
+submission: ordered one-page sources, the assembled PDF, normalized pages,
+thumbnails, and grading artifacts. Manifest finalization clears live source and
+answer-evidence references, removes derived page/artifact records, and sets
+`scan_deleted`. Immutable source ordinals/hashes and structured grading runs,
+results, revisions, totals, audits, and reports remain. A content-addressed
+object shared by a non-expired reference is not physically deleted.
 
 ### 5.3 Retry policy
 
@@ -666,9 +929,17 @@ CI MUST test:
 - CSRF/origin/session/lockout behavior;
 - ETag and idempotency semantics;
 - upload interruption/resume/hash/offset/expiry;
+- ordered one-page manifests for HOP 1, independent STEP 2, and
+  class-placement/Other 1–50, including role/order/duplicate failures and
+  idempotent assembly;
+- multi-chunk initial grading at the serialized provider boundary, partial
+  replay, last-page evidence, and cross-chunk conflict review;
 - Japanese Unicode round trips;
 - pagination stability under concurrent inserts;
 - deleted scan `410` behavior;
+- retention of structured grades and ordered ordinal/hash lineage after all
+  source, assembled, normalized, thumbnail, and grading-image references are
+  released;
 - file range and safe filename behavior;
 - SSE replay and authorization;
 - problem responses contain no secrets/paths;

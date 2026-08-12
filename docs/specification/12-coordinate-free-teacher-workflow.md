@@ -13,8 +13,9 @@ Ooki Grader MUST optimize for the following teacher workflow:
    for each file, confirm only whether it is unfilled, authoritative, filled
    but non-authoritative, or a separate answer key.
 2. Let AI create the logical question, answer, point, and grading-policy draft.
-3. Review only incomplete, low-confidence, conflicting, subjective, or otherwise
-   exceptional proposals; publish the template.
+3. Review only incomplete, low-confidence, conflicting, unsupported, or
+   otherwise exceptional proposals; descriptive type alone does not require
+   individual review. Then publish the template.
 4. Upload completed papers in bulk.
 5. Let AI read the student's name and every answer from the complete normalized
    pages, grade them, and independently recheck ambiguous answers.
@@ -60,7 +61,8 @@ the security specification. Data minimization is achieved through:
 - bounded media and output sizes;
 - short-lived provider processing;
 - local storage and retention controls;
-- audit, budgets, and explicit approved profiles.
+- audit, budgets, exact-current capability-passed Gemini profiles, and explicit
+  approved advanced profiles.
 
 Identity redaction or coordinate-based privacy cropping is not part of the
 teacher workflow.

@@ -107,6 +107,19 @@ public sealed class OokiDatabaseInitializer(
             OR NEW.published_by_staff_user_id IS NOT OLD.published_by_staff_user_id
             OR NEW.published_at IS NOT OLD.published_at
             OR NEW.content_hash IS NOT OLD.content_hash
+            OR NEW.test_type IS NOT OLD.test_type
+            OR NEW.answer_style IS NOT OLD.answer_style
+            OR NEW.prompt_system IS NOT OLD.prompt_system
+            OR NEW.originating_batch_id IS NOT OLD.originating_batch_id
+            OR NEW.originating_unit_id IS NOT OLD.originating_unit_id
+            OR NEW.generation_profile_version IS NOT OLD.generation_profile_version
+            OR NEW.generation_profile_json IS NOT OLD.generation_profile_json
+            OR NEW.generation_profile_hash IS NOT OLD.generation_profile_hash
+            OR NEW.step_set_index IS NOT OLD.step_set_index
+            OR NEW.step_variation_index IS NOT OLD.step_variation_index
+            OR NEW.printed_test_name IS NOT OLD.printed_test_name
+            OR NEW.resolved_grade IS NOT OLD.resolved_grade
+            OR NEW.expected_submission_page_count IS NOT OLD.expected_submission_page_count
           )
         BEGIN
             SELECT RAISE(ABORT, 'published_template_version_content_is_immutable');

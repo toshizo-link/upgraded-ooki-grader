@@ -172,6 +172,45 @@ export type paths = {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/test-sessions/{sessionId}/ordered-scan-batches": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly sessionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["CreateOrderedScanBatchRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/results/{submissionId}": {
         readonly parameters: {
             readonly query?: never;
@@ -390,6 +429,150 @@ export type paths = {
                 };
             };
         };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/transcript-exports:preview": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["BulkTranscriptExportPreviewRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/transcript-exports": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["BulkTranscriptExportCreateRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/transcript-exports/{exportId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly exportId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/transcript-exports/{exportId}/file": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly exportId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -918,7 +1101,12 @@ export type paths = {
                 readonly query?: {
                     readonly search?: string;
                     readonly status?: string;
+                    readonly active?: boolean;
                     readonly class?: string;
+                    readonly course?: string;
+                    readonly grade?: string;
+                    readonly sort?: string;
+                    readonly includeFacets?: boolean;
                     readonly cursor?: string;
                     readonly pageSize?: number | string;
                     readonly limit?: number | string;
@@ -1384,6 +1572,12 @@ export type paths = {
                     readonly q?: string;
                     readonly state?: string;
                     readonly subject?: string;
+                    readonly category?: string;
+                    readonly course?: string;
+                    readonly grade?: string;
+                    readonly testType?: string;
+                    readonly sort?: string;
+                    readonly includeFacets?: boolean;
                     readonly cursor?: string;
                     readonly pageSize?: number | string;
                     readonly limit?: number | string;
@@ -1461,6 +1655,64 @@ export type paths = {
         };
         readonly put?: never;
         readonly post?: never;
+        readonly delete: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly templateId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/templates/{templateId}:restore": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly templateId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: {
+                readonly content: {
+                    readonly "application/json": null | components["schemas"]["TemplateLifecycleApiRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -2002,6 +2254,349 @@ export type paths = {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/template-generation-batches": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["CreateTemplateGenerationBatchRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/generate": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["GenerateTemplateGenerationBatchRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/retry": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["TemplateGenerationBatchMutationRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/cancel": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["TemplateGenerationBatchMutationRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/units/{unitId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                    readonly unitId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["UpdateTemplateGenerationUnitRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/step-sets/{setIndex}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                    readonly setIndex: number;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["UpdateTemplateGenerationStepSetRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}/confirm": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["TemplateGenerationBatchMutationRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/resumable": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: {
+                    readonly limit?: number | string;
+                };
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/template-generation-batches/{batchId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/test-sessions": {
         readonly parameters: {
             readonly query?: never;
@@ -2014,6 +2609,13 @@ export type paths = {
                 readonly query?: {
                     readonly search?: string;
                     readonly state?: string;
+                    readonly from?: string;
+                    readonly to?: string;
+                    readonly templateId?: string;
+                    readonly class?: string;
+                    readonly course?: string;
+                    readonly sort?: string;
+                    readonly includeFacets?: boolean;
                     readonly cursor?: string;
                     readonly pageSize?: number | string;
                 };
@@ -2557,6 +3159,119 @@ export type paths = {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/ordered-scan-batches/{batchId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/ordered-scan-batches/{batchId}:finalize": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["OrderedScanMutationRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/ordered-scan-batches/{batchId}:cancel": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly batchId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["OrderedScanMutationRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/submissions": {
         readonly parameters: {
             readonly query?: never;
@@ -2579,6 +3294,14 @@ export type paths = {
                     readonly to?: string;
                     readonly finalizedOn?: string;
                     readonly sort?: string;
+                    readonly studentId?: string;
+                    readonly templateId?: string;
+                    readonly subject?: string;
+                    readonly category?: string;
+                    readonly course?: string;
+                    readonly class?: string;
+                    readonly finalizedOnly?: boolean;
+                    readonly includeFacets?: boolean;
                 };
                 readonly header?: never;
                 readonly path?: never;
@@ -2997,6 +3720,151 @@ export type paths = {
             readonly requestBody: {
                 readonly content: {
                     readonly "application/json": components["schemas"]["OverrideResultBody"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/submissions/{submissionId}/grading-workspace": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly submissionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/submissions/{submissionId}/original-pdf": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly submissionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/submissions/{submissionId}/pages/{pageId}/thumbnail": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly submissionId: string;
+                    readonly pageId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/submissions/{submissionId}/results:confirm-unresolved": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly submissionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["ConfirmUnresolvedResultsBody"];
                 };
             };
             readonly responses: {
@@ -4428,6 +5296,8 @@ export type components = {
             readonly aliasType: null | string;
             readonly kind: null | string;
         };
+        /** @enum {unknown} */
+        readonly AnswerStyle: "normal" | "fillBlank" | null;
         readonly ApplyRosterImportRequest: {
             readonly strategy: null | string;
         };
@@ -4446,6 +5316,31 @@ export type components = {
             readonly sourceRole?: null | string;
             readonly displayName?: null | string;
         };
+        readonly BulkTranscriptExportCreateRequest: {
+            readonly sourceFingerprint: null | string;
+            readonly selector: null | components["schemas"]["BulkTranscriptExportSelector"];
+        };
+        readonly BulkTranscriptExportFilter: {
+            readonly search: null | string;
+            /** Format: date */
+            readonly from: null | string;
+            /** Format: date */
+            readonly to: null | string;
+            readonly studentId: null | string;
+            readonly templateId: null | string;
+            readonly subject: null | string;
+            readonly category: null | string;
+            readonly course: null | string;
+            readonly class: null | string;
+            readonly sort: null | string;
+        };
+        readonly BulkTranscriptExportPreviewRequest: {
+            readonly selector: null | components["schemas"]["BulkTranscriptExportSelector"];
+        };
+        readonly BulkTranscriptExportSelector: {
+            readonly submissionIds: null | readonly string[];
+            readonly filter: null | components["schemas"]["BulkTranscriptExportFilter"];
+        };
         readonly ChangePasswordBody: {
             readonly currentPassword: string;
             readonly newPassword: string;
@@ -4457,9 +5352,31 @@ export type components = {
             readonly password: string;
             readonly schoolName: string;
         };
+        readonly ConfirmUnresolvedResultItem: {
+            readonly resultId: string;
+            /** Format: int32 */
+            readonly sourceResultRevision: number | string;
+        };
+        readonly ConfirmUnresolvedResultsBody: {
+            /** Format: int64 */
+            readonly sourceSubmissionRevision: number | string;
+            readonly gradingRunId: null | string;
+            /** Format: int64 */
+            readonly sourceResultSourceRevision: number | string;
+            readonly items: null | readonly components["schemas"]["ConfirmUnresolvedResultItem"][];
+        };
         readonly CreateExportBody: {
             /** Format: int64 */
             readonly resultRevision: null | number | string;
+        };
+        readonly CreateOrderedScanBatchItem: {
+            readonly clientItemId: string;
+            readonly fileName: string;
+            /** Format: int32 */
+            readonly inputOrdinal: number | string;
+        };
+        readonly CreateOrderedScanBatchRequest: {
+            readonly items: null | readonly components["schemas"]["CreateOrderedScanBatchItem"][];
         };
         readonly CreateSessionBody: {
             readonly templateVersionId: string;
@@ -4468,7 +5385,8 @@ export type components = {
             readonly sessionName: null | string;
             readonly classLabel: null | string;
             readonly course: null | string;
-            readonly priority: string;
+            readonly priority: null | string;
+            readonly openImmediately: null | boolean;
         };
         readonly CreateStaffRequest: {
             readonly username: string;
@@ -4498,6 +5416,14 @@ export type components = {
             /** Format: int64 */
             readonly defaultPointsMilli?: null | number | string;
         };
+        readonly CreateTemplateGenerationBatchRequest: {
+            readonly sourceId: string;
+            readonly testType: components["schemas"]["TestType"];
+            readonly subject: string;
+            readonly answerStyle: null | components["schemas"]["AnswerStyle"];
+            /** Format: int64 */
+            readonly expectedSourceRowVersion: number | string;
+        };
         readonly CreateTemplateVersionApiRequest: {
             readonly sourceVersionId?: null | string;
             readonly cloneFromVersionId?: null | string;
@@ -4517,6 +5443,10 @@ export type components = {
             /** Format: int64 */
             readonly length: number | string;
             readonly expectedSha256: null | string;
+            readonly orderedScanBatchId?: null | string;
+            /** Format: int32 */
+            readonly inputOrdinal?: null | number | string;
+            readonly clientItemId?: null | string;
         };
         readonly FinalizeBody: {
             /** Format: int64 */
@@ -4529,6 +5459,12 @@ export type components = {
             readonly priority?: null | string;
             readonly replaceableMetadataFields?: null | readonly string[];
         };
+        readonly GenerateTemplateGenerationBatchRequest: {
+            /** Format: int64 */
+            readonly expectedRowVersion: null | number | string;
+        };
+        /** @enum {unknown} */
+        readonly GradeLevel: "unknown" | "grade1" | "grade2" | "grade3" | "grade4" | "grade5" | "grade6" | null;
         readonly LoginRequest: {
             readonly username: string;
             readonly password: string;
@@ -4537,6 +5473,10 @@ export type components = {
             /** Format: int64 */
             readonly sourceRevision: number | string;
             readonly status: string;
+        };
+        readonly OrderedScanMutationRequest: {
+            /** Format: int64 */
+            readonly expectedRowVersion: null | number | string;
         };
         readonly OverrideResultBody: {
             /** Format: int32 */
@@ -4572,6 +5512,9 @@ export type components = {
         readonly PublishTemplateApiRequest: {
             /** Format: int64 */
             readonly revision?: null | number | string;
+            /** Format: date */
+            readonly testDate?: null | string;
+            readonly classLabel?: null | string;
         };
         readonly QuestionWriteRequest: {
             readonly displayLabel?: null | string;
@@ -4587,6 +5530,8 @@ export type components = {
             /** Format: int64 */
             readonly pointIncrementMilli?: null | number | string;
             readonly allowNonKanji?: null | boolean;
+            readonly requiresCompleteAnswer?: null | boolean;
+            readonly answerOrderInsensitive?: null | boolean;
             readonly acceptedAnswers?: null | readonly components["schemas"]["AcceptedAnswerWriteRequest"][];
             readonly canonicalAnswer?: null | string;
             readonly answerProvenance?: null | string;
@@ -4650,6 +5595,7 @@ export type components = {
             readonly concurrencyLimit: null | number | string;
             /** Format: int64 */
             readonly revision: null | number | string;
+            readonly testAndEnable: null | boolean;
         };
         readonly SaveAiEvaluationRecordRequest: {
             readonly datasetVersion: string;
@@ -4702,6 +5648,16 @@ export type components = {
             readonly revision: null | number | string;
             readonly reasonCode: null | string;
         };
+        readonly TemplateGenerationBatchMutationRequest: {
+            /** Format: int64 */
+            readonly expectedRowVersion: null | number | string;
+        };
+        readonly TemplateLifecycleApiRequest: {
+            /** Format: int64 */
+            readonly revision?: null | number | string;
+        };
+        /** @enum {unknown} */
+        readonly TestType: "hop" | "step" | "classPlacement" | "other";
         readonly UpdateSessionBody: {
             readonly priority: string;
             /** Format: int64 */
@@ -4720,6 +5676,20 @@ export type components = {
             readonly notes: null | string;
             /** Format: int64 */
             readonly revision: number | string;
+        };
+        readonly UpdateTemplateGenerationStepSetRequest: {
+            readonly baseTestName: string;
+            readonly expectedUnitRowVersions: {
+                readonly [key: string]: number | string;
+            };
+        };
+        readonly UpdateTemplateGenerationUnitRequest: {
+            readonly baseTestName: null | string;
+            readonly resolvedGrade: null | components["schemas"]["GradeLevel"];
+            readonly gradeConfirmedByUser: null | boolean;
+            readonly teacherNote: null | string;
+            /** Format: int64 */
+            readonly expectedRowVersion: number | string;
         };
         readonly ValidateAiTaskProfileRequest: {
             readonly evaluationId: string;

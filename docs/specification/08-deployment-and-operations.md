@@ -1,15 +1,21 @@
 # Windows deployment and operations
 
-> **Current implementation note (2026-08-05):** This file retains parts of the
+> **Current implementation note (2026-08-11):** This file retains parts of the
 > original target design for traceability. The executable teacher flow uses
 > normal queued requests with Gemini (`gemini-3.5-flash-lite`) as the default;
-> legacy Batch controls remain hidden. An optional OpenRouter standard client
-> and administrator connection test are implemented, but only image-capable,
-> structured-output models with approved accuracy evidence can be activated.
+> legacy Batch controls remain hidden. Normal Gemini setup tests a supplied key
+> before persistence and, only after a full capability/image-task pass,
+> atomically enables the four exact-current advisory task profiles. An optional
+> OpenRouter standard client retains advanced/manual evaluation and activation.
 > DeepSeek V4 Flash is text-only and therefore blocked from the current visual
 > workflow. Cross-provider automatic failover remains disabled. The repository
-> includes an Inno Setup 6 x64 installer target, but signing and target-Windows
-> drills remain external release gates.
+> includes both an Inno Setup 6 x64 installer target and a supervised on-site
+> installation path. The on-site path is the recommended small-school path: it
+> uses a technician-carried, completely checksum-verified release folder and a
+> free private local HTTPS CA, so neither a paid public TLS certificate nor a
+> paid Authenticode certificate is required. Authenticode remains mandatory if
+> a Setup EXE is distributed outside that controlled hand-carry workflow.
+> Target-Windows drills remain an external release gate.
 > Use the [implementation status](../implementation-status.md) and the current
 > [Japanese host/app operations guide](../operations/host-app-setup-and-operations-ja.md)
 > for deployment decisions.
@@ -63,15 +69,21 @@ RAID is not a backup. If the host uses a single disk, daily verified backup is e
 
 ## 3. Software packaging
 
-Release artifacts:
+The immutable release-folder artifact used by the supervised on-site path is:
 
 ```text
-OokiGrader-Setup-<version>-x64.exe
-OokiGrader-Setup-<version>-x64.exe.sig
-checksums.txt
-sbom.spdx.json
-release-notes-ja.md
-technician-install-guide-ja.md
+OokiGrader-<version>-win-x64/
+  release-inventory.json
+  checksums.txt
+  OokiGrader.Host.exe
+  OokiGrader.Tool.exe
+  ...self-contained host/runtime files and web assets
+  Install-OokiGraderOnSite.ps1
+  Install-OokiGrader.ps1
+  Install-OokiGraderPeerTrust.ps1
+  New-OokiGraderPeerTrustPackage.ps1
+  OokiGrader.Windows.psm1
+  ...guarded maintenance scripts
 ```
 
 The host build is self-contained x64 .NET and does not require a separately managed runtime. It includes:
@@ -85,11 +97,35 @@ The host build is self-contained x64 .NET and does not require a separately mana
 - default configuration schema;
 - no API key or school data.
 
-All binaries and installer are code-signed. Release checksums are published through the project's controlled distribution channel.
+For a personally delivered on-site package, every packaged file is covered by
+the immutable release inventory and SHA-256 manifest. The technician must keep
+physical custody from the controlled build to the school and explicitly accept
+the checksum-verified unsigned mode. Checksums detect modification but do not
+prove publisher identity; this mode is forbidden for packages received through
+an untrusted download or third party.
+
+An optional signed distribution adds
+`OokiGrader-Setup-<version>-x64.exe`, installer evidence, and an independently
+published SHA-256. The setup executable and its executable payloads require an
+approved Authenticode signer. A paid public web certificate is never required:
+school clients trust the public half of the school-local CA.
 
 ## 4. Installation modes
 
-### 4.1 Host install
+### 4.1 Supervised host install (recommended for one school)
+
+The technician opens PowerShell 7.4 as Administrator in the exact immutable
+release folder and runs:
+
+```powershell
+pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+```
+
+The guided script detects the active private IPv4 address and subnet and asks
+the technician to confirm the data path, a fixed or DHCP-reserved host address,
+the Windows Private network profile, optional encrypted backup path, unsigned
+package custody when applicable, and the final plan. It performs blocking
+release and machine preflight before changing certificates or the service.
 
 Installs:
 
@@ -98,19 +134,29 @@ Installs:
 - service configuration in a protected ProgramData path;
 - data root on selected volume, recommended `D:\OokiGraderData`;
 - service virtual account and ACLs;
-- HTTPS certificate binding;
+- a free 4096-bit school-local CA whose private key is non-exportable;
+- a 3072-bit HTTPS host certificate with canonical DNS and host-IP SANs;
+- a host-only managed hosts entry mapping `ooki-grader.test` to loopback;
 - Windows firewall rule;
 - database;
 - recovery/diagnostic CLI;
-- Start-menu links for host console and web app.
+- a desktop link created only after database, storage, service, and real HTTPS
+  readiness checks pass;
+- an immutable public-only classroom-PC setup package.
 
 ### 4.2 Peer setup
 
-Optional technician package/script:
+The generated classroom package contains `Install-On-This-PC.cmd`, its guarded
+PowerShell script, the public CA certificate, fixed endpoint metadata, and a
+complete checksum manifest. Running the CMD file as Administrator:
 
-- installs the school-local CA certificate;
-- creates an Ooki Grader browser shortcut/PWA;
-- verifies DNS, TLS, and host health;
+- verifies every package file plus the exact CA SHA-256 and thumbprint;
+- refuses PFX/P12 or any private-key-bearing certificate;
+- adds a conflict-safe managed hosts entry mapping `ooki-grader.test` to the
+  fixed host IP;
+- installs only the public school-local CA into LocalMachine Root;
+- verifies the real HTTPS readiness endpoint without a certificate bypass;
+- creates a shared desktop shortcut only after the check succeeds;
 - does not install service, key, database, or data folder;
 - can be rerun idempotently.
 
@@ -118,14 +164,15 @@ Manual peer setup is acceptable for a small school.
 
 ### 4.3 Repair/upgrade
 
-The same installer detects the installation and offers:
+Maintenance is performed with the explicit guarded scripts included in the
+release, not through an unimplemented graphical maintenance menu:
 
-- verify/repair application binaries and service;
-- renew/replace certificate;
-- change host DNS name/IP binding;
-- move data root through a verified copy workflow;
-- upgrade;
-- uninstall application while preserving data by default.
+- `Repair-OokiGrader.ps1` verifies/repairs application binaries and service;
+- `Upgrade-OokiGrader.ps1` performs backup-gated version changes;
+- `New-OokiGraderCertificate.ps1` renews/replaces certificates;
+- `Restore-OokiGrader.ps1` performs the offline verified restore workflow;
+- `Uninstall-OokiGrader.ps1` removes the application while preserving school
+  data by default.
 
 Uninstalling data is a separate explicit operation with typed confirmation and backup reminder.
 
@@ -169,7 +216,8 @@ Warnings:
 
 ### 5.2 Files, service, and ACL
 
-1. Verify installer signature.
+1. Verify the immutable release inventory and all file checksums. For the
+   optional signed setup, also verify the approved Authenticode signer.
 2. Stop existing service for upgrade.
 3. Install versioned application files to a staging version directory.
 4. Create/verify virtual service identity.
@@ -186,29 +234,39 @@ Warnings:
 
 ### 5.3 Network
 
-1. Select canonical DNS name.
-2. Add router/local DNS record and DHCP reservation.
-3. Create/import CA and host certificate with DNS/IP SANs.
+1. Use the canonical name `ooki-grader.test` unless a different controlled name
+   has been explicitly chosen.
+2. Reserve or statically assign the host IPv4 address. The on-site workflow
+   uses managed hosts entries, so router/local DNS is not required.
+3. Create the private CA and host certificate with DNS/IP SANs.
 4. Bind Kestrel to configured private interface and 443.
 5. Create firewall rule scoped to Private profile and school subnet.
 6. Verify HTTP is closed or redirects only as configured.
 7. From one peer, validate DNS, certificate chain, login page, and upload route.
 
-### 5.4 First-run wizard
+### 5.4 First-run bootstrap and commissioning
 
-Host-local wizard:
+The implemented host-local bootstrap screen performs one bounded task:
 
-1. school display name, locale, time zone;
-2. first administrator;
-3. data/quota confirmation;
-4. backup target/schedule;
-5. provider connection(s);
-6. task-profile defaults;
-7. test synthetic capability call;
-8. create a sample non-student template/submission;
-9. print/save commissioning report.
+1. read the one-time token from `DataRoot\bootstrap-token.txt` on the host;
+2. enter the token, first administrator username/display name, and a unique
+   password of at least 12 characters;
+3. complete bootstrap and verify the token file is removed;
+4. sign in with the new administrator.
 
-Provider setup can be skipped; uploads/local work still function and AI jobs show configuration required.
+The school name is currently initialized by the product and can be reviewed in
+administrator settings. Backup destination is not configurable in the web UI:
+it must be supplied during on-site installation with `-BackupRoot` and actual
+encryption confirmation, or changed later through a controlled technician
+configuration procedure. The Admin backup page runs and verifies backups and
+shows readiness; it does not choose the destination.
+
+After bootstrap, the administrator separately creates staff accounts, uses the
+one-step Gemini candidate-key check-and-enable flow, verifies all four AI
+functions, runs a synthetic non-student template/submission, creates and fully
+verifies a backup, installs one classroom client package, and records the
+commissioning checklist. Provider setup can be delayed; local browsing and
+uploads remain available while AI work reports configuration required.
 
 ## 6. AI provider commissioning
 
@@ -218,13 +276,26 @@ Technician:
 
 1. obtains the school's current Gemini API key;
 2. confirms billing/quota appropriate for student processing;
-3. enters key once;
-4. selects the pinned `gemini-3.5-flash-lite` model;
-5. runs image + strict structured-output probe;
-6. records the current official price snapshot;
-7. configures the daily/monthly Ooki budget;
-8. sets bounded standard-request concurrency;
-9. validates one school-approved sample before active status.
+3. enters the candidate key in `管理 > AI設定` and selects
+   `接続を確認して有効化`;
+4. waits while the server checks authentication/credits, pinned
+   `gemini-3.5-flash-lite`, image input, strict structured output, usage
+   metadata, and a synthetic image task before saving;
+5. verifies that full success encrypted/persisted the key and atomically made
+   template extraction, name transcription, initial grading, and adjudication
+   `利用できます`;
+6. if any check failed or replacement was ambiguous, verifies that the previous
+   working key/connection/profiles remain unchanged before correcting the cause;
+7. records the current official price snapshot and daily/monthly Ooki budget;
+8. changes folded timeout/concurrency details only for a documented need;
+9. validates one school-approved sample while keeping teacher publication and
+   finalization gates enabled.
+
+There is no routine school step to create evaluation evidence, approve a pilot,
+or activate four Gemini profiles by hand. A successful manual connection test
+self-heals exact-current profiles, and startup reconciles active Gemini profiles
+after prompt/schema/hash changes. Formal golden-set evidence remains a release
+gate.
 
 ### 6.2 OpenRouter
 
@@ -232,8 +303,8 @@ Technician:
 
 1. creates a school key with credit limit/guardrail;
 2. ensures adequate credits or configured BYOK;
-3. enters key once;
-4. enters the exact candidate model slug;
+3. enters the key and exact candidate model slug, then saves the advanced connection;
+4. explicitly selects the manual `再確認` action; OpenRouter does not use Gemini's one-step test-and-enable path;
 5. runs real text and image Chat Completions probes for exact-model, parameter, strict JSON-schema, and usage/cost support;
 6. requires compatible parameters, data-collection denial, and Zero Data Retention routing;
 7. records the current official provider/model price snapshot;
@@ -242,7 +313,7 @@ Technician:
 
 ### 6.3 Dual-provider setup
 
-Optional evaluation, not automatic routing:
+Optional advanced evaluation, not automatic routing:
 
 - choose one active initial-grading profile;
 - optionally choose the other connection/model as a validated adjudication profile;
@@ -253,12 +324,15 @@ Optional evaluation, not automatic routing:
 
 ### 6.4 Default profile recommendation
 
-Until school data proves otherwise:
+For normal Gemini setup, use the four exact checked-in current profiles selected
+by the full capability pass. Formal release evaluation determines those shipped
+defaults; it is not entered again by the school administrator. For advanced
+OpenRouter setup:
 
-- template generation: higher-accuracy validated profile, because setup is infrequent and errors propagate;
-- name transcription: lowest-cost profile that meets auto-assignment precision;
-- initial objective/short-answer grading: the explicitly active, evaluated standard-request profile; Gemini 3.5 Flash Lite remains the default;
-- ambiguous answer adjudication: the best validated model/profile, possibly through OpenRouter;
+- template generation uses a higher-accuracy validated profile because errors propagate;
+- name transcription uses a profile that meets the assignment precision gate;
+- initial grading uses an explicitly active, evaluated standard-request profile;
+- adjudication may use a separately validated OpenRouter vision model;
 - all tasks use the same durable queue semantics; teachers are not asked to choose Batch, economy, priority, or expedite modes.
 
 ## 7. Scanner and upload setup
@@ -438,7 +512,11 @@ On isolated test host or alternate directory:
 
 If schema is backward compatible, switch to previous app. If not, restore the pre-upgrade backup and object manifest. Never run an older binary against an unsupported newer schema.
 
-Provider model/prompt rollback is independent: activate prior approved task-profile revision for new work, and leave existing result provenance intact.
+Provider model/prompt rollback is independent. For Gemini, stop new affected
+work and use the release rollback/reconciliation procedure; do not ask an
+ordinary administrator to reactivate old profiles. For advanced OpenRouter,
+activate a prior approved task-profile revision for new work. In both cases,
+leave existing job/result provenance intact.
 
 ## 14. Runbooks
 
@@ -465,13 +543,16 @@ Provider model/prompt rollback is independent: activate prior approved task-prof
 
 ### RB-03 — Official Gemini key/model failure
 
-1. Pause affected profile.
-2. Run synthetic connection test.
-3. Check key status, billing, model lifecycle, quota.
-4. Replace key/model only through versioned profile.
-5. Run validation sample.
-6. Activate or use already-approved fallback.
-7. resume at low concurrency.
+1. Pause new affected work; do not delete the existing connection.
+2. Run the stored-key synthetic `接続を確認` and check the four read-only states.
+3. Check key status, billing, model lifecycle, quota, DNS, and outbound HTTPS.
+4. If replacement is required, enter the candidate and use
+   `接続を確認して有効化`; failure must preserve the prior working state.
+5. On success, verify all four current Gemini profiles were self-healed and are
+   `利用できます`.
+6. Run the non-student validation sample; resume at low concurrency.
+7. Use the release rollback procedure for a model/prompt regression; do not
+   manually activate an unevaluated fallback.
 
 ### RB-04 — Direct Gemini batch ambiguous
 
@@ -552,9 +633,9 @@ Bundle is encrypted or stored in an administrator-selected protected location an
 - [ ] Roles tested from peer.
 - [ ] 30-file upload/resume/duplicate test passes.
 - [ ] Model-answer-containing source generates correct answer provenance.
-- [ ] Official Gemini connection passes if configured.
+- [ ] Official Gemini `接続を確認して有効化` passes if configured; all four current functions are available.
 - [ ] OpenRouter connection passes if configured.
-- [ ] Active task profiles have recorded validation.
+- [ ] Gemini current profiles match the checked-in prompt/schema/hash; advanced OpenRouter profiles have recorded validation if configured.
 - [ ] One end-to-end sample is finalized and exported in Japanese.
 - [ ] 150 GiB quota/warning settings confirmed.
 - [ ] Simulated old scan deletion preserves result.

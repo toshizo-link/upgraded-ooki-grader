@@ -8,6 +8,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
@@ -21,6 +22,7 @@ using OokiGrader.Application.Abstractions;
 using OokiGrader.Host.Api;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Infrastructure.Persistence;
+using OokiGrader.Infrastructure.Security;
 
 namespace OokiGrader.IntegrationTests;
 
@@ -77,6 +79,481 @@ public sealed class AiAdminConnectionEndpointsTests
     }
 
     [Fact]
+    public async Task AutomaticGeminiSetupProbesBeforeSavingAndEnablesAllProfiles()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        const string apiKey = "AIza-auto-enable-gemini-key-1234567890";
+
+        var response = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                apiKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var document = await ReadJsonAsync(response);
+        Assert.Equal(
+            "active",
+            document.RootElement.GetProperty("state").GetString());
+        Assert.Equal(
+            "passed",
+            document.RootElement.GetProperty("lastCapabilityProbe")
+                .GetProperty("state")
+                .GetString());
+        Assert.Equal(1, application.GeminiClient.ProbeCount);
+        Assert.Equal(1, application.StoredSecretCount);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections.AsNoTracking().SingleAsync();
+            Assert.Equal(apiKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            var probe = await db.AiCapabilityProbes.AsNoTracking().SingleAsync();
+            Assert.Equal(connection.CredentialRevision, probe.ConnectionRevision);
+            var profiles = await db.AiTaskProfiles
+                .AsNoTracking()
+                .OrderBy(profile => profile.TaskType)
+                .ToArrayAsync();
+            Assert.Equal(4, profiles.Length);
+            Assert.All(profiles, profile =>
+            {
+                Assert.True(profile.Active);
+                Assert.Equal("capability_passed", profile.ApprovalState);
+                Assert.Equal(connection.CredentialRevision, profile.ConnectionRevision);
+                Assert.Equal("test-prompt-v1", profile.PromptVersion);
+                Assert.Equal("test-schema-v1", profile.SchemaVersion);
+                Assert.Equal(new string('a', 64), profile.PromptContentHash);
+            });
+        });
+    }
+
+    [Fact]
+    public async Task FailedAutomaticGeminiSetupPersistsNothing()
+    {
+        var failedProbe = new AiCapabilityProbeResult(
+            Authentication: false,
+            ModelAvailable: true,
+            ImageInput: false,
+            StructuredOutput: false,
+            UsageMetadata: false,
+            State: "failed",
+            SafeErrorCode: "gemini_authentication_failed",
+            Latency: null);
+        await using var application = await AiAdminTestApplication.CreateAsync(
+            geminiProbe: failedProbe);
+
+        var response = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-invalid-gemini-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("AI_CONNECTION_TEST_FAILED", await ProblemCodeAsync(response));
+        Assert.Equal(1, application.GeminiClient.ProbeCount);
+        Assert.Equal(0, application.StoredSecretCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Equal(0, await db.AiConnections.CountAsync());
+            Assert.Equal(0, await db.AiCapabilityProbes.CountAsync());
+            Assert.Equal(0, await db.AiTaskProfiles.CountAsync());
+        });
+    }
+
+    [Fact]
+    public async Task FailedAutomaticGeminiReplacementKeepsOldKeyAndProfilesActive()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        const string originalKey = "AIza-original-gemini-key-1234567890";
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                originalKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision").GetInt64();
+
+        application.GeminiClient.Result = new AiCapabilityProbeResult(
+            Authentication: false,
+            ModelAvailable: true,
+            ImageInput: false,
+            StructuredOutput: false,
+            UsageMetadata: false,
+            State: "failed",
+            SafeErrorCode: "gemini_authentication_failed",
+            Latency: null);
+        var replaced = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            ConnectionBody(
+                "AIza-bad-replacement-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                revision,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, replaced.StatusCode);
+        Assert.Equal(1, application.StoredSecretCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(1, connection.CredentialRevision);
+            Assert.Equal(revision, connection.Revision);
+            Assert.Equal("active", connection.State);
+            Assert.Equal(originalKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync(
+                profile => profile.Active));
+        });
+    }
+
+    [Fact]
+    public async Task AutomaticReplacementRechecksRevisionAfterSlowProbe()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        const string originalKey = "AIza-race-original-key-1234567890";
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                originalKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision").GetInt64();
+
+        application.GeminiClient.BeforeProbeReturnsAsync = async () =>
+        {
+            application.GeminiClient.BeforeProbeReturnsAsync = null;
+            await application.WithDatabaseAsync(async db =>
+            {
+                var connection = await db.AiConnections.SingleAsync(item =>
+                    item.Id == connectionId);
+                connection.TimeoutSeconds = 76;
+                await db.SaveChangesAsync();
+            });
+        };
+        var replaced = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            ConnectionBody(
+                "AIza-race-next-key-0987654321",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                revision,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, replaced.StatusCode);
+        Assert.Equal("REVISION_MISMATCH", await ProblemCodeAsync(replaced));
+        Assert.Equal(1, application.StoredSecretCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(1, connection.CredentialRevision);
+            Assert.Equal(76, connection.TimeoutSeconds);
+            Assert.Equal(originalKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync(
+                profile => profile.Active));
+        });
+    }
+
+    [Fact]
+    public async Task SuccessfulAutomaticGeminiReplacementAtomicallySwitchesProfilesAndKey()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-first-gemini-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision").GetInt64();
+
+        const string replacementKey =
+            "AIza-second-gemini-key-0987654321";
+        var replaced = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            ConnectionBody(
+                replacementKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                revision,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+        Assert.Equal(1, application.StoredSecretCount);
+        Assert.Equal(2, application.GeminiClient.ProbeCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(2, connection.CredentialRevision);
+            Assert.Equal("active", connection.State);
+            Assert.Equal(replacementKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            Assert.Equal(2, await db.AiCapabilityProbes.CountAsync());
+            Assert.Equal(8, await db.AiTaskProfiles.CountAsync());
+            var active = await db.AiTaskProfiles
+                .AsNoTracking()
+                .Where(profile => profile.Active)
+                .ToArrayAsync();
+            Assert.Equal(4, active.Length);
+            Assert.All(active, profile => Assert.Equal(
+                connection.CredentialRevision,
+                profile.ConnectionRevision));
+        });
+    }
+
+    [Fact]
+    public async Task SupersededSecretCleanupFailureDoesNotUndoSuccessfulReplacement()
+    {
+        var secretStore = new ThrowingDeleteSecretStore();
+        await using var application = await AiAdminTestApplication.CreateAsync(
+            secretStore: secretStore);
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-cleanup-first-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision").GetInt64();
+
+        secretStore.ThrowOnDelete = true;
+        const string replacementKey = "AIza-cleanup-next-key-0987654321";
+        var replaced = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            ConnectionBody(
+                replacementKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                revision,
+                testAndEnable: true));
+
+        Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(2, connection.CredentialRevision);
+            Assert.Equal(replacementKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync(
+                profile => profile.Active
+                    && profile.ConnectionRevision == 2));
+        });
+    }
+
+    [Fact]
+    public async Task RepeatedGeminiConnectionTestSelfHealsWithoutDuplicateProfiles()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-manual-probe-gemini-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = createdDocument.RootElement.GetProperty("id").GetString();
+
+        var first = await application.PostAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}:test");
+        var second = await application.PostAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}:test");
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Equal(2, await db.AiCapabilityProbes.CountAsync());
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync());
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync(
+                profile => profile.Active
+                    && profile.ApprovalState == "capability_passed"));
+        });
+    }
+
+    [Fact]
+    public async Task FailedRecheckMarksExistingProfilesStaleForClients()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-recheck-failure-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id")
+            .GetString());
+
+        application.GeminiClient.Result = new AiCapabilityProbeResult(
+            Authentication: true,
+            ModelAvailable: true,
+            ImageInput: true,
+            StructuredOutput: true,
+            UsageMetadata: false,
+            State: "passed",
+            SafeErrorCode: "gemini_usage_metadata_missing",
+            Latency: null);
+        var recheck = await application.PostAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}:test");
+        Assert.Equal(HttpStatusCode.OK, recheck.StatusCode);
+
+        var profilesResponse = await application.GetAsync(
+            "/api/v1/admin/ai-task-profiles");
+        Assert.Equal(HttpStatusCode.OK, profilesResponse.StatusCode);
+        using var profilesDocument = await ReadJsonAsync(profilesResponse);
+        var profiles = profilesDocument.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Equal(4, profiles.Length);
+        Assert.All(profiles, profile => Assert.True(
+            profile.GetProperty("stale").GetBoolean()));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal("blocked", connection.State);
+            Assert.Equal(4, await db.AiTaskProfiles.CountAsync(
+                profile => profile.Active));
+        });
+    }
+
+    [Fact]
+    public async Task StartupReconcileReplacesOnlyStaleGeminiProfiles()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-startup-reconcile-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var stale = await db.AiTaskProfiles.SingleAsync(profile =>
+                profile.TaskType == AiTaskTypes.TemplateExtraction
+                && profile.Active);
+            stale.PromptVersion = "old-prompt";
+            stale.PromptContentHash = new string('b', 64);
+            await db.SaveChangesAsync();
+        });
+
+        Assert.Equal(1, await application.EnsureCurrentProfilesAsync());
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Equal(5, await db.AiTaskProfiles.CountAsync());
+            var active = await db.AiTaskProfiles
+                .AsNoTracking()
+                .Where(profile => profile.Active)
+                .ToArrayAsync();
+            Assert.Equal(4, active.Length);
+            Assert.All(active, profile =>
+            {
+                Assert.Equal("test-prompt-v1", profile.PromptVersion);
+                Assert.Equal("test-schema-v1", profile.SchemaVersion);
+                Assert.Equal(new string('a', 64), profile.PromptContentHash);
+            });
+        });
+    }
+
+    [Fact]
+    public async Task StartupReconcileDoesNotReplaceManuallyActiveOpenRouterProfile()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var gemini = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-gemini-startup-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, gemini.StatusCode);
+        var openRouter = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "sk-or-startup-key-12345678901234567890",
+                AiProviders.OpenRouter,
+                OpenRouterModel));
+        Assert.Equal(HttpStatusCode.Created, openRouter.StatusCode);
+        using var openRouterDocument = await ReadJsonAsync(openRouter);
+        var openRouterConnectionId = Assert.IsType<string>(
+            openRouterDocument.RootElement.GetProperty("id").GetString());
+        var probe = await application.PostAsync(
+            $"/api/v1/admin/ai-connections/{openRouterConnectionId}:test");
+        Assert.Equal(HttpStatusCode.OK, probe.StatusCode);
+
+        string openRouterProfileId = string.Empty;
+        await application.WithDatabaseAsync(async db =>
+        {
+            var geminiProfile = await db.AiTaskProfiles.SingleAsync(profile =>
+                profile.TaskType == AiTaskTypes.TemplateExtraction
+                && profile.Active);
+            var openRouterProfile = await db.AiTaskProfiles.SingleAsync(profile =>
+                profile.TaskType == AiTaskTypes.TemplateExtraction
+                && profile.AiConnectionId == openRouterConnectionId);
+            geminiProfile.Active = false;
+            await db.SaveChangesAsync();
+            openRouterProfile.Active = true;
+            openRouterProfile.ActivatedAt = DateTimeOffset.UtcNow;
+            openRouterProfile.ActivatedByStaffUserId =
+                "01J00000000000000000000000";
+            await db.SaveChangesAsync();
+            openRouterProfileId = openRouterProfile.Id;
+        });
+
+        Assert.Equal(0, await application.EnsureCurrentProfilesAsync());
+        await application.WithDatabaseAsync(async db =>
+        {
+            var activeTemplate = await db.AiTaskProfiles
+                .AsNoTracking()
+                .SingleAsync(profile =>
+                    profile.TaskType == AiTaskTypes.TemplateExtraction
+                    && profile.Active);
+            Assert.Equal(openRouterProfileId, activeTemplate.Id);
+            Assert.Equal(openRouterConnectionId, activeTemplate.AiConnectionId);
+        });
+    }
+
+    [Fact]
     public async Task ReplacingAConnectionKeepsProviderButAllowsModelUpdate()
     {
         await using var application = await AiAdminTestApplication.CreateAsync();
@@ -129,6 +606,92 @@ public sealed class AiAdminConnectionEndpointsTests
         Assert.True(
             updatedDocument.RootElement.GetProperty("revision").GetInt64()
                 > revision);
+    }
+
+    [Fact]
+    public async Task ReplacingLegacyMemoryReferenceMigratesWithoutCleanupFailure()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            $"ooki-ai-endpoint-migration-{Guid.NewGuid():N}");
+        var keyRingRoot = Path.Combine(root, "key-ring");
+        Directory.CreateDirectory(keyRingRoot);
+        var provider = DataProtectionProvider.Create(
+            new DirectoryInfo(keyRingRoot),
+            configuration => configuration.SetApplicationName(
+                "OokiGrader.IntegrationTests.LegacyMigration"));
+        var secretStore = new DataProtectionFileAiSecretStore(
+            new DataProtectionFileAiSecretStoreOptions
+            {
+                RootPath = Path.Combine(root, "secrets"),
+            },
+            provider);
+
+        try
+        {
+            await using var application = await AiAdminTestApplication.CreateAsync(
+                secretStore: secretStore);
+            var created = await application.PostAsync(
+                "/api/v1/admin/ai-connections",
+                ConnectionBody(
+                    "sk-or-test-openrouter-key-1234567890",
+                    AiProviders.OpenRouter,
+                    OpenRouterModel));
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            using var createdDocument = await ReadJsonAsync(created);
+            var connectionId = Assert.IsType<string>(createdDocument.RootElement
+                .GetProperty("id")
+                .GetString());
+            var revision = createdDocument.RootElement
+                .GetProperty("revision")
+                .GetInt64();
+
+            await application.WithDatabaseAsync(async db =>
+            {
+                var connection = await db.AiConnections.SingleAsync(
+                    item => item.Id == connectionId);
+                connection.SecretReference =
+                    $"memory-v1/{connectionId}/" +
+                    "00000000000000000001.secret";
+                await db.SaveChangesAsync();
+                revision = connection.Revision;
+            });
+
+            const string replacementKey =
+                "sk-or-test-persisted-replacement-key-0987654321";
+            var replaced = await application.PutAsync(
+                $"/api/v1/admin/ai-connections/{connectionId}",
+                ConnectionBody(
+                    replacementKey,
+                    AiProviders.OpenRouter,
+                    OpenRouterModel,
+                    revision));
+
+            Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+            string? migratedReference = null;
+            await application.WithDatabaseAsync(async db =>
+            {
+                var connection = await db.AiConnections
+                    .AsNoTracking()
+                    .SingleAsync(item => item.Id == connectionId);
+                Assert.Equal(2, connection.CredentialRevision);
+                Assert.StartsWith(
+                    $"devfile-v1/{connectionId}/",
+                    connection.SecretReference,
+                    StringComparison.Ordinal);
+                migratedReference = connection.SecretReference;
+            });
+            using var lease = await secretStore.ReadAsync(
+                new AiSecretReference(Assert.IsType<string>(migratedReference)));
+            Assert.Equal(
+                replacementKey,
+                Encoding.UTF8.GetString(lease.Utf8Bytes.Span));
+        }
+        finally
+        {
+            (provider as IDisposable)?.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -274,11 +837,61 @@ public sealed class AiAdminConnectionEndpointsTests
         });
     }
 
+    [Fact]
+    public async Task ProbeWithMissingStoredSecretReturnsActionableConflict()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "sk-or-test-openrouter-key-1234567890",
+                AiProviders.OpenRouter,
+                OpenRouterModel));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = createdDocument.RootElement
+            .GetProperty("id")
+            .GetString();
+        application.RemoveStoredSecrets();
+
+        var response = await application.PostAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}:test");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        using var problem = JsonDocument.Parse(responseBody);
+        Assert.Equal(
+            "AI_CONNECTION_SECRET_MISSING",
+            problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal(
+            "保存済みのAI APIキーを読み込めません",
+            problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(
+            "「APIキーを交換」からAPIキーを再登録し、もう一度接続を確認してください。",
+            problem.RootElement.GetProperty("detail").GetString());
+        Assert.DoesNotContain("test-secret:", responseBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "sk-or-test-openrouter-key",
+            responseBody,
+            StringComparison.Ordinal);
+        Assert.Equal(0, application.OpenRouterClient.ProbeCount);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal("pending_probe", connection.State);
+            Assert.Equal(0, await db.AiCapabilityProbes.CountAsync());
+        });
+    }
+
     private static object ConnectionBody(
         string apiKey,
         string provider,
         string modelId,
-        long? revision = null) => new
+        long? revision = null,
+        bool testAndEnable = false) => new
         {
             apiKey,
             provider,
@@ -286,6 +899,7 @@ public sealed class AiAdminConnectionEndpointsTests
             timeoutSeconds = 75,
             concurrencyLimit = 2,
             revision,
+            testAndEnable,
         };
 
     private static object PricingBody(string sourceUrl) => new
@@ -327,32 +941,37 @@ public sealed class AiAdminConnectionEndpointsTests
         private AiAdminTestApplication(
             IHost host,
             SqliteConnection connection,
+            ProbeProviderClient geminiClient,
             ProbeProviderClient openRouterClient,
             TestProviderFeaturePolicy featurePolicy)
         {
             _host = host;
             _connection = connection;
             _featurePolicy = featurePolicy;
+            GeminiClient = geminiClient;
             OpenRouterClient = openRouterClient;
             Client = host.GetTestClient();
             Client.Timeout = TimeSpan.FromSeconds(5);
         }
 
         private HttpClient Client { get; }
+        public ProbeProviderClient GeminiClient { get; }
         public ProbeProviderClient OpenRouterClient { get; }
 
         public static async Task<AiAdminTestApplication> CreateAsync(
-            AiCapabilityProbeResult? openRouterProbe = null)
+            AiCapabilityProbeResult? openRouterProbe = null,
+            IAiSecretStore? secretStore = null,
+            AiCapabilityProbeResult? geminiProbe = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
             var geminiClient = new ProbeProviderClient(
                 AiProviders.GeminiDirect,
-                PassedProbe());
+                geminiProbe ?? PassedProbe());
             var openRouterClient = new ProbeProviderClient(
                 AiProviders.OpenRouter,
                 openRouterProbe ?? PassedProbe());
-            var secretStore = new InMemorySecretStore();
+            secretStore ??= new InMemorySecretStore();
             var featurePolicy = new TestProviderFeaturePolicy();
 
             var hostBuilder = new HostBuilder()
@@ -424,12 +1043,31 @@ public sealed class AiAdminConnectionEndpointsTests
             return new AiAdminTestApplication(
                 host,
                 connection,
+                geminiClient,
                 openRouterClient,
                 featurePolicy);
         }
 
         public void DisableOpenRouter() =>
             _featurePolicy.OpenRouterEnabled = false;
+
+        public void RemoveStoredSecrets() =>
+            ((InMemorySecretStore)_host.Services
+                .GetRequiredService<IAiSecretStore>())
+                .Clear();
+
+        public int StoredSecretCount =>
+            ((InMemorySecretStore)_host.Services
+                .GetRequiredService<IAiSecretStore>())
+                .Count;
+
+        public async Task<string> ReadStoredSecretAsync(string reference)
+        {
+            var store = _host.Services.GetRequiredService<IAiSecretStore>();
+            using var lease = await store.ReadAsync(
+                new AiSecretReference(reference));
+            return Encoding.UTF8.GetString(lease.Utf8Bytes.Span);
+        }
 
         public Task<HttpResponseMessage> GetAsync(string path) =>
             SendAsync(HttpMethod.Get, path);
@@ -449,6 +1087,17 @@ public sealed class AiAdminConnectionEndpointsTests
             var db = scope.ServiceProvider
                 .GetRequiredService<OokiGraderDbContext>();
             await action(db);
+        }
+
+        public async Task<int> EnsureCurrentProfilesAsync()
+        {
+            await using var scope = _host.Services.CreateAsyncScope();
+            return await AiAdminEndpoints.EnsureCurrentProfilesAsync(
+                scope.ServiceProvider.GetRequiredService<OokiGraderDbContext>(),
+                scope.ServiceProvider
+                    .GetRequiredService<IAiPromptBundleCatalog>(),
+                scope.ServiceProvider.GetRequiredService<TimeProvider>(),
+                _featurePolicy);
         }
 
         private async Task<HttpResponseMessage> SendAsync(
@@ -494,6 +1143,8 @@ public sealed class AiAdminConnectionEndpointsTests
         private int _probeCount;
 
         public string Provider { get; } = provider;
+        public AiCapabilityProbeResult Result { get; set; } = result;
+        public Func<Task>? BeforeProbeReturnsAsync { get; set; }
         public int ProbeCount => Volatile.Read(ref _probeCount);
         public AiConnectionSettings? LastConnection { get; private set; }
 
@@ -504,14 +1155,19 @@ public sealed class AiAdminConnectionEndpointsTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<AiCapabilityProbeResult> ProbeAsync(
+        public async Task<AiCapabilityProbeResult> ProbeAsync(
             AiConnectionSettings connection,
             ReadOnlyMemory<byte> credentialUtf8,
             CancellationToken cancellationToken = default)
         {
             LastConnection = connection;
             Interlocked.Increment(ref _probeCount);
-            return Task.FromResult(result);
+            if (BeforeProbeReturnsAsync is not null)
+            {
+                await BeforeProbeReturnsAsync();
+            }
+
+            return Result;
         }
     }
 
@@ -537,7 +1193,7 @@ public sealed class AiAdminConnectionEndpointsTests
         {
             if (!_secrets.TryGetValue(reference.Value, out var bytes))
             {
-                throw new InvalidOperationException("Test secret was not found.");
+                throw new KeyNotFoundException("Test secret was not found.");
             }
 
             return Task.FromResult(AiSecretLease.CopyFrom(bytes));
@@ -547,6 +1203,40 @@ public sealed class AiAdminConnectionEndpointsTests
             AiSecretReference reference,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(_secrets.TryRemove(reference.Value, out _));
+
+        public int Count => _secrets.Count;
+
+        public void Clear() => _secrets.Clear();
+    }
+
+    private sealed class ThrowingDeleteSecretStore : IAiSecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+
+        public bool ThrowOnDelete { get; set; }
+
+        public Task<AiSecretReference> WriteAsync(
+            string ownerId,
+            long credentialRevision,
+            ReadOnlyMemory<char> secret,
+            CancellationToken cancellationToken = default) =>
+            _inner.WriteAsync(
+                ownerId,
+                credentialRevision,
+                secret,
+                cancellationToken);
+
+        public Task<AiSecretLease> ReadAsync(
+            AiSecretReference reference,
+            CancellationToken cancellationToken = default) =>
+            _inner.ReadAsync(reference, cancellationToken);
+
+        public Task<bool> DeleteAsync(
+            AiSecretReference reference,
+            CancellationToken cancellationToken = default) =>
+            ThrowOnDelete
+                ? throw new IOException("Injected secret cleanup failure.")
+                : _inner.DeleteAsync(reference, cancellationToken);
     }
 
     private sealed class StubPromptBundleCatalog : IAiPromptBundleCatalog

@@ -187,7 +187,8 @@ internal static class TemplateExtractionResponseValidator
         string expectedRequestKey,
         IReadOnlyDictionary<string, TemplateExtractionSourceEvidence> sources,
         long defaultPointsMilli,
-        long? targetTotalPointsMilli)
+        long? targetTotalPointsMilli,
+        bool requireGradingRuleFlags = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedRequestKey);
         ArgumentNullException.ThrowIfNull(sources);
@@ -321,7 +322,8 @@ internal static class TemplateExtractionResponseValidator
                     pageNumber,
                     sources,
                     authoritativeSourcesExist,
-                    defaultPointsMilli);
+                    defaultPointsMilli,
+                    requireGradingRuleFlags);
                 if (!questionKeys.Add(question.SourceKey))
                 {
                     question.ReviewIssues.Add(
@@ -498,30 +500,51 @@ internal static class TemplateExtractionResponseValidator
         int pageNumber,
         IReadOnlyDictionary<string, TemplateExtractionSourceEvidence> sources,
         bool authoritativeSourcesExist,
-        long defaultPointsMilli)
+        long defaultPointsMilli,
+        bool requireGradingRuleFlags)
     {
         RequireObject(element, "template_extract_question_invalid");
+        var hasRequiresCompleteAnswer = element.TryGetProperty(
+            "requires_complete_answer_suggestion",
+            out _);
+        var hasAnswerOrderInsensitive = element.TryGetProperty(
+            "answer_order_insensitive_suggestion",
+            out _);
+        if (hasRequiresCompleteAnswer != hasAnswerOrderInsensitive
+            || (requireGradingRuleFlags && !hasRequiresCompleteAnswer))
+        {
+            throw Invalid("template_extract_question_shape_invalid");
+        }
+
+        var expectedProperties = new List<string>
+        {
+            "source_key",
+            "display_label",
+            "question_text",
+            "answer_slot_ordinal",
+            "answer_slot_count",
+            "filled_answer_removed",
+            "is_embedded_fill_blank",
+            "question_type",
+            "expected_answer",
+            "answer_provenance",
+            "answer_source",
+            "accepted_variants",
+            "suggested_points_milli",
+            "allow_non_kanji_suggestion",
+            "requires_teacher_answer",
+            "confidence",
+            "warnings",
+        };
+        if (hasRequiresCompleteAnswer)
+        {
+            expectedProperties.Add("requires_complete_answer_suggestion");
+            expectedProperties.Add("answer_order_insensitive_suggestion");
+        }
+
         RequireExactProperties(
             element,
-            [
-                "source_key",
-                "display_label",
-                "question_text",
-                "answer_slot_ordinal",
-                "answer_slot_count",
-                "filled_answer_removed",
-                "is_embedded_fill_blank",
-                "question_type",
-                "expected_answer",
-                "answer_provenance",
-                "answer_source",
-                "accepted_variants",
-                "suggested_points_milli",
-                "allow_non_kanji_suggestion",
-                "requires_teacher_answer",
-                "confidence",
-                "warnings",
-            ],
+            expectedProperties,
             "template_extract_question_shape_invalid");
         var sourceKey = RequireString(
             element,
@@ -627,6 +650,16 @@ internal static class TemplateExtractionResponseValidator
             element,
             "allow_non_kanji_suggestion",
             "template_extract_kanji_policy_invalid");
+        var requiresCompleteAnswer = hasRequiresCompleteAnswer
+            && RequireBoolean(
+                element,
+                "requires_complete_answer_suggestion",
+                "template_extract_complete_answer_policy_invalid");
+        var answerOrderInsensitive = hasAnswerOrderInsensitive
+            && RequireBoolean(
+                element,
+                "answer_order_insensitive_suggestion",
+                "template_extract_answer_order_policy_invalid");
         var requiresTeacherAnswer = RequireBoolean(
             element,
             "requires_teacher_answer",
@@ -787,6 +820,8 @@ internal static class TemplateExtractionResponseValidator
             acceptedVariants,
             resolvedPoints,
             allowNonKanji,
+            requiresCompleteAnswer,
+            answerOrderInsensitive,
             requiresTeacherAnswer,
             confidence,
             warnings,
@@ -1056,7 +1091,7 @@ internal static class TemplateExtractionResponseValidator
                     || !sources.TryGetValue(
                         answerSource.SourceId,
                         out var source)
-                    || !IsAuthoritativeRole(source.SourceRole))
+                    || !CanProvideVisibleModelAnswer(source.SourceRole))
                 {
                     throw Invalid(
                         "template_extract_provided_answer_source_invalid");
@@ -1309,7 +1344,7 @@ internal static class TemplateExtractionResponseValidator
 
     private static void RequireExactProperties(
         JsonElement element,
-        IReadOnlyCollection<string> expected,
+        List<string> expected,
         string errorCode)
     {
         var actual = element.EnumerateObject()
@@ -1325,6 +1360,9 @@ internal static class TemplateExtractionResponseValidator
 
     private static bool IsAuthoritativeRole(string role) =>
         role is "contains_model_answers" or "separate_answer_key";
+
+    private static bool CanProvideVisibleModelAnswer(string role) =>
+        IsAuthoritativeRole(role) || role == "unit_test_paper";
 
     private static InvalidDataException Invalid(string code) => new(code);
 }
@@ -1369,6 +1407,8 @@ internal sealed record ValidatedTemplateQuestion(
     IReadOnlyList<string> AcceptedVariants,
     long SuggestedPointsMilli,
     bool AllowNonKanjiSuggestion,
+    bool RequiresCompleteAnswerSuggestion,
+    bool AnswerOrderInsensitiveSuggestion,
     bool RequiresTeacherAnswer,
     double Confidence,
     IReadOnlyList<string> Warnings,

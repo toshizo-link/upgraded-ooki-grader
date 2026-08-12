@@ -229,6 +229,7 @@ public static class ReportsEndpoints
                     : item.FileReference.FileObject,
                 item.Submission.TestSession.TestDate,
                 TestTitle = item.Submission.TestSession.TitleOverride
+                    ?? item.Submission.TestSession.TemplateTitleSnapshot
                     ?? item.Submission.TestSession.TemplateVersion.TestTemplate.Title,
                 StudentName = item.Submission.AssignedStudent == null
                     ? "生徒"

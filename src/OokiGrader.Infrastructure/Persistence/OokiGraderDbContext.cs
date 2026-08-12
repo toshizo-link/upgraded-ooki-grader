@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OokiGrader.Application.Abstractions;
+using OokiGrader.Domain.Grading;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
 namespace OokiGrader.Infrastructure.Persistence;
@@ -28,6 +29,12 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     public DbSet<StudentAliasEntity> StudentAliases => Set<StudentAliasEntity>();
     public DbSet<TestTemplateEntity> TestTemplates => Set<TestTemplateEntity>();
     public DbSet<TemplateVersionEntity> TemplateVersions => Set<TemplateVersionEntity>();
+    public DbSet<TemplateGenerationBatchEntity> TemplateGenerationBatches =>
+        Set<TemplateGenerationBatchEntity>();
+    public DbSet<TemplateGenerationUnitEntity> TemplateGenerationUnits =>
+        Set<TemplateGenerationUnitEntity>();
+    public DbSet<TemplateGenerationDerivedSourceEntity> TemplateGenerationDerivedSources =>
+        Set<TemplateGenerationDerivedSourceEntity>();
     public DbSet<TemplateSourceEntity> TemplateSources => Set<TemplateSourceEntity>();
     public DbSet<QuestionEntity> Questions => Set<QuestionEntity>();
     public DbSet<RegionEntity> Regions => Set<RegionEntity>();
@@ -36,7 +43,13 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     public DbSet<SessionRosterMemberEntity> SessionRosterMembers =>
         Set<SessionRosterMemberEntity>();
     public DbSet<UploadSessionEntity> UploadSessions => Set<UploadSessionEntity>();
+    public DbSet<OrderedScanBatchEntity> OrderedScanBatches =>
+        Set<OrderedScanBatchEntity>();
+    public DbSet<OrderedScanItemEntity> OrderedScanItems =>
+        Set<OrderedScanItemEntity>();
     public DbSet<SubmissionEntity> Submissions => Set<SubmissionEntity>();
+    public DbSet<SubmissionSourcePageEntity> SubmissionSourcePages =>
+        Set<SubmissionSourcePageEntity>();
     public DbSet<SubmissionPageEntity> SubmissionPages => Set<SubmissionPageEntity>();
     public DbSet<SubmissionArtifactEntity> SubmissionArtifacts =>
         Set<SubmissionArtifactEntity>();
@@ -72,6 +85,8 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     public DbSet<BackupPolicyEntity> BackupPolicies => Set<BackupPolicyEntity>();
     public DbSet<BackupRecordEntity> BackupRecords => Set<BackupRecordEntity>();
     public DbSet<ExportRecordEntity> ExportRecords => Set<ExportRecordEntity>();
+    public DbSet<BulkTranscriptExportEntity> BulkTranscriptExports =>
+        Set<BulkTranscriptExportEntity>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -106,11 +121,13 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     {
         ConfigureIdentity(modelBuilder);
         ConfigureAcademicModel(modelBuilder);
+        ConfigureOrderedScanModel(modelBuilder);
         ConfigurePreprocessingModel(modelBuilder);
         ConfigureAiModel(modelBuilder);
         ConfigureOperations(modelBuilder);
         ConfigureBackupModel(modelBuilder);
         ConfigureExportModel(modelBuilder);
+        ConfigureBulkTranscriptExportModel(modelBuilder);
         ApplySqliteTimestampConversions(modelBuilder);
         ApplySnakeCaseColumns(modelBuilder);
     }
@@ -357,9 +374,18 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             ConfigureUlid(builder, entity => entity.TestTemplateId);
             ConfigureUlid(builder, entity => entity.BasedOnVersionId);
             ConfigureUlid(builder, entity => entity.PublishedByStaffUserId);
+            ConfigureUlid(builder, entity => entity.OriginatingBatchId);
+            ConfigureUlid(builder, entity => entity.OriginatingUnitId);
             builder.Property(entity => entity.DefaultPointsMilli)
                 .HasDefaultValue(1_000L);
             builder.Property(entity => entity.ContentHash).HasMaxLength(64);
+            builder.Property(entity => entity.TestType).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.AnswerStyle).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.PromptSystem).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.GenerationProfileJson).HasMaxLength(64_000);
+            builder.Property(entity => entity.GenerationProfileHash).HasMaxLength(64);
+            builder.Property(entity => entity.PrintedTestName).HasMaxLength(500);
+            builder.Property(entity => entity.ResolvedGrade).HasConversion<string>().HasMaxLength(32);
             builder.Property(entity => entity.State).HasMaxLength(32);
             builder.Property(entity => entity.PipelineVersion).HasMaxLength(100);
             builder.HasIndex(entity => new
@@ -367,6 +393,8 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                 entity.TestTemplateId,
                 entity.VersionNumber
             }).IsUnique();
+            builder.HasIndex(entity => entity.OriginatingBatchId);
+            builder.HasIndex(entity => entity.OriginatingUnitId);
             builder.HasOne(entity => entity.TestTemplate)
                 .WithMany(entity => entity.Versions)
                 .HasForeignKey(entity => entity.TestTemplateId)
@@ -376,6 +404,203 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                 .HasForeignKey(entity => entity.BasedOnVersionId)
                 .OnDelete(DeleteBehavior.Restrict);
             ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<TemplateGenerationBatchEntity>(builder =>
+        {
+            builder.ToTable("template_generation_batch", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_template_generation_batch_status",
+                    "status IN ('Draft','Validating','Generating','NeedsFinalCheck'," +
+                    "'Confirming','Completed','Failed','Cancelled')");
+                table.HasCheckConstraint(
+                    "ck_template_generation_batch_counts",
+                    "source_page_count > 0 AND expected_unit_count > 0 " +
+                    "AND completed_unit_count >= 0 AND failed_unit_count >= 0 " +
+                    "AND completed_unit_count <= expected_unit_count " +
+                    "AND failed_unit_count <= expected_unit_count " +
+                    "AND completed_unit_count + failed_unit_count <= expected_unit_count");
+                table.HasCheckConstraint(
+                    "ck_template_generation_batch_route",
+                    "(test_type IN ('Hop','Step') AND answer_style IS NULL " +
+                    "AND prompt_system = 'Standard') OR " +
+                    "(test_type = 'ClassPlacement' AND answer_style IS NULL " +
+                    "AND prompt_system = 'ClassPlacement') OR " +
+                    "(test_type = 'Other' AND answer_style = 'Normal' " +
+                    "AND prompt_system = 'Standard') OR " +
+                    "(test_type = 'Other' AND answer_style = 'FillBlank' " +
+                    "AND prompt_system = 'FillBlank')");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.SourceId);
+            ConfigureUlid(builder, entity => entity.CreatedByUserId);
+            builder.Property(entity => entity.Status).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.TestType).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.Subject).HasMaxLength(32);
+            builder.Property(entity => entity.AnswerStyle).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.PromptSystem).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.CurrentOperationId).HasMaxLength(128);
+            builder.Property(entity => entity.PlanHash).HasMaxLength(64);
+            builder.Property(entity => entity.LastErrorCode).HasMaxLength(100);
+            builder.HasIndex(entity => new { entity.SourceId, entity.CreatedAt });
+            builder.HasIndex(entity => new { entity.CreatedByUserId, entity.Status });
+            builder.HasOne(entity => entity.Source)
+                .WithMany()
+                .HasForeignKey(entity => entity.SourceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne<StaffUserEntity>()
+                .WithMany()
+                .HasForeignKey(entity => entity.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<TemplateGenerationUnitEntity>(builder =>
+        {
+            builder.ToTable("template_generation_unit", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_status",
+                    "status IN ('Pending','Queued','Generating','Rotating'," +
+                    "'RetryingAfterRotation','Extracted','Failed','Confirmed')");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_range",
+                    "sequence > 0 AND first_page >= 1 AND last_page >= first_page");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_hop_range",
+                    "test_type <> 'Hop' OR last_page = first_page");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_step_range",
+                    "test_type <> 'Step' OR last_page = first_page + 1");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_step_metadata",
+                    "(test_type = 'Step' AND step_set_index > 0 " +
+                    "AND step_variation_index BETWEEN 1 AND 3 " +
+                    "AND deterministic_suffix = '-' || step_variation_index) OR " +
+                    "(test_type <> 'Step' AND step_set_index IS NULL " +
+                    "AND step_variation_index IS NULL AND deterministic_suffix IS NULL)");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_route",
+                    "(test_type IN ('Hop','Step') AND answer_style IS NULL " +
+                    "AND prompt_system = 'Standard') OR " +
+                    "(test_type = 'ClassPlacement' AND answer_style IS NULL " +
+                    "AND prompt_system = 'ClassPlacement') OR " +
+                    "(test_type = 'Other' AND answer_style = 'Normal' " +
+                    "AND prompt_system = 'Standard') OR " +
+                    "(test_type = 'Other' AND answer_style = 'FillBlank' " +
+                    "AND prompt_system = 'FillBlank')");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_orientation_attempts",
+                    "orientation_attempt_count BETWEEN 0 AND 2");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_created_pair",
+                    "(created_template_id IS NULL AND created_template_version_id IS NULL) OR " +
+                    "(created_template_id IS NOT NULL AND created_template_version_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_template_generation_unit_confirmed",
+                    "status <> 'Confirmed' OR " +
+                    "(created_template_id IS NOT NULL AND created_template_version_id IS NOT NULL)");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.BatchId);
+            ConfigureUlid(builder, entity => entity.CreatedTemplateId);
+            ConfigureUlid(builder, entity => entity.CreatedTemplateVersionId);
+            ConfigureUlid(builder, entity => entity.ExtractionJobId);
+            builder.Property(entity => entity.Status).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.TestType).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.AnswerStyle).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.DeterministicSuffix).HasMaxLength(2);
+            builder.Property(entity => entity.PromptSystem).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.GenerationProfileJson).HasMaxLength(64_000);
+            builder.Property(entity => entity.GenerationProfileHash).HasMaxLength(64);
+            builder.Property(entity => entity.AppliedRotationsJson).HasMaxLength(16_000);
+            builder.Property(entity => entity.DerivedSourceObjectKey).HasMaxLength(1_024);
+            builder.Property(entity => entity.DerivedSourceSha256).HasMaxLength(64);
+            builder.Property(entity => entity.ExtractionDraftJson).HasMaxLength(1_000_000);
+            builder.Property(entity => entity.ExtractionDraftHash).HasMaxLength(64);
+            builder.Property(entity => entity.PrintedTestName).HasMaxLength(500);
+            builder.Property(entity => entity.UserConfirmedBaseName).HasMaxLength(500);
+            builder.Property(entity => entity.FinalTemplateName).HasMaxLength(500);
+            builder.Property(entity => entity.FilenameGrade).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.PaperGrade).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.ResolvedGrade).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.GradeEvidence).HasConversion<string>().HasMaxLength(32);
+            builder.Property(entity => entity.WarningsJson).HasMaxLength(64_000);
+            builder.Property(entity => entity.TeacherNote).HasMaxLength(4_000);
+            builder.HasIndex(entity => new { entity.BatchId, entity.Sequence }).IsUnique();
+            builder.HasIndex(entity => new { entity.BatchId, entity.Status });
+            builder.HasIndex(entity => entity.CreatedTemplateVersionId)
+                .IsUnique()
+                .HasFilter("\"created_template_version_id\" IS NOT NULL");
+            builder.HasIndex(entity => entity.ExtractionJobId)
+                .IsUnique()
+                .HasFilter("\"extraction_job_id\" IS NOT NULL");
+            builder.HasOne(entity => entity.Batch)
+                .WithMany(entity => entity.Units)
+                .HasForeignKey(entity => entity.BatchId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.CreatedTemplate)
+                .WithMany()
+                .HasForeignKey(entity => entity.CreatedTemplateId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.CreatedTemplateVersion)
+                .WithMany()
+                .HasForeignKey(entity => entity.CreatedTemplateVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.ExtractionJob)
+                .WithMany()
+                .HasForeignKey(entity => entity.ExtractionJobId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<TemplateGenerationDerivedSourceEntity>(builder =>
+        {
+            builder.ToTable("template_generation_derived_source", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_template_generation_derived_source_range",
+                    "parent_first_page >= 1 AND parent_last_page >= parent_first_page");
+                table.HasCheckConstraint(
+                    "ck_template_generation_derived_source_type",
+                    "derivation_type IN ('pageRange','pageRangeAndRotation')");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.UnitId);
+            ConfigureUlid(builder, entity => entity.ParentSourceId);
+            ConfigureUlid(builder, entity => entity.FileReferenceId);
+            builder.Property(entity => entity.OriginalContentSha256).HasMaxLength(64);
+            builder.Property(entity => entity.DerivationType).HasMaxLength(32);
+            builder.Property(entity => entity.AppliedRotationsJson).HasMaxLength(16_000);
+            builder.Property(entity => entity.DerivationPolicyVersion).HasMaxLength(100);
+            builder.Property(entity => entity.DerivedContentSha256).HasMaxLength(64);
+            builder.HasIndex(entity => entity.UnitId).IsUnique();
+            // The same immutable page range may be generated by more than one
+            // batch. FileObject performs content-addressed deduplication; this
+            // remains a lookup index so every unit retains its own provenance.
+            builder.HasIndex(entity => new
+            {
+                entity.ParentSourceId,
+                entity.ParentFirstPage,
+                entity.ParentLastPage,
+                entity.DerivedContentSha256,
+            });
+            builder.HasOne(entity => entity.Unit)
+                .WithOne(entity => entity.DerivedSource)
+                .HasForeignKey<TemplateGenerationDerivedSourceEntity>(entity => entity.UnitId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.ParentSource)
+                .WithMany()
+                .HasForeignKey(entity => entity.ParentSourceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.FileReference)
+                .WithMany()
+                .HasForeignKey(entity => entity.FileReferenceId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<QuestionEntity>(builder =>
@@ -556,11 +781,28 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             ConfigureUlid(builder, entity => entity.Id);
             ConfigureUlid(builder, entity => entity.TemplateVersionId);
             ConfigureUlid(builder, entity => entity.CreatedByStaffUserId);
+            builder.Property(entity => entity.CreationSource).HasMaxLength(32);
+            builder.Property(entity => entity.RequestIdempotencyKey).HasMaxLength(64);
+            builder.Property(entity => entity.RequestFingerprint).HasMaxLength(64);
+            builder.Property(entity => entity.TemplateTitleSnapshot).HasMaxLength(500);
             builder.Property(entity => entity.Priority).HasMaxLength(32);
             builder.Property(entity => entity.State).HasMaxLength(32);
             builder.HasIndex(entity => new { entity.TestDate, entity.State })
                 .IsDescending(true, false);
             builder.HasIndex(entity => entity.TemplateVersionId);
+            builder.HasIndex(
+                    [nameof(TestSessionEntity.TemplateVersionId)],
+                    "UX_TestSession_TemplatePublish")
+                .IsUnique()
+                .HasDatabaseName("ux_test_session_template_publish")
+                .HasFilter("\"creation_source\" = 'template_publish'");
+            builder.HasIndex(entity => new
+                {
+                    entity.CreatedByStaffUserId,
+                    entity.RequestIdempotencyKey,
+                })
+                .IsUnique()
+                .HasFilter("\"request_idempotency_key\" IS NOT NULL");
             builder.HasOne(entity => entity.TemplateVersion)
                 .WithMany()
                 .HasForeignKey(entity => entity.TemplateVersionId)
@@ -600,11 +842,20 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                     "ck_upload_session_destination",
                     "(purpose = 'completed_test' AND test_session_id IS NOT NULL) " +
                     "OR (purpose <> 'completed_test')");
+                table.HasCheckConstraint(
+                    "ck_upload_session_ordered_scan_binding",
+                    "(ordered_scan_batch_id IS NULL " +
+                    "AND ordered_scan_input_ordinal IS NULL " +
+                    "AND ordered_scan_client_item_id IS NULL) OR " +
+                    "(ordered_scan_batch_id IS NOT NULL " +
+                    "AND ordered_scan_input_ordinal > 0 " +
+                    "AND ordered_scan_client_item_id IS NOT NULL)");
             });
             builder.HasKey(entity => entity.Id);
             ConfigureUlid(builder, entity => entity.Id);
             ConfigureUlid(builder, entity => entity.CreatedByStaffUserId);
             ConfigureUlid(builder, entity => entity.TestSessionId);
+            ConfigureUlid(builder, entity => entity.OrderedScanBatchId);
             builder.Property(entity => entity.Purpose).HasMaxLength(64);
             builder.Property(entity => entity.DestinationType).HasMaxLength(100);
             builder.Property(entity => entity.DestinationId).HasMaxLength(200);
@@ -615,15 +866,35 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.Property(entity => entity.IncomingRelativePath).HasMaxLength(1024);
             builder.Property(entity => entity.SourceIpPrefix).HasMaxLength(128);
             builder.Property(entity => entity.IdempotencyKey).HasMaxLength(64);
+            builder.Property(entity => entity.OrderedScanClientItemId)
+                .HasMaxLength(128);
             builder.HasIndex(entity => entity.ExpiresAt);
             builder.HasIndex(entity => new
             {
                 entity.CreatedByStaffUserId,
                 entity.IdempotencyKey
             }).IsUnique().HasFilter("\"idempotency_key\" IS NOT NULL");
+            builder.HasIndex(entity => new
+            {
+                entity.OrderedScanBatchId,
+                entity.OrderedScanInputOrdinal
+            }).IsUnique().HasFilter(
+                "\"ordered_scan_batch_id\" IS NOT NULL AND " +
+                "\"state\" IN ('uploading','finalizing','duplicate_pending','completed')");
+            builder.HasIndex(entity => new
+            {
+                entity.OrderedScanBatchId,
+                entity.OrderedScanClientItemId
+            }).IsUnique().HasFilter(
+                "\"ordered_scan_batch_id\" IS NOT NULL AND " +
+                "\"state\" IN ('uploading','finalizing','duplicate_pending','completed')");
             builder.HasOne(entity => entity.TestSession)
                 .WithMany()
                 .HasForeignKey(entity => entity.TestSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne<OrderedScanBatchEntity>()
+                .WithMany()
+                .HasForeignKey(entity => entity.OrderedScanBatchId)
                 .OnDelete(DeleteBehavior.Restrict);
             ConfigureRevision(builder);
         });
@@ -656,6 +927,14 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                     "(preprocessing_pipeline_version IS NOT NULL " +
                     "AND preprocessing_manifest_hash IS NOT NULL " +
                     "AND page_count IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_submission_ordered_scan_provenance",
+                    "(ordered_scan_batch_id IS NULL " +
+                    "AND ordered_scan_group_ordinal IS NULL " +
+                    "AND assembly_manifest_hash IS NULL) OR " +
+                    "(ordered_scan_batch_id IS NOT NULL " +
+                    "AND ordered_scan_group_ordinal > 0 " +
+                    "AND assembly_manifest_hash IS NOT NULL)");
             });
             builder.HasKey(entity => entity.Id);
             ConfigureUlid(builder, entity => entity.Id);
@@ -664,6 +943,7 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             ConfigureUlid(builder, entity => entity.UploadedByStaffUserId);
             ConfigureUlid(builder, entity => entity.CurrentGradingRunId);
             ConfigureUlid(builder, entity => entity.OriginalFileObjectId);
+            ConfigureUlid(builder, entity => entity.OrderedScanBatchId);
             builder.Property(entity => entity.State).HasMaxLength(64);
             builder.Property(entity => entity.ScanPayloadState).HasMaxLength(32);
             builder.Property(entity => entity.ScanDeletionReason).HasMaxLength(32);
@@ -672,6 +952,8 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.Property(entity => entity.PreprocessingPipelineVersion)
                 .HasMaxLength(100);
             builder.Property(entity => entity.PreprocessingManifestHash)
+                .HasMaxLength(64);
+            builder.Property(entity => entity.AssemblyManifestHash)
                 .HasMaxLength(64);
             builder.Property(entity => entity.QualitySummaryJson)
                 .HasMaxLength(16_000);
@@ -691,6 +973,16 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.HasIndex(entity => entity.UploadCompletedAt);
             builder.HasIndex(entity => entity.ScanPayloadState);
             builder.HasIndex(entity => entity.PreprocessingManifestHash);
+            builder.HasIndex(entity => new
+            {
+                entity.OrderedScanBatchId,
+                entity.OrderedScanGroupOrdinal
+            }).IsUnique().HasFilter("\"ordered_scan_batch_id\" IS NOT NULL");
+            builder.HasIndex(entity => new
+            {
+                entity.OrderedScanBatchId,
+                entity.AssemblyManifestHash
+            }).IsUnique().HasFilter("\"ordered_scan_batch_id\" IS NOT NULL");
             builder.HasOne(entity => entity.TestSession)
                 .WithMany(entity => entity.Submissions)
                 .HasForeignKey(entity => entity.TestSessionId)
@@ -706,6 +998,10 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.HasOne<FileObjectEntity>()
                 .WithMany()
                 .HasForeignKey(entity => entity.OriginalFileObjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne<OrderedScanBatchEntity>()
+                .WithMany()
+                .HasForeignKey(entity => entity.OrderedScanBatchId)
                 .OnDelete(DeleteBehavior.Restrict);
             ConfigureRevision(builder);
         });
@@ -815,6 +1111,253 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }
+
+    private static void ConfigureOrderedScanModel(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OrderedScanBatchEntity>(builder =>
+        {
+            builder.ToTable("ordered_scan_batch", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_batch_status",
+                    "status IN ('draft','processing','completed','needsReview'," +
+                    "'failed','cancelled','expired')");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_batch_expected_pages",
+                    "expected_page_count > 0");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_batch_expiry",
+                    "expires_at > created_at");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.TestSessionId);
+            ConfigureUlid(builder, entity => entity.CreatedByStaffUserId);
+            builder.Property(entity => entity.Status)
+                .HasConversion(
+                    status => ToStorageValue(status),
+                    value => OrderedScanBatchStatusFromStorage(value))
+                .HasMaxLength(32);
+            builder.Property(entity => entity.AssemblyPolicyVersion)
+                .HasMaxLength(100);
+            builder.Property(entity => entity.PlanHash).HasMaxLength(64);
+            builder.Property(entity => entity.LastErrorCode).HasMaxLength(100);
+            builder.Property(entity => entity.LastErrorJson).HasMaxLength(16_000);
+            builder.HasIndex(entity => new
+            {
+                entity.TestSessionId,
+                entity.Status,
+                entity.CreatedAt
+            }).IsDescending(false, false, true);
+            builder.HasIndex(entity => new { entity.Status, entity.ExpiresAt });
+            builder.HasOne(entity => entity.TestSession)
+                .WithMany()
+                .HasForeignKey(entity => entity.TestSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne<StaffUserEntity>()
+                .WithMany()
+                .HasForeignKey(entity => entity.CreatedByStaffUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<OrderedScanItemEntity>(builder =>
+        {
+            builder.ToTable("ordered_scan_item", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_status",
+                    "status IN ('pending','uploaded','classified','grouped'," +
+                    "'needsReview','rejected')");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_ordinal",
+                    "input_ordinal > 0");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_detected_page",
+                    "detected_template_page_number IS NULL " +
+                    "OR detected_template_page_number > 0");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_confidence",
+                    "classification_confidence_basis_points IS NULL OR " +
+                    "classification_confidence_basis_points BETWEEN 0 AND 10000");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_submission_placement",
+                    "(submission_id IS NULL AND submission_page_number IS NULL) OR " +
+                    "(submission_id IS NOT NULL AND submission_page_number > 0 " +
+                    "AND group_ordinal > 0)");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_grouped",
+                    "status <> 'grouped' OR " +
+                    "(submission_id IS NOT NULL AND submission_page_number > 0)");
+                table.HasCheckConstraint(
+                    "ck_ordered_scan_item_source_manifest",
+                    "(source_sha256 IS NULL OR length(source_sha256) = 64) " +
+                    "AND (source_bytes IS NULL OR source_bytes > 0) AND " +
+                    "(status NOT IN ('uploaded','classified','grouped','needsReview') OR " +
+                    "(upload_session_id IS NOT NULL " +
+                    "AND source_sha256 IS NOT NULL AND source_bytes > 0 " +
+                    "AND upload_completed_at IS NOT NULL)) AND " +
+                    "(status NOT IN ('uploaded','classified','needsReview') OR " +
+                    "source_file_reference_id IS NOT NULL)");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.BatchId);
+            ConfigureUlid(builder, entity => entity.UploadSessionId);
+            ConfigureUlid(builder, entity => entity.SourceFileReferenceId);
+            ConfigureUlid(builder, entity => entity.SubmissionId);
+            builder.Property(entity => entity.Status)
+                .HasConversion(
+                    status => ToStorageValue(status),
+                    value => OrderedScanItemStatusFromStorage(value))
+                .HasMaxLength(32);
+            builder.Property(entity => entity.ClientItemId).HasMaxLength(128);
+            builder.Property(entity => entity.OriginalFileName).HasMaxLength(500);
+            builder.Property(entity => entity.SourceSha256).HasMaxLength(64);
+            builder.Property(entity => entity.IssueCode).HasMaxLength(100);
+            builder.HasIndex(entity => new
+            {
+                entity.BatchId,
+                entity.InputOrdinal
+            }).IsUnique();
+            builder.HasIndex(entity => new
+            {
+                entity.BatchId,
+                entity.ClientItemId
+            }).IsUnique();
+            builder.HasIndex(entity => entity.UploadSessionId)
+                .IsUnique()
+                .HasFilter("\"upload_session_id\" IS NOT NULL");
+            builder.HasIndex(entity => entity.SourceFileReferenceId)
+                .IsUnique()
+                .HasFilter("\"source_file_reference_id\" IS NOT NULL");
+            builder.HasIndex(entity => new
+            {
+                entity.SubmissionId,
+                entity.SubmissionPageNumber
+            }).IsUnique().HasFilter("\"submission_id\" IS NOT NULL");
+            builder.HasIndex(entity => new { entity.BatchId, entity.Status });
+            builder.HasOne(entity => entity.Batch)
+                .WithMany(entity => entity.Items)
+                .HasForeignKey(entity => entity.BatchId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.UploadSession)
+                .WithMany()
+                .HasForeignKey(entity => entity.UploadSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.SourceFileReference)
+                .WithMany()
+                .HasForeignKey(entity => entity.SourceFileReferenceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.Submission)
+                .WithMany()
+                .HasForeignKey(entity => entity.SubmissionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<SubmissionSourcePageEntity>(builder =>
+        {
+            builder.ToTable("submission_source_page", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_submission_source_page_numbers",
+                    "page_number > 0 AND source_page_number = 1");
+                table.HasCheckConstraint(
+                    "ck_submission_source_page_sha256",
+                    "length(source_sha256) = 64");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.SubmissionId);
+            ConfigureUlid(builder, entity => entity.OrderedScanItemId);
+            ConfigureUlid(builder, entity => entity.UploadSessionId);
+            ConfigureUlid(builder, entity => entity.FileReferenceId);
+            builder.Property(entity => entity.SourceSha256).HasMaxLength(64);
+            builder.Property(entity => entity.AssemblyPolicyVersion)
+                .HasMaxLength(100);
+            builder.HasIndex(entity => new
+            {
+                entity.SubmissionId,
+                entity.PageNumber
+            }).IsUnique();
+            builder.HasIndex(entity => entity.OrderedScanItemId).IsUnique();
+            builder.HasIndex(entity => entity.FileReferenceId)
+                .IsUnique()
+                .HasFilter("\"file_reference_id\" IS NOT NULL");
+            builder.HasIndex(entity => entity.UploadSessionId);
+            builder.HasOne(entity => entity.Submission)
+                .WithMany()
+                .HasForeignKey(entity => entity.SubmissionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.OrderedScanItem)
+                .WithMany()
+                .HasForeignKey(entity => entity.OrderedScanItemId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.UploadSession)
+                .WithMany()
+                .HasForeignKey(entity => entity.UploadSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.FileReference)
+                .WithMany()
+                .HasForeignKey(entity => entity.FileReferenceId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static string ToStorageValue(OrderedScanBatchStatus status) =>
+        status switch
+        {
+            OrderedScanBatchStatus.Draft => "draft",
+            OrderedScanBatchStatus.Processing => "processing",
+            OrderedScanBatchStatus.Completed => "completed",
+            OrderedScanBatchStatus.NeedsReview => "needsReview",
+            OrderedScanBatchStatus.Failed => "failed",
+            OrderedScanBatchStatus.Cancelled => "cancelled",
+            OrderedScanBatchStatus.Expired => "expired",
+            _ => throw new ArgumentOutOfRangeException(nameof(status)),
+        };
+
+    private static OrderedScanBatchStatus OrderedScanBatchStatusFromStorage(
+        string value) =>
+        value switch
+        {
+            "draft" => OrderedScanBatchStatus.Draft,
+            "processing" => OrderedScanBatchStatus.Processing,
+            "completed" => OrderedScanBatchStatus.Completed,
+            "needsReview" => OrderedScanBatchStatus.NeedsReview,
+            "failed" => OrderedScanBatchStatus.Failed,
+            "cancelled" => OrderedScanBatchStatus.Cancelled,
+            "expired" => OrderedScanBatchStatus.Expired,
+            _ => throw new InvalidOperationException(
+                $"Unknown ordered scan batch status '{value}'."),
+        };
+
+    private static string ToStorageValue(OrderedScanItemStatus status) =>
+        status switch
+        {
+            OrderedScanItemStatus.Pending => "pending",
+            OrderedScanItemStatus.Uploaded => "uploaded",
+            OrderedScanItemStatus.Classified => "classified",
+            OrderedScanItemStatus.Grouped => "grouped",
+            OrderedScanItemStatus.NeedsReview => "needsReview",
+            OrderedScanItemStatus.Rejected => "rejected",
+            _ => throw new ArgumentOutOfRangeException(nameof(status)),
+        };
+
+    private static OrderedScanItemStatus OrderedScanItemStatusFromStorage(
+        string value) =>
+        value switch
+        {
+            "pending" => OrderedScanItemStatus.Pending,
+            "uploaded" => OrderedScanItemStatus.Uploaded,
+            "classified" => OrderedScanItemStatus.Classified,
+            "grouped" => OrderedScanItemStatus.Grouped,
+            "needsReview" => OrderedScanItemStatus.NeedsReview,
+            "rejected" => OrderedScanItemStatus.Rejected,
+            _ => throw new InvalidOperationException(
+                $"Unknown ordered scan item status '{value}'."),
+        };
 
     private static void ConfigurePreprocessingModel(ModelBuilder modelBuilder)
     {
@@ -1884,9 +2427,129 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
         });
     }
 
+    private static void ConfigureBulkTranscriptExportModel(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<BulkTranscriptExportEntity>(builder =>
+        {
+            builder.ToTable("bulk_transcript_export", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_bulk_transcript_export_counts",
+                    "student_count > 0 AND student_count <= result_count " +
+                    "AND result_count > 0 " +
+                    "AND processed_result_count >= 0 " +
+                    "AND processed_result_count <= result_count");
+                table.HasCheckConstraint(
+                    "ck_bulk_transcript_export_state",
+                    "state IN ('queued','rendering','verified','failed','superseded')");
+                table.HasCheckConstraint(
+                    "ck_bulk_transcript_export_verified",
+                    "state <> 'verified' OR " +
+                    "(file_reference_id IS NOT NULL AND sha256 IS NOT NULL " +
+                    "AND bytes > 0 AND completed_at IS NOT NULL " +
+                    "AND processed_result_count = result_count)");
+                table.HasCheckConstraint(
+                    "ck_bulk_transcript_export_superseded",
+                    "superseded_at IS NULL OR superseded_reason IS NOT NULL");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.BackgroundJobId);
+            ConfigureUlid(builder, entity => entity.FileReferenceId);
+            ConfigureUlid(builder, entity => entity.CreatedByStaffUserId);
+            builder.Property(entity => entity.RequestIdempotencyKey)
+                .HasMaxLength(64);
+            builder.Property(entity => entity.RequestFingerprint)
+                .HasMaxLength(64);
+            builder.Property(entity => entity.SelectorJson).HasMaxLength(32_000);
+            builder.Property(entity => entity.SelectorHash).HasMaxLength(64);
+            builder.Property(entity => entity.SourceSnapshotJson).HasMaxLength(512_000);
+            builder.Property(entity => entity.SourceFingerprint).HasMaxLength(64);
+            builder.Property(entity => entity.RendererVersion).HasMaxLength(100);
+            builder.Property(entity => entity.PackageFormatVersion).HasMaxLength(100);
+            builder.Property(entity => entity.State).HasMaxLength(32);
+            builder.Property(entity => entity.Sha256).HasMaxLength(64);
+            builder.Property(entity => entity.ErrorCode).HasMaxLength(200);
+            builder.Property(entity => entity.SafeErrorDetail).HasMaxLength(2_000);
+            builder.Property(entity => entity.SupersededReason).HasMaxLength(200);
+            builder.HasIndex(entity => entity.BackgroundJobId).IsUnique();
+            builder.HasIndex(entity => entity.FileReferenceId)
+                .IsUnique()
+                .HasFilter("\"file_reference_id\" IS NOT NULL");
+            builder.HasIndex(entity => new
+            {
+                entity.State,
+                entity.CreatedAt,
+                entity.Id,
+            });
+            builder.HasIndex(entity => new
+            {
+                entity.CreatedByStaffUserId,
+                entity.CreatedAt,
+                entity.Id,
+            });
+            builder.HasIndex(entity => new
+                {
+                    entity.CreatedByStaffUserId,
+                    entity.RequestIdempotencyKey,
+                })
+                .IsUnique()
+                .HasFilter("\"request_idempotency_key\" IS NOT NULL");
+            builder.HasIndex(entity => new
+            {
+                entity.CreatedByStaffUserId,
+                entity.State,
+            });
+            builder.HasOne(entity => entity.BackgroundJob)
+                .WithMany()
+                .HasForeignKey(entity => entity.BackgroundJobId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.FileReference)
+                .WithMany()
+                .HasForeignKey(entity => entity.FileReferenceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.CreatedByStaffUser)
+                .WithMany()
+                .HasForeignKey(entity => entity.CreatedByStaffUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+    }
+
     private void PrepareTrackedEntities()
     {
         var now = _clock.UtcNow;
+
+        foreach (var entry in ChangeTracker.Entries<IRetentionMutableLineageEntity>())
+        {
+            if (entry.State == EntityState.Deleted)
+            {
+                throw new InvalidOperationException(
+                    $"{entry.Metadata.ClrType.Name} lineage cannot be deleted.");
+            }
+
+            if (entry.State != EntityState.Modified)
+            {
+                continue;
+            }
+
+            var modifiedProperties = entry.Properties
+                .Where(property => property.IsModified)
+                .Select(property => property.Metadata.Name)
+                .ToArray();
+            var fileReference = entry.Property(
+                nameof(IRetentionMutableLineageEntity.FileReferenceId));
+            if (modifiedProperties.Length != 1
+                || modifiedProperties[0]
+                    != nameof(IRetentionMutableLineageEntity.FileReferenceId)
+                || fileReference.OriginalValue is null
+                || fileReference.CurrentValue is not null)
+            {
+                throw new InvalidOperationException(
+                    $"{entry.Metadata.ClrType.Name} lineage is immutable except " +
+                    "for one-way file-reference clearing during retention.");
+            }
+        }
 
         foreach (var entry in ChangeTracker.Entries<IAppendOnlyEntity>())
         {

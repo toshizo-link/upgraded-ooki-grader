@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
@@ -8,8 +9,10 @@ using Microsoft.EntityFrameworkCore;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Contracts;
+using OokiGrader.Domain.Grading;
 using OokiGrader.Host.Middleware;
 using OokiGrader.Host.Security;
+using OokiGrader.Host.Services;
 using OokiGrader.Host.Uploads;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
@@ -58,14 +61,33 @@ public static partial class UploadsEndpoints
         var purpose = request.Purpose switch
         {
             "completedTest" or "completed_test" => "completed_test",
+            "completedTestPage" or "completed_test_page" =>
+                "completed_test_page",
             "templateSource" or "template_source" => "template_source",
             _ => null,
         };
         var safeFileName = SafeFileName(request.FileName);
+        var orderedPageUpload = purpose == "completed_test_page";
+        var staffId = ApiHelpers.StaffId(principal);
+        var elevated = principal.IsInRole("administrator")
+            || principal.IsInRole("teacher");
+        OrderedScanItemEntity? orderedScanPlannedItem = null;
+        var orderedScanMetadataValid = orderedPageUpload
+            ? !string.IsNullOrWhiteSpace(request.OrderedScanBatchId)
+                && request.InputOrdinal is > 0 and <= 100_000
+                && IsSafeClientItemId(request.ClientItemId)
+                && string.Equals(
+                    request.DeclaredMimeType,
+                    "application/pdf",
+                    StringComparison.OrdinalIgnoreCase)
+            : request.OrderedScanBatchId is null
+                && request.InputOrdinal is null
+                && request.ClientItemId is null;
         if (purpose is null
             || safeFileName is null
             || request.Length is <= 0 or > MaxFileBytes
             || !AllowedDeclaredMime(request.DeclaredMimeType)
+            || !orderedScanMetadataValid
             || (request.ExpectedSha256 is not null
                 && !Sha256Pattern().IsMatch(request.ExpectedSha256)))
         {
@@ -84,7 +106,7 @@ public static partial class UploadsEndpoints
             return Results.Forbid();
         }
 
-        if (purpose == "completed_test")
+        if (purpose is "completed_test" or "completed_test_page")
         {
             if (string.IsNullOrWhiteSpace(request.TestSessionId))
             {
@@ -109,6 +131,108 @@ public static partial class UploadsEndpoints
                     "答案を追加できません",
                     "テスト実施を受付中にしてからアップロードしてください。");
             }
+
+            if (orderedPageUpload)
+            {
+                orderedScanPlannedItem = await db.OrderedScanItems
+                    .Include(item => item.Batch)
+                    .Include(item => item.UploadSession)
+                    .SingleOrDefaultAsync(
+                        item => item.BatchId == request.OrderedScanBatchId
+                            && item.InputOrdinal == request.InputOrdinal
+                            && item.ClientItemId == request.ClientItemId,
+                        cancellationToken);
+                if (orderedScanPlannedItem is null
+                    || orderedScanPlannedItem.Batch.TestSessionId
+                        != request.TestSessionId
+                    || orderedScanPlannedItem.Batch.Status
+                        != OrderedScanBatchStatus.Draft
+                    || orderedScanPlannedItem.Batch.ExpiresAt
+                        <= timeProvider.GetUtcNow())
+                {
+                    return ApiHelpers.Problem(
+                        context,
+                        StatusCodes.Status409Conflict,
+                        "ORDERED_SCAN_BATCH_NOT_ACCEPTING_PAGES",
+                        "この読取バッチには追加できません",
+                        "最新の読取バッチ状態を確認してください。");
+                }
+
+                if (!elevated
+                    && !string.Equals(
+                        orderedScanPlannedItem.Batch.CreatedByStaffUserId,
+                        staffId,
+                        StringComparison.Ordinal))
+                {
+                    return Results.Forbid();
+                }
+
+                if (!string.Equals(
+                    orderedScanPlannedItem.OriginalFileName,
+                    safeFileName,
+                    StringComparison.Ordinal))
+                {
+                    return ApiHelpers.Problem(
+                        context,
+                        StatusCodes.Status409Conflict,
+                        "ORDERED_SCAN_MANIFEST_FILE_MISMATCH",
+                        "読取計画とファイル名が一致しません",
+                        "読取バッチを作り直すか、選択した元のファイルを送信してください。");
+                }
+
+                if (orderedScanPlannedItem.UploadSession is { } existingPageUpload
+                    && existingPageUpload.State is
+                        "uploading" or "finalizing" or "completed")
+                {
+                    if (!MatchesOrderedPageRetry(
+                            existingPageUpload,
+                            request,
+                            safeFileName))
+                    {
+                        return ApiHelpers.Problem(
+                            context,
+                            StatusCodes.Status409Conflict,
+                            "ORDERED_SCAN_UPLOAD_RETRY_MISMATCH",
+                            "再送するファイル情報が一致しません",
+                            "同じファイル情報で再開するか、読取バッチを作り直してください。");
+                    }
+
+                    return Results.Ok(ToUploadStatus(existingPageUpload));
+                }
+
+                if (orderedScanPlannedItem.UploadSession is { } replacedUpload)
+                {
+                    if (replacedUpload.State is not
+                        ("failed" or "cancelled" or "expired"))
+                    {
+                        return ApiHelpers.Problem(
+                            context,
+                            StatusCodes.Status409Conflict,
+                            "ORDERED_SCAN_UPLOAD_RETRY_BLOCKED",
+                            "このページの再送を開始できません",
+                            "読取バッチを再読み込みしてアップロード状態を確認してください。");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(
+                            replacedUpload.IncomingRelativePath))
+                    {
+                        TryDeleteIncomingFile(ResolveIncomingPath(
+                            ResolveIncomingRoot(configuration, environment),
+                            replacedUpload.IncomingRelativePath));
+                    }
+                }
+
+                if (orderedScanPlannedItem.Status
+                    != OrderedScanItemStatus.Pending)
+                {
+                    return ApiHelpers.Problem(
+                        context,
+                        StatusCodes.Status409Conflict,
+                        "ORDERED_SCAN_ITEM_ALREADY_STAGED",
+                        "このページは送信済みです",
+                        "読取バッチを再読み込みしてください。");
+                }
+            }
         }
 
         if (!await HasAdmissionCapacityAsync(
@@ -127,7 +251,6 @@ public static partial class UploadsEndpoints
                 "管理者に連絡して保存容量を確保してください。");
         }
 
-        var staffId = ApiHelpers.StaffId(principal);
         var idempotencyKey = context.Request.Headers["Idempotency-Key"].FirstOrDefault();
         if (idempotencyKey?.Length > 64)
         {
@@ -164,6 +287,9 @@ public static partial class UploadsEndpoints
             CreatedByStaffUserId = staffId,
             Purpose = purpose,
             TestSessionId = request.TestSessionId,
+            OrderedScanBatchId = request.OrderedScanBatchId,
+            OrderedScanInputOrdinal = request.InputOrdinal,
+            OrderedScanClientItemId = request.ClientItemId?.Trim(),
             OriginalFileName = safeFileName,
             DeclaredMimeType = request.DeclaredMimeType.ToLowerInvariant(),
             ExpectedBytes = request.Length,
@@ -179,6 +305,21 @@ public static partial class UploadsEndpoints
             UpdatedAt = now,
         };
         db.UploadSessions.Add(upload);
+        if (orderedPageUpload)
+        {
+            if (orderedScanPlannedItem is null)
+            {
+                File.Delete(fullPath);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status409Conflict,
+                    "ORDERED_SCAN_PLAN_CHANGED",
+                    "読取順の記録が一致しません",
+                    "読取バッチを再読み込みして順番を確認してください。");
+            }
+
+            orderedScanPlannedItem.UploadSessionId = upload.Id;
+        }
         try
         {
             await db.SaveChangesAsync(cancellationToken);
@@ -335,7 +476,9 @@ public static partial class UploadsEndpoints
         ClaimsPrincipal principal,
         OokiGraderDbContext db,
         UploadLockProvider locks,
+        ContentObjectLockProvider contentObjectLocks,
         IContentStore contentStore,
+        [FromServices] IPdfPageCountReader pdfPageCountReader,
         IConfiguration configuration,
         IHostEnvironment environment,
         TimeProvider timeProvider,
@@ -362,13 +505,21 @@ public static partial class UploadsEndpoints
             {
                 uploadId = upload.Id,
                 state = upload.State,
+                rowVersion = upload.Revision,
                 submissionId = upload.DestinationType == "submission"
                     ? upload.DestinationId
                     : null,
+                orderedScanItemId = upload.DestinationType == "ordered_scan_item"
+                    ? upload.DestinationId
+                    : null,
                 jobId = existingJobId,
-                statusUrl = upload.DestinationType == "submission"
-                    ? $"/api/v1/submissions/{upload.DestinationId}"
-                    : $"/api/v1/uploads/{upload.Id}",
+                statusUrl = upload.DestinationType switch
+                {
+                    "submission" => $"/api/v1/submissions/{upload.DestinationId}",
+                    "ordered_scan_item" =>
+                        $"/api/v1/ordered-scan-batches/{upload.OrderedScanBatchId}",
+                    _ => $"/api/v1/uploads/{upload.Id}",
+                },
             });
         }
 
@@ -377,7 +528,8 @@ public static partial class UploadsEndpoints
             return ExactDuplicateProblem(context, upload);
         }
 
-        if (upload.State != "uploading" || upload.CurrentBytes != upload.ExpectedBytes)
+        if (upload.State is not ("uploading" or "finalizing")
+            || upload.CurrentBytes != upload.ExpectedBytes)
         {
             return ApiHelpers.Problem(
                 context,
@@ -409,20 +561,110 @@ public static partial class UploadsEndpoints
                 "PDF、JPEG、PNG、TIFFのいずれかを選択してください。");
         }
 
+        if (upload.Purpose == "completed_test_page")
+        {
+            if (fileType.MimeType != "application/pdf")
+            {
+                upload.State = "failed";
+                await db.SaveChangesAsync(cancellationToken);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status415UnsupportedMediaType,
+                    "ORDERED_SCAN_PAGE_MUST_BE_PDF",
+                    "1ページPDFを選択してください",
+                    "読取順を保持するため、各答案ページを1ページPDFとして送信してください。");
+            }
+
+            try
+            {
+                source.Position = 0;
+                var pageCount = await pdfPageCountReader.GetPageCountAsync(
+                    source,
+                    maximumPages: 2,
+                    cancellationToken);
+                if (pageCount != 1)
+                {
+                    upload.State = "failed";
+                    await db.SaveChangesAsync(cancellationToken);
+                    return ApiHelpers.Problem(
+                        context,
+                        StatusCodes.Status422UnprocessableEntity,
+                        "ORDERED_SCAN_PAGE_COUNT_INVALID",
+                        "1ファイルにつき1ページが必要です",
+                        $"このPDFには{pageCount}ページあります。1ページずつ読み取ってください。");
+                }
+            }
+            catch (PdfPageCountException exception)
+            {
+                upload.State = "failed";
+                await db.SaveChangesAsync(cancellationToken);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status422UnprocessableEntity,
+                    exception.Code,
+                    "PDFを確認できません",
+                    "暗号化されていない1ページPDFを選択してください。");
+            }
+        }
+
+        source.Position = 0;
+        var incomingSha256 = Convert.ToHexString(
+                await SHA256.HashDataAsync(source, cancellationToken))
+            .ToLowerInvariant();
+        if (upload.ExpectedSha256 is not null)
+        {
+            if (!string.Equals(
+                    upload.ExpectedSha256,
+                    incomingSha256,
+                    StringComparison.Ordinal))
+            {
+                upload.State = "failed";
+                await db.SaveChangesAsync(cancellationToken);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status422UnprocessableEntity,
+                    "UPLOAD_HASH_MISMATCH",
+                    "ファイルの整合性を確認できません",
+                    "元のファイルを選び直して再送してください。");
+            }
+        }
+
         upload.State = "finalizing";
         await db.SaveChangesAsync(cancellationToken);
         source.Position = 0;
-        var storageClass = upload.Purpose == "completed_test"
+        var managedScan = upload.Purpose is
+            "completed_test" or "completed_test_page";
+        var storageClass = managedScan
             ? ContentStorageClass.ManagedScanOriginal
             : ContentStorageClass.TemplateSource;
+        await using var contentObjectLock = await contentObjectLocks.AcquireAsync(
+            storageClass,
+            incomingSha256,
+            cancellationToken);
+        var existingState = await db.FileObjects
+            .AsNoTracking()
+            .Where(item => item.StorageClass == storageClass.ToString()
+                && item.Sha256 == incomingSha256)
+            .Select(item => item.State)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (existingState == "deletion_pending")
+        {
+            context.Response.Headers.RetryAfter = "2";
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                "UPLOAD_OBJECT_DELETION_IN_PROGRESS",
+                "同じファイルの保存領域を整理しています",
+                "数秒待ってから、同じアップロードを再開してください。");
+        }
+
         var stored = await contentStore.PutAsync(
             source,
             storageClass,
             fileType.Extension,
             cancellationToken);
-        if (upload.ExpectedSha256 is not null
-            && !string.Equals(
-                upload.ExpectedSha256,
+        if (!string.Equals(
+                incomingSha256,
                 stored.Locator.Sha256,
                 StringComparison.Ordinal))
         {
@@ -443,6 +685,31 @@ public static partial class UploadsEndpoints
             item => item.StorageClass == storageClass.ToString()
                 && item.Sha256 == stored.Locator.Sha256,
             cancellationToken);
+        if (fileObject?.State == "deletion_pending")
+        {
+            context.Response.Headers.RetryAfter = "2";
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                "UPLOAD_OBJECT_DELETION_IN_PROGRESS",
+                "同じファイルの保存領域を整理しています",
+                "数秒待ってから、同じアップロードを再開してください。");
+        }
+
+        if (fileObject is not null
+            && fileObject.State is not ("available" or "deleted" or "missing"))
+        {
+            upload.State = "failed";
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status409Conflict,
+                "UPLOAD_OBJECT_STATE_INVALID",
+                "ファイルの保存状態を確認できません",
+                "元のファイルを選び直して再送してください。");
+        }
+
         if (fileObject is null)
         {
             fileObject = new FileObjectEntity
@@ -454,10 +721,10 @@ public static partial class UploadsEndpoints
                 Extension = stored.Locator.Extension,
                 RelativeObjectPath = stored.RelativePath,
                 StorageClass = storageClass.ToString(),
-                RetentionClass = upload.Purpose == "completed_test"
+                RetentionClass = managedScan
                     ? "submitted_scan"
                     : "template_source",
-                ManagedScanBytes = upload.Purpose == "completed_test",
+                ManagedScanBytes = managedScan,
                 State = "available",
                 CreatedAt = now,
                 VerifiedAt = now,
@@ -465,8 +732,27 @@ public static partial class UploadsEndpoints
             };
             db.FileObjects.Add(fileObject);
         }
+        else if (fileObject.State is "deleted" or "missing")
+        {
+            // PutAsync has just atomically restored the content-addressed bytes.
+            // A deletion_pending object is rejected above, so no retention
+            // manifest can still be between its final reference check and the
+            // physical delete while this row is revived and referenced.
+            fileObject.Bytes = stored.Locator.Bytes;
+            fileObject.VerifiedMime = fileType.MimeType;
+            fileObject.Extension = stored.Locator.Extension;
+            fileObject.RelativeObjectPath = stored.RelativePath;
+            fileObject.RetentionClass = managedScan
+                ? "submitted_scan"
+                : "template_source";
+            fileObject.ManagedScanBytes = managedScan;
+            fileObject.State = "available";
+            fileObject.VerifiedAt = now;
+            fileObject.DeletedAt = null;
+        }
 
         string? submissionId = null;
+        string? orderedScanItemId = null;
         string? jobId = null;
         if (upload.Purpose == "completed_test")
         {
@@ -553,22 +839,102 @@ public static partial class UploadsEndpoints
             upload.DestinationType = "submission";
             upload.DestinationId = submissionId;
         }
+        else if (upload.Purpose == "completed_test_page")
+        {
+            var batch = await db.OrderedScanBatches
+                .SingleOrDefaultAsync(
+                    item => item.Id == upload.OrderedScanBatchId
+                        && item.TestSessionId == upload.TestSessionId,
+                    cancellationToken);
+            if (batch is null
+                || batch.Status != OrderedScanBatchStatus.Draft
+                || batch.ExpiresAt <= now)
+            {
+                upload.State = "failed";
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status409Conflict,
+                    "ORDERED_SCAN_BATCH_NOT_ACCEPTING_PAGES",
+                    "この読取バッチには追加できません",
+                    "最新の読取バッチ状態を確認してください。");
+            }
+
+            var plannedItem = await db.OrderedScanItems
+                .SingleOrDefaultAsync(
+                    item => item.BatchId == batch.Id
+                        && item.InputOrdinal == upload.OrderedScanInputOrdinal
+                        && item.ClientItemId == upload.OrderedScanClientItemId,
+                    cancellationToken);
+            if (plannedItem is null
+                || plannedItem.Status != OrderedScanItemStatus.Pending
+                || plannedItem.UploadSessionId != upload.Id)
+            {
+                upload.State = "failed";
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return ApiHelpers.Problem(
+                    context,
+                    StatusCodes.Status409Conflict,
+                    "ORDERED_SCAN_PLAN_CHANGED",
+                    "読取順の記録が一致しません",
+                    "読取バッチを再読み込みして順番を確認してください。");
+            }
+
+            // Participate in the batch revision fence. Cancellation, expiry,
+            // or queueing assembly updates this same concurrency token, so an
+            // upload that read Draft cannot commit a new live reference after
+            // one of those transitions wins.
+            batch.UpdatedAt = now > batch.UpdatedAt
+                ? now
+                : batch.UpdatedAt.AddTicks(1);
+            orderedScanItemId = plannedItem.Id;
+            var stagedReference = new FileReferenceEntity
+            {
+                Id = UlidId.New(now.AddMilliseconds(2)),
+                FileObjectId = fileObject.Id,
+                OwnerType = "ordered_scan_batch",
+                OwnerId = batch.Id,
+                Purpose = "ordered_scan_page",
+                RetentionAnchorAt = now,
+                CreatedAt = now,
+            };
+            db.FileReferences.Add(stagedReference);
+            plannedItem.SourceFileReferenceId = stagedReference.Id;
+            plannedItem.SourceSha256 = stored.Locator.Sha256;
+            plannedItem.SourceBytes = stored.Locator.Bytes;
+            plannedItem.UploadCompletedAt = now;
+            plannedItem.Status = OrderedScanItemStatus.Uploaded;
+            fileObject.ReferenceCountCache = checked(
+                fileObject.ReferenceCountCache + 1);
+            upload.DestinationType = "ordered_scan_item";
+            upload.DestinationId = orderedScanItemId;
+        }
         else
         {
             upload.DestinationType = "template_source";
         }
 
-        db.FileReferences.Add(new FileReferenceEntity
+        if (upload.Purpose != "completed_test_page")
         {
-            Id = UlidId.New(now.AddMilliseconds(3)),
-            FileObjectId = fileObject.Id,
-            OwnerType = upload.Purpose == "completed_test" ? "submission" : "upload_session",
-            OwnerId = submissionId ?? upload.Id,
-            Purpose = upload.Purpose == "completed_test" ? "original_scan" : "template_source",
-            RetentionAnchorAt = now,
-            CreatedAt = now,
-        });
-        fileObject.ReferenceCountCache = checked(fileObject.ReferenceCountCache + 1);
+            db.FileReferences.Add(new FileReferenceEntity
+            {
+                Id = UlidId.New(now.AddMilliseconds(3)),
+                FileObjectId = fileObject.Id,
+                OwnerType = upload.Purpose == "completed_test"
+                    ? "submission"
+                    : "upload_session",
+                OwnerId = submissionId ?? upload.Id,
+                Purpose = upload.Purpose == "completed_test"
+                    ? "original_scan"
+                    : "template_source",
+                RetentionAnchorAt = now,
+                CreatedAt = now,
+            });
+            fileObject.ReferenceCountCache = checked(
+                fileObject.ReferenceCountCache + 1);
+        }
         upload.FinalSha256 = stored.Locator.Sha256;
         upload.State = "completed";
         db.AuditEvents.Add(new AuditEventEntity
@@ -584,6 +950,8 @@ public static partial class UploadsEndpoints
             SafeMetadataJson = JsonSerializer.Serialize(new
             {
                 purpose = upload.Purpose,
+                orderedScanBatchId = upload.OrderedScanBatchId,
+                inputOrdinal = upload.OrderedScanInputOrdinal,
                 bytes = upload.ExpectedBytes,
                 deduplicated = stored.Deduplicated,
             }),
@@ -594,16 +962,22 @@ public static partial class UploadsEndpoints
         TryDeleteIncomingFile(path);
 
         return Results.Accepted(
-            submissionId is null
+            orderedScanItemId is not null
+                ? $"/api/v1/ordered-scan-batches/{upload.OrderedScanBatchId}"
+                : submissionId is null
                 ? $"/api/v1/uploads/{upload.Id}"
                 : $"/api/v1/submissions/{submissionId}",
             new
             {
                 uploadId = upload.Id,
                 state = upload.State,
+                rowVersion = upload.Revision,
                 submissionId,
+                orderedScanItemId,
                 jobId,
-                statusUrl = submissionId is null
+                statusUrl = orderedScanItemId is not null
+                    ? $"/api/v1/ordered-scan-batches/{upload.OrderedScanBatchId}"
+                    : submissionId is null
                     ? $"/api/v1/uploads/{upload.Id}"
                     : $"/api/v1/submissions/{submissionId}",
             });
@@ -616,6 +990,7 @@ public static partial class UploadsEndpoints
         [FromBody] ResolveDuplicateRequest request,
         OokiGraderDbContext db,
         UploadLockProvider locks,
+        ContentObjectLockProvider contentObjectLocks,
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
@@ -642,6 +1017,17 @@ public static partial class UploadsEndpoints
                 "DUPLICATE_RESOLUTION_NOT_PENDING",
                 "重複答案の確認は完了しています",
                 "最新のアップロード状態を確認してください。");
+        }
+
+        if (upload.TestSessionId is not null
+            && await db.TestSessions
+                .AsNoTracking()
+                .AnyAsync(
+                    session => session.Id == upload.TestSessionId
+                        && session.State == "archived",
+                    cancellationToken))
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         if (request.Action is not ("useExisting" or "createAttempt" or "cancel"))
@@ -726,6 +1112,33 @@ public static partial class UploadsEndpoints
                 "管理者に連絡してください。");
         }
 
+        var fileObjectIdentity = await db.FileObjects
+            .AsNoTracking()
+            .Where(item => item.Id == existing.OriginalFileObjectId)
+            .Select(item => new
+            {
+                item.StorageClass,
+                item.Sha256,
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (fileObjectIdentity is null
+            || !Enum.TryParse<ContentStorageClass>(
+                fileObjectIdentity.StorageClass,
+                ignoreCase: false,
+                out var storageClass))
+        {
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status409Conflict,
+                "DUPLICATE_FILE_UNAVAILABLE",
+                "答案ファイルを利用できません",
+                "既存答案の画像保存状態を確認してください。");
+        }
+
+        await using var contentObjectLock = await contentObjectLocks.AcquireAsync(
+            storageClass,
+            fileObjectIdentity.Sha256,
+            cancellationToken);
         var fileObject = await db.FileObjects.SingleOrDefaultAsync(
             item => item.Id == existing.OriginalFileObjectId
                 && item.State == "available",
@@ -802,6 +1215,14 @@ public static partial class UploadsEndpoints
                 submission.AttemptNumber,
             });
     }
+
+    private static IResult ArchivedSessionReadOnly(HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status409Conflict,
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            "アーカイブ済みのテスト実施は変更できません",
+            "過去の答案は閲覧できますが、重複答案の扱いは変更できません。");
 
     private static IResult ExactDuplicateProblem(
         HttpContext context,
@@ -929,6 +1350,7 @@ public static partial class UploadsEndpoints
     {
         uploadId = upload.Id,
         upload.State,
+        rowVersion = upload.Revision,
         offset = upload.CurrentBytes,
         length = upload.ExpectedBytes,
         maxChunkBytes = MaxChunkBytes,
@@ -938,6 +1360,12 @@ public static partial class UploadsEndpoints
         duplicateOfSubmissionId = upload.DestinationType == "duplicate_submission"
             ? upload.DestinationId
             : null,
+        orderedScanItemId = upload.DestinationType == "ordered_scan_item"
+            ? upload.DestinationId
+            : null,
+        upload.OrderedScanBatchId,
+        inputOrdinal = upload.OrderedScanInputOrdinal,
+        clientItemId = upload.OrderedScanClientItemId,
     };
 
     private static async Task CopyExactAsync(
@@ -997,7 +1425,7 @@ public static partial class UploadsEndpoints
                 return false;
             }
 
-            if (purpose != "completed_test")
+            if (purpose is not ("completed_test" or "completed_test_page"))
             {
                 return true;
             }
@@ -1018,7 +1446,8 @@ public static partial class UploadsEndpoints
                 .SumAsync(file => (long?)file.Bytes, cancellationToken) ?? 0;
             var pendingUploadBytes = await db.UploadSessions
                 .AsNoTracking()
-                .Where(upload => upload.Purpose == "completed_test"
+                .Where(upload => (upload.Purpose == "completed_test"
+                        || upload.Purpose == "completed_test_page")
                     && (upload.State == "uploading"
                         || upload.State == "finalizing"
                         || upload.State == "duplicate_pending"))
@@ -1099,6 +1528,42 @@ public static partial class UploadsEndpoints
             or "image/png"
             or "image/tiff"
             or "application/octet-stream";
+
+    private static bool IsSafeClientItemId(string? value) =>
+        value is { Length: > 0 and <= 128 }
+        && !string.IsNullOrWhiteSpace(value)
+        && value.All(character => !char.IsControl(character));
+
+    private static bool MatchesOrderedPageRetry(
+        UploadSessionEntity existing,
+        CreateUploadRequest request,
+        string safeFileName) =>
+        string.Equals(
+            existing.TestSessionId,
+            request.TestSessionId,
+            StringComparison.Ordinal)
+        && string.Equals(
+            existing.OrderedScanBatchId,
+            request.OrderedScanBatchId,
+            StringComparison.Ordinal)
+        && existing.OrderedScanInputOrdinal == request.InputOrdinal
+        && string.Equals(
+            existing.OrderedScanClientItemId,
+            request.ClientItemId?.Trim(),
+            StringComparison.Ordinal)
+        && string.Equals(
+            existing.OriginalFileName,
+            safeFileName,
+            StringComparison.Ordinal)
+        && string.Equals(
+            existing.DeclaredMimeType,
+            request.DeclaredMimeType.ToLowerInvariant(),
+            StringComparison.Ordinal)
+        && existing.ExpectedBytes == request.Length
+        && string.Equals(
+            existing.ExpectedSha256,
+            request.ExpectedSha256?.ToLowerInvariant(),
+            StringComparison.Ordinal);
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256Pattern();

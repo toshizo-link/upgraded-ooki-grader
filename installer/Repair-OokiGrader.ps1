@@ -27,6 +27,8 @@ param(
     })]
     [string] $ExpectedSignerThumbprint,
 
+    [switch] $AllowChecksumVerifiedOnSitePackage,
+
     [switch] $AllowUnsignedDevelopmentBuild
 )
 
@@ -36,6 +38,12 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+if ($AllowChecksumVerifiedOnSitePackage -and
+    $AllowUnsignedDevelopmentBuild) {
+    throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
+}
+$allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
+    $AllowUnsignedDevelopmentBuild
 $version = Resolve-OokiExactPath -Path $VersionRoot `
     -Purpose 'Installed version root' -MustExist -PathType Directory
 $data = Assert-OokiDataRoot -DataRoot $DataRoot
@@ -46,7 +54,7 @@ if ($null -eq $installation -or
     -not ([string] $installation.serviceName).Equals(
         $ServiceName,
         [StringComparison]::Ordinal) -or
-    (-not $AllowUnsignedDevelopmentBuild -and
+    (-not $allowUnsignedPackage -and
         -not ([string] $installation.expectedSignerThumbprint).Equals(
             $ExpectedSignerThumbprint,
             [StringComparison]::OrdinalIgnoreCase))) {
@@ -77,10 +85,10 @@ if ([IO.File]::Exists($restoreMarker) -or
 }
 $hostSignature = Assert-OokiAuthenticodeSignature -FilePath $hostExecutable `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $toolSignature = Assert-OokiAuthenticodeSignature -FilePath $toolExecutable `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$AllowUnsignedDevelopmentBuild
+    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
 $origin = if ($HttpsPort -eq 443) {
     "https://${DnsName}"
 } else {
@@ -162,6 +170,13 @@ if ($PSCmdlet.ShouldProcess(
         serviceName = $ServiceName
         hostSignature = $hostSignature.ExternalGate
         toolSignature = $toolSignature.ExternalGate
+        packageTrustMode = if ($AllowChecksumVerifiedOnSitePackage) {
+            'physically-controlled-checksum-verified-on-site-package'
+        } elseif ($AllowUnsignedDevelopmentBuild) {
+            'isolated-development-override'
+        } else {
+            'authenticode-signed-production-package'
+        }
         health = $health
         httpsReady = $ready
         dataPreserved = $true

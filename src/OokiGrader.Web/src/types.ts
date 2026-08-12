@@ -21,6 +21,13 @@ export interface PagedResponse<T> {
   items: T[];
   nextCursor: string | null;
   totalApproximate?: number;
+  /** Optional server-authoritative values for open exact-match filters. */
+  facets?:
+    | Record<
+        string,
+        Array<string | { value: string; label?: string; count?: number }>
+      >
+    | null;
 }
 
 export interface FieldProblem {
@@ -148,6 +155,7 @@ export interface TemplateSummary {
   category?: string;
   gradeLabel?: string;
   course?: string;
+  testType?: "hop" | "step" | "classPlacement" | "other" | string;
   lifecycleState: TemplateLifecycle;
   activeVersionId?: string | null;
   activeVersionNumber?: number | null;
@@ -189,6 +197,8 @@ export interface TemplateQuestion {
   maxPointsMilli: number;
   pointIncrementMilli: number;
   allowNonKanji: boolean;
+  requiresCompleteAnswer: boolean;
+  answerOrderInsensitive: boolean;
   acceptedAnswers: AnswerVariant[];
   canonicalAnswer?: string;
   rubric?: string;
@@ -265,21 +275,29 @@ export interface TemplateValidation {
 
 export interface TestSessionSummary {
   id: string;
-  name?: string;
-  sessionName?: string;
+  name?: string | null;
+  sessionName?: string | null;
+  title?: string | null;
   templateId: string;
   templateVersionId: string;
-  templateTitle?: string;
+  templateTitle?: string | null;
   templateVersionNumber?: number;
+  subject?: string | null;
+  gradeLabel?: string | null;
+  category?: string | null;
   testDate: string;
-  classLabel?: string;
-  course?: string;
+  classLabel?: string | null;
+  course?: string | null;
+  templateCourse?: string | null;
   priority: "economy" | "expedite";
   state: "draft" | "open" | "closed" | "archived" | string;
+  creationSource?: "template_publish" | "manual" | string;
   expectedStudentCount?: number;
   submissionCount?: number;
   finalizedCount?: number;
   attentionCount?: number;
+  /** Number of ordered one-page scans that form one student's submission. */
+  expectedSubmissionPageCount?: number | null;
   revision?: number;
 }
 
@@ -320,8 +338,234 @@ export interface UploadFinalizeResponse {
   uploadId: string;
   state: string;
   submissionId?: string;
+  orderedScanItemId?: string;
   jobId?: string;
   statusUrl?: string;
+  pageCount?: number;
+  rowVersion?: number;
+  revision?: number;
+}
+
+export type OrderedScanBatchStatus =
+  | "draft"
+  | "processing"
+  | "needsReview"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "expired"
+  | string;
+
+export interface OrderedScanBatchItem {
+  id: string;
+  uploadId?: string | null;
+  clientItemId: string;
+  fileName: string;
+  inputOrdinal: number;
+  status: string;
+  detectedTemplatePageNumber?: number | null;
+  classificationConfidenceBasisPoints?: number | null;
+  groupOrdinal?: number | null;
+  submissionId?: string | null;
+  submissionPageNumber?: number | null;
+  issueCode?: string | null;
+  rowVersion: number;
+}
+
+export interface OrderedScanBatchIssue {
+  code: string;
+  message: string;
+  inputOrdinal?: number | null;
+  groupOrdinal?: number | null;
+}
+
+export interface OrderedScanBatchGroup {
+  groupOrdinal: number;
+  status: string;
+  itemIds: string[];
+  submissionId?: string | null;
+}
+
+export interface OrderedScanBatchDetail {
+  id: string;
+  testSessionId: string;
+  expectedPageCount: number;
+  status: OrderedScanBatchStatus;
+  assemblyPolicyVersion: string;
+  planHash?: string | null;
+  lastErrorCode?: string | null;
+  rowVersion: number;
+  expiresAt: string;
+  itemCount: number;
+  items: OrderedScanBatchItem[];
+  groups: OrderedScanBatchGroup[];
+  submissionIds: string[];
+  issues: OrderedScanBatchIssue[];
+}
+
+export interface CreateOrderedScanBatchRequest {
+  items: Array<
+    Pick<OrderedScanBatchItem, "clientItemId" | "fileName" | "inputOrdinal">
+  >;
+}
+
+export type TemplateGenerationTestType =
+  | "hop"
+  | "step"
+  | "classPlacement"
+  | "other";
+
+export type TemplateGenerationSubject = "算数" | "国語" | "理科" | "社会";
+
+export type TemplateGenerationAnswerStyle = "normal" | "fillBlank";
+
+export type TemplateGenerationPromptSystem =
+  | "standard"
+  | "classPlacement"
+  | "fillBlank";
+
+export type TemplateGenerationGradeLevel =
+  | "unknown"
+  | "grade1"
+  | "grade2"
+  | "grade3"
+  | "grade4"
+  | "grade5"
+  | "grade6";
+
+export type TemplateGenerationBatchStatus =
+  | "draft"
+  | "validating"
+  | "generating"
+  | "needsFinalCheck"
+  | "confirming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type TemplateGenerationUnitStatus =
+  | "pending"
+  | "queued"
+  | "generating"
+  | "rotating"
+  | "retryingAfterRotation"
+  | "extracted"
+  | "failed"
+  | "confirmed";
+
+export type TemplateGenerationWarningSeverity =
+  | "information"
+  | "warning"
+  | "blocking";
+
+export interface TemplateGenerationWarning {
+  code: string;
+  severity: TemplateGenerationWarningSeverity;
+  message?: string;
+}
+
+export interface AppliedTemplatePageRotation {
+  pageId?: string;
+  pageNumber?: number;
+  clockwiseDegrees: 0 | 90 | 180 | 270;
+}
+
+export interface TemplateGenerationUnit {
+  id: string;
+  sequence: number;
+  status: TemplateGenerationUnitStatus;
+  firstPage: number;
+  lastPage: number;
+  stepSetIndex?: number | null;
+  stepVariationIndex?: number | null;
+  suffix?: string | null;
+  deterministicSuffix?: string | null;
+  printedTestName?: string | null;
+  userConfirmedBaseName?: string | null;
+  confirmedBaseTestName?: string | null;
+  finalTemplateName?: string | null;
+  filenameGrade?: TemplateGenerationGradeLevel | null;
+  paperGrade?: TemplateGenerationGradeLevel | null;
+  resolvedGrade?: TemplateGenerationGradeLevel | null;
+  gradeEvidence?: string | null;
+  gradeConfirmedByUser?: boolean;
+  questionCount?: number;
+  orientationAttemptCount?: number;
+  appliedRotations?: AppliedTemplatePageRotation[];
+  orientationCorrectionSummary?: string | null;
+  warnings?: TemplateGenerationWarning[];
+  blockingWarnings?: Array<TemplateGenerationWarning | string>;
+  createdTemplateId?: string | null;
+  createdTemplateVersionId?: string | null;
+  rowVersion: number;
+}
+
+export interface CreatedTemplateLink {
+  templateId: string;
+  versionId: string;
+  title: string;
+}
+
+export interface TemplateGenerationBatch {
+  batchId: string;
+  status: TemplateGenerationBatchStatus;
+  testType: TemplateGenerationTestType;
+  subject: TemplateGenerationSubject;
+  answerStyle?: TemplateGenerationAnswerStyle | null;
+  promptSystem: TemplateGenerationPromptSystem;
+  sourceId?: string;
+  sourceDisplayName?: string | null;
+  sourcePageCount: number;
+  expectedUnitCount: number;
+  completedUnitCount?: number;
+  failedUnitCount?: number;
+  units: TemplateGenerationUnit[];
+  finalCheckReady?: boolean;
+  warnings?: TemplateGenerationWarning[];
+  blockingWarnings?: Array<TemplateGenerationWarning | string>;
+  createdTemplates?: CreatedTemplateLink[];
+  lastErrorCode?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  rowVersion: number;
+}
+
+/**
+ * PII-minimized row returned by the resumable generation list. The source
+ * filename and upload identifier deliberately stay on the detail endpoint.
+ */
+export interface TemplateGenerationBatchSummary {
+  id: string;
+  status: TemplateGenerationBatchStatus;
+  testType: TemplateGenerationTestType;
+  subject: TemplateGenerationSubject;
+  answerStyle?: TemplateGenerationAnswerStyle | null;
+  sourcePageCount: number;
+  expectedUnitCount: number;
+  completedUnitCount: number;
+  failedUnitCount: number;
+  lastErrorCode?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  rowVersion: number;
+  detailUrl?: string | null;
+}
+
+export interface ResumableTemplateGenerationBatchList {
+  items: TemplateGenerationBatchSummary[];
+  limit: number;
+  /** True when the host list endpoint was unavailable and browser recovery was used. */
+  browserRecoveryOnly?: boolean;
+}
+
+export interface CreateTemplateGenerationBatchRequest {
+  sourceId: string;
+  testType: TemplateGenerationTestType;
+  subject: TemplateGenerationSubject;
+  answerStyle: TemplateGenerationAnswerStyle | null;
+  expectedSourceRowVersion?: number;
 }
 
 export interface NameCandidate {
@@ -368,6 +612,131 @@ export interface GradeReviewItem {
   kanjiRequired?: boolean;
   warning?: string;
   qualityWarnings?: string[];
+}
+
+export interface SubmissionGradingWorkspace {
+  submission: {
+    id: string;
+    state: SubmissionState;
+    revision: number;
+    fileName?: string | null;
+    uploadedAt?: string | null;
+    pageCount: number;
+    scanPayloadState?: string | null;
+    scanDeletedAt?: string | null;
+    scanDeletionReason?: string | null;
+    finalizedAt?: string | null;
+  };
+  session: {
+    id: string;
+    state: string;
+    testDate?: string | null;
+    classLabel?: string | null;
+  };
+  test: {
+    templateVersionId: string;
+    templateVersionNumber?: number | null;
+    title: string;
+    subject?: string | null;
+    gradeLabel?: string | null;
+    category?: string | null;
+    course?: string | null;
+  };
+  student: {
+    id: string;
+    displayName: string;
+    studentNumber?: string | null;
+    schoolClass?: string | null;
+    course?: string | null;
+    gradeLabel?: string | null;
+  } | null;
+  gradingRun: {
+    id: string;
+    state: string;
+    resultSourceRevision: number;
+    earnedPointsMilli: number;
+    possiblePointsMilli: number;
+  } | null;
+  originalPdf: {
+    available: boolean;
+    url?: string | null;
+    contentType?: string | null;
+  } | null;
+  pages: SubmissionGradingPage[];
+  results: SubmissionGradingResult[];
+  unresolvedSnapshot: SubmissionGradingSnapshotItem[];
+  bulkConfirmationLimit: number;
+  canBulkConfirm: boolean;
+  canFinalize: boolean;
+}
+
+export interface SubmissionGradingPage {
+  id: string;
+  pageNumber: number;
+  widthPixels?: number | null;
+  heightPixels?: number | null;
+  rotationDegrees?: number | null;
+  qualityState?: string | null;
+  available: boolean;
+  contentUrl?: string | null;
+  thumbnailUrl?: string | null;
+}
+
+export interface SubmissionGradingResult {
+  resultId: string;
+  questionId: string;
+  orderIndex: number;
+  displayLabel: string;
+  questionText: string;
+  questionType: string;
+  gradingMode: string;
+  pageNumbers: number[];
+  expectedAnswers: string[];
+  transcription?: string | null;
+  outcome: string;
+  awardedPointsMilli: number;
+  maxPointsMilli: number;
+  pointIncrementMilli: number;
+  reason?: string | null;
+  explanation?: string | null;
+  confidenceBasisPoints?: number | null;
+  kanjiRequired: boolean;
+  requiresCompleteAnswer: boolean;
+  answerOrderInsensitive: boolean;
+  reviewRequired: boolean;
+  reviewStatus: string;
+  sourceResultRevision: number;
+}
+
+export interface SubmissionGradingSnapshotItem {
+  resultId: string;
+  sourceResultRevision: number;
+}
+
+export interface SubmissionBulkConfirmResponse {
+  confirmed: Array<{
+    resultId: string;
+    code: "RESULT_CONFIRMED" | string;
+    sourceResultRevision: number;
+  }>;
+  skipped: Array<{
+    resultId: string;
+    code: string;
+    sourceResultRevision: number;
+  }>;
+  gradingRun: {
+    id: string;
+    state: string;
+    resultSourceRevision: number;
+    earnedPointsMilli: number;
+    possiblePointsMilli: number;
+  };
+  submission: {
+    id?: string;
+    state: SubmissionState;
+    revision: number;
+  };
+  canFinalize: boolean;
 }
 
 export interface ResultQuestion {

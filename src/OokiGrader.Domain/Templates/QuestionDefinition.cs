@@ -27,7 +27,9 @@ public sealed class QuestionDefinition
         IEnumerable<RubricRule>? rubricRules = null,
         NumericAnswerPolicy? numericPolicy = null,
         ChoiceAnswerPolicy? choicePolicy = null,
-        string? kanjiPolicyNote = null)
+        string? kanjiPolicyNote = null,
+        bool requiresCompleteAnswer = false,
+        bool answerOrderInsensitive = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(logicalQuestionId);
@@ -67,6 +69,8 @@ public sealed class QuestionDefinition
         NumericPolicy = numericPolicy;
         ChoicePolicy = choicePolicy;
         KanjiPolicyNote = string.IsNullOrWhiteSpace(kanjiPolicyNote) ? null : kanjiPolicyNote;
+        RequiresCompleteAnswer = requiresCompleteAnswer;
+        AnswerOrderInsensitive = answerOrderInsensitive;
     }
 
     public string Id { get; }
@@ -90,6 +94,18 @@ public sealed class QuestionDefinition
     public MilliPoints PointIncrement => PointPolicy.Increment;
 
     public bool AllowNonKanji { get; }
+
+    /// <summary>
+    /// Requires an all-or-nothing award. Incomplete component or rubric
+    /// matches receive zero rather than partial credit.
+    /// </summary>
+    public bool RequiresCompleteAnswer { get; }
+
+    /// <summary>
+    /// Compares explicitly separated answer components as a multiset. All
+    /// components, including duplicate occurrences, must still be present.
+    /// </summary>
+    public bool AnswerOrderInsensitive { get; }
 
     public bool RequiresReviewAlways { get; }
 
@@ -148,7 +164,9 @@ public sealed class QuestionDefinition
             confirmedRules,
             NumericPolicy,
             ChoicePolicy,
-            KanjiPolicyNote);
+            KanjiPolicyNote,
+            RequiresCompleteAnswer,
+            AnswerOrderInsensitive);
     }
 
     public DomainValidationResult ValidateForPublish(string path)
@@ -292,13 +310,13 @@ public sealed class QuestionDefinition
                     $"{path}.acceptedAnswers"));
         }
 
-        if (QuestionType is QuestionType.Subjective or QuestionType.Unsupported
+        if (QuestionType == QuestionType.Unsupported
             && (!RequiresReviewAlways || GradingMode != GradingMode.Manual))
         {
             errors.Add(
                 new DomainError(
                     "question.manual_review_required",
-                    "Subjective and unsupported questions must be manual and always require review.",
+                    "Unsupported questions must be manual and always require review.",
                     path));
         }
 

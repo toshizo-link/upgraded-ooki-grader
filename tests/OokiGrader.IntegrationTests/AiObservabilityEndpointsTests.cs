@@ -218,6 +218,11 @@ public sealed class AiObservabilityEndpointsTests
                             new UnusedSecretStore());
                         services.AddSingleton<IAiProviderClient>(
                             new UnusedProviderClient());
+                        services.AddSingleton<IAiProviderClientResolver>(provider =>
+                            new AiProviderClientResolver(
+                                provider.GetServices<IAiProviderClient>()));
+                        services.AddSingleton<IAiProviderFeaturePolicy>(
+                            AiProviderFeaturePolicy.AllowAll);
                         services.AddSingleton<IAiPromptBundleCatalog>(
                             new UnusedPromptCatalog());
                         services

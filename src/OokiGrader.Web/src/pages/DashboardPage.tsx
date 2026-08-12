@@ -127,9 +127,10 @@ function ScanOperatorDashboardPage() {
                 </div>
                 <div className="session-mini-row__copy">
                   <strong>
-                    {session.sessionName ||
+                    {session.templateTitle ||
+                      session.title ||
                       session.name ||
-                      session.templateTitle ||
+                      session.sessionName ||
                       "名称未設定"}
                   </strong>
                   <span>
@@ -340,9 +341,10 @@ function StaffDashboardPage() {
                     </div>
                     <div className="session-mini-row__copy">
                       <strong>
-                        {session.sessionName ||
+                        {session.templateTitle ||
+                          session.title ||
                           session.name ||
-                          session.templateTitle ||
+                          session.sessionName ||
                           "名称未設定"}
                       </strong>
                       <span>

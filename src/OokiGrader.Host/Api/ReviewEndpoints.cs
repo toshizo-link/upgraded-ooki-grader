@@ -40,7 +40,8 @@ public static class ReviewEndpoints
     {
         var nameCount = await db.Submissions.CountAsync(
             submission => submission.State == "needs_name_review"
-                && submission.VoidedAt == null,
+                && submission.VoidedAt == null
+                && submission.TestSession.State != "archived",
             cancellationToken);
         var gradingCount = await db.QuestionResults.CountAsync(
             result => result.ReviewRequired
@@ -48,12 +49,15 @@ public static class ReviewEndpoints
                 && result.GradingRun.Submission.CurrentGradingRunId
                     == result.GradingRunId
                 && result.GradingRun.Submission.VoidedAt == null
-                && result.GradingRun.Submission.FinalizedAt == null,
+                && result.GradingRun.Submission.FinalizedAt == null
+                && result.GradingRun.Submission.TestSession.State
+                    != "archived",
             cancellationToken);
         var finalizeCount = await db.Submissions.CountAsync(
             submission => submission.State == "ready_to_finalize"
                 && submission.VoidedAt == null
-                && submission.FinalizedAt == null,
+                && submission.FinalizedAt == null
+                && submission.TestSession.State != "archived",
             cancellationToken);
 
         return Results.Ok(new
@@ -87,7 +91,8 @@ public static class ReviewEndpoints
             .Include(submission => submission.Pages)
             .Where(submission => submission.State == "needs_name_review"
                 && submission.AssignedStudentId == null
-                && submission.VoidedAt == null);
+                && submission.VoidedAt == null
+                && submission.TestSession.State != "archived");
         var requestedSessionId = CursorPagination.TrimToNull(
             string.IsNullOrWhiteSpace(testSessionId)
                 ? sessionId
@@ -399,10 +404,15 @@ public static class ReviewEndpoints
         {
             var evidence =
                 JsonSerializer.Deserialize<NameAssignmentEvidence>(json);
-            return evidence?.SchemaVersion == "name_assignment_evidence_v1"
-                && evidence.PipelineVersion
-                    == AiNameTranscriptionJobWorker.PipelineVersion
-                && !evidence.AutomaticAssignmentEnabled
+            var supported = evidence is not null
+                && ((evidence.SchemaVersion == "name_assignment_evidence_v1"
+                        && evidence.PipelineVersion
+                            == AiNameTranscriptionJobWorker.PipelineVersion)
+                    || (evidence.SchemaVersion == "name_assignment_evidence_v2"
+                        && evidence.PipelineVersion
+                            == AiInitialGradingJobWorker.PipelineVersion));
+            return supported
+                && !evidence!.AutomaticAssignmentEnabled
                 ? evidence
                 : null;
         }
@@ -504,7 +514,9 @@ public static class ReviewEndpoints
                 && result.GradingRun.Submission.CurrentGradingRunId
                     == result.GradingRunId
                 && result.GradingRun.Submission.VoidedAt == null
-                && result.GradingRun.Submission.FinalizedAt == null);
+                && result.GradingRun.Submission.FinalizedAt == null
+                && result.GradingRun.Submission.TestSession.State
+                    != "archived");
 
         var normalizedSessionId = CursorPagination.TrimToNull(sessionId);
         if (normalizedSessionId is not null)
@@ -618,8 +630,10 @@ public static class ReviewEndpoints
                 result.Question.QuestionText,
                 studentDisplayName =
                     result.GradingRun.Submission.AssignedStudent?.DisplayName,
-                testTitle = result.GradingRun.Submission.TestSession
-                    .TemplateVersion.TestTemplate.Title,
+                testTitle = result.GradingRun.Submission.TestSession.TitleOverride
+                    ?? result.GradingRun.Submission.TestSession.TemplateTitleSnapshot
+                    ?? result.GradingRun.Submission.TestSession
+                        .TemplateVersion.TestTemplate.Title,
                 testDate = result.GradingRun.Submission.TestSession.TestDate,
                 expectedAnswers = result.Question.AcceptedAnswers
                     .OrderBy(answer => answer.Id)
@@ -693,7 +707,8 @@ public static class ReviewEndpoints
             .Where(submission => submission.State == "ready_to_finalize"
                 && submission.FinalizedAt == null
                 && submission.VoidedAt == null
-                && submission.CurrentGradingRunId != null);
+                && submission.CurrentGradingRunId != null
+                && submission.TestSession.State != "archived");
         var requestedSessionId = CursorPagination.TrimToNull(
             string.IsNullOrWhiteSpace(testSessionId)
                 ? sessionId

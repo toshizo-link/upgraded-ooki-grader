@@ -138,7 +138,10 @@ Initial targets:
 | Subjective item auto-finalized | 0 |
 | Unreadable item silently finalized as blank/wrong | 0 |
 
-Semantic short-answer results are proposals until a separate school-approved gate is established. Initial goal is ≥92% exact score agreement, with all lower-confidence/subjective results reviewed.
+Semantic short-answer and descriptive results are proposals until teacher
+finalization of the paper. Initial goal is ≥92% exact score agreement, with
+all lower-confidence, conflicting, partial, or unreadable results reviewed;
+descriptive type alone does not force per-question review.
 
 ### 4.5 Ease-of-use
 
@@ -166,7 +169,14 @@ The recommended profile minimizes cost only among profiles meeting accuracy/ease
 
 ## 5. Provider/profile evaluation protocol
 
-For every candidate official Gemini or OpenRouter profile:
+This protocol applies to every checked-in release-profile candidate and every
+advanced/manual provider-profile candidate, including OpenRouter. It does not
+run as part of routine Gemini key creation or replacement at an installed
+school. That path instead requires the full candidate-key authentication,
+exact-model, image, strict-structured-output, usage, and representative
+image-task probe to pass before any persistence.
+
+For every release or advanced/manual candidate profile:
 
 1. freeze provider, exact model, routing, endpoint, prompt, schema, reasoning/media settings, preprocessing, and evaluator version;
 2. verify capabilities with synthetic fixtures;
@@ -334,7 +344,15 @@ E2E scenarios:
 - progress date/filter;
 - PDF export;
 - age/quota cleanup;
-- both provider settings and profile switch;
+- Gemini candidate-key initial setup: full pass atomically persists and enables
+  exactly four current profiles, while initial failure persists nothing;
+- Gemini replacement failure/timeout/ambiguous result preserves the previous
+  key, connection revision, and four active profile revisions;
+- successful stored-key `:test` and startup reconciliation self-heal
+  exact-current Gemini profiles without changing in-flight profile snapshots;
+- normal Gemini UI has no evaluation, pilot-approval, or manual-activation
+  controls; OpenRouter/legacy advanced endpoints remain compatible;
+- both provider settings and advanced profile switch;
 - maintenance/backup/restore.
 
 Use accessibility automation plus manual keyboard/screen-reader smoke testing.
@@ -348,6 +366,9 @@ Inject:
 - SQLite busy/I/O error;
 - child rasterizer hang/crash;
 - network disconnect before/after provider send;
+- Gemini candidate probe timeout/ambiguous response before persistence;
+- transaction failure at each secret/connection/four-profile commit boundary,
+  proving no partial commit and preservation of the prior working state;
 - official Gemini batch create ambiguous response;
 - batch output missing/duplicate keys;
 - OpenRouter 402, 429 with `Retry-After`, 502/503, error inside 200 body;
@@ -453,7 +474,9 @@ Production release requires:
 
 - no open P0 defect;
 - all arithmetic/data-integrity invariants;
-- active task profiles pass their accuracy gates;
+- checked-in task-profile revisions proposed for release pass their accuracy
+  gates; installed-school Gemini activation of those exact revisions passes the
+  full capability/image-task gate;
 - auto-assignment/finalization disabled where sample confidence is insufficient;
 - teacher UAT sign-off;
 - measured cost within configured expectation;

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
@@ -531,7 +532,7 @@ public sealed partial class ProviderFreeJobWorker(
 
         if (version.Id != payload.TemplateVersionId
             || version.Id != submission.TestSession.TemplateVersionId
-            || version.State != "published"
+            || !TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(version.State)
             || questions.Length == 0
             || questions.Any(question => question.MaxPointsMilli < 0)
             || questions.Select(question => question.Id).Distinct(

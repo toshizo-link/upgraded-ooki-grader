@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Preprocessing;
@@ -19,6 +21,8 @@ public sealed record SubmissionPreprocessingWorkerOptions
         250L * 1024 * 1024;
     public long MaximumAlignmentReferencePixels { get; init; } =
         250_000_000;
+    public long MaximumAlignmentReferenceArtifactBytes { get; init; } =
+        512L * 1024 * 1024;
 
     // Retained only so older configuration files remain loadable. Full-page AI
     // processing no longer creates coordinate-based crops.
@@ -33,7 +37,9 @@ public sealed record SubmissionPreprocessingWorkerOptions
             || MaximumAlignmentSources is < 1 or > 64
             || MaximumAlignmentReferencePages is < 1 or > 2_000
             || MaximumAlignmentReferenceBytes is < 1 or > 1_000_000_000
-            || MaximumAlignmentReferencePixels is < 1 or > 1_000_000_000)
+            || MaximumAlignmentReferencePixels is < 1 or > 1_000_000_000
+            || MaximumAlignmentReferenceArtifactBytes is < 1
+                or > 1_000_000_000)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(SubmissionPreprocessingWorkerOptions),
@@ -60,6 +66,8 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SubmissionPreprocessingWorker> _logger;
     private readonly SubmissionPreprocessingWorkerOptions _options;
+    private readonly IConfiguration? _configuration;
+    private readonly IAiPromptBundleCatalog? _promptCatalog;
     private readonly string _workerId = $"submission-preprocess-{Guid.NewGuid():N}";
 
     public SubmissionPreprocessingWorker(
@@ -69,7 +77,9 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
         IPreprocessingService preprocessingService,
         TimeProvider timeProvider,
         IOptions<SubmissionPreprocessingWorkerOptions> options,
-        ILogger<SubmissionPreprocessingWorker> logger)
+        ILogger<SubmissionPreprocessingWorker> logger,
+        IConfiguration? configuration = null,
+        IAiPromptBundleCatalog? promptCatalog = null)
     {
         _dbContextFactory = dbContextFactory;
         _writeCoordinator = writeCoordinator;
@@ -78,6 +88,8 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
         _timeProvider = timeProvider;
         _logger = logger;
         _options = options.Value;
+        _configuration = configuration;
+        _promptCatalog = promptCatalog;
         _options.Validate();
     }
 
@@ -325,6 +337,7 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                 item.SourceRole,
                 item.DisplayName,
                 item.Ordinal,
+                item.TemplateVersion.OriginatingUnitId,
             })
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -371,12 +384,10 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
             if (!references.TryGetValue(
                     source.FileReferenceId!,
                     out var reference)
-                || reference.OwnerType != "upload_session"
-                || reference.OwnerId != source.UploadSessionId
-                || reference.Purpose != "template_source"
                 || reference.FileObject.State != "available"
-                || reference.FileObject.StorageClass
-                    != ContentStorageClass.TemplateSource.ToString()
+                || !TryParseTemplateStorageClass(
+                    reference.FileObject.StorageClass,
+                    out var templateStorageClass)
                 || reference.FileObject.VerifiedMime is not (
                     "application/pdf"
                     or "image/jpeg"
@@ -385,6 +396,22 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                     or "image/webp")
                 || reference.FileObject.Bytes <= 0
                 || reference.FileObject.Sha256.Length != 64)
+            {
+                throw Permanent("preprocessing_alignment_reference_invalid");
+            }
+
+            var isUploadedTemplateSource =
+                reference.OwnerType == "upload_session"
+                && reference.OwnerId == source.UploadSessionId
+                && reference.Purpose == "template_source"
+                && templateStorageClass == ContentStorageClass.TemplateSource;
+            var isDeterministicDerivedSource =
+                source.OriginatingUnitId is { } unitId
+                && reference.OwnerType == "template_generation_unit"
+                && reference.OwnerId == unitId
+                && reference.Purpose == "derived_source"
+                && templateStorageClass == ContentStorageClass.TemplateDerived;
+            if (!isUploadedTemplateSource && !isDeterministicDerivedSource)
             {
                 throw Permanent("preprocessing_alignment_reference_invalid");
             }
@@ -403,7 +430,7 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                 source.DisplayName,
                 reference.FileObject.VerifiedMime,
                 new ContentObjectLocator(
-                    ContentStorageClass.TemplateSource,
+                    templateStorageClass,
                     reference.FileObject.Sha256,
                     reference.FileObject.Bytes,
                     reference.FileObject.Extension)));
@@ -428,9 +455,24 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
             .ConfigureAwait(false);
         var referencePages = new List<PreprocessedPage>();
         long referencePixels = 0;
+        long referenceArtifactBytes = 0;
         foreach (var alignmentSource in alignmentSources)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var remainingPages = _options.MaximumAlignmentReferencePages
+                - referencePages.Count;
+            var remainingPixels = _options.MaximumAlignmentReferencePixels
+                - referencePixels;
+            var remainingArtifactBytes =
+                _options.MaximumAlignmentReferenceArtifactBytes
+                - referenceArtifactBytes;
+            if (remainingPages <= 0
+                || remainingPixels <= 0
+                || remainingArtifactBytes <= 0)
+            {
+                throw Permanent("preprocessing_alignment_reference_limit");
+            }
+
             await using var referenceStream = await _contentStore
                 .OpenReadAsync(
                     alignmentSource.Locator,
@@ -441,7 +483,11 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                     referenceStream,
                     new PreprocessingInput(
                         alignmentSource.VerifiedMime,
-                        alignmentSource.DisplayName),
+                        alignmentSource.DisplayName,
+                        MaximumPages: remainingPages,
+                        MaximumNormalizedArtifactBytes:
+                            remainingArtifactBytes,
+                        MaximumTotalPixels: remainingPixels),
                     cancellationToken)
                 .ConfigureAwait(false);
             referencePages.AddRange(referenceResult.Pages);
@@ -455,8 +501,14 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                 referencePixels = checked(
                     referencePixels
                     + ((long)referencePage.Width * referencePage.Height));
+                referenceArtifactBytes = checked(
+                    referenceArtifactBytes
+                    + referencePage.NormalizedPng.Bytes.LongLength
+                    + referencePage.ThumbnailPng.Bytes.LongLength);
                 if (referencePixels
-                    > _options.MaximumAlignmentReferencePixels)
+                        > _options.MaximumAlignmentReferencePixels
+                    || referenceArtifactBytes
+                        > _options.MaximumAlignmentReferenceArtifactBytes)
                 {
                     throw Permanent(
                         "preprocessing_alignment_reference_limit");
@@ -500,6 +552,9 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
         var repeatedPages = Fingerprinting.FindRepeatedPages(
             alignedPages,
             perceptualHammingThreshold: 4);
+        var referenceHashes = referencePages
+            .Select(item => item.NormalizedPng.Sha256)
+            .ToArray();
         var alignedResult = result with
         {
             Pages = alignedPages,
@@ -511,11 +566,16 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
                 alignedPages,
                 repeatedPages,
                 alignments,
-                referencePages.Select(
-                    item => item.NormalizedPng.Sha256)),
+                referenceHashes),
         };
+        var alignmentReferencePageCount = referencePages.Count;
         var pageCountMismatch = alignmentSources.Count > 0
-            && referencePages.Count != alignedPages.Length;
+            && alignmentReferencePageCount != alignedPages.Length;
+        // Alignment outputs now own every page needed below. Drop the original
+        // and template raster aggregates before storing derived artifacts so a
+        // large submission does not retain roughly three copies in memory.
+        result = result with { Pages = Array.Empty<PreprocessedPage>() };
+        referencePages.Clear();
         var preparedPages = new List<PreparedPage>(alignedPages.Length);
         foreach (var alignment in alignments)
         {
@@ -537,7 +597,7 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
         return new PreparedOutput(
             alignedResult,
             preparedPages,
-            referencePages.Count,
+            alignmentReferencePageCount,
             pageCountMismatch);
     }
 
@@ -701,6 +761,17 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
             submission.State = output.HasBlockingAlignmentFailure
                 ? "needs_attention"
                 : "needs_name_review";
+            if (!output.HasBlockingAlignmentFailure)
+            {
+                await QueueCombinedAnalysisIfReadyAsync(
+                        db,
+                        submission,
+                        now,
+                        lease.CorrelationId,
+                        token)
+                    .ConfigureAwait(false);
+            }
+
             AddAudit(
                 db,
                 now,
@@ -733,6 +804,99 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
             await db.SaveChangesAsync(token).ConfigureAwait(false);
             await transaction.CommitAsync(token).ConfigureAwait(false);
         }, cancellationToken);
+    }
+
+    private async Task QueueCombinedAnalysisIfReadyAsync(
+        OokiGraderDbContext db,
+        SubmissionEntity submission,
+        DateTimeOffset now,
+        string? correlationId,
+        CancellationToken cancellationToken)
+    {
+        if (_configuration is null
+            || _promptCatalog is null
+            || !_configuration.GetValue("Features:Grading.Semantic", false))
+        {
+            return;
+        }
+
+        var bundle = _promptCatalog.GetRequired(AiTaskTypes.InitialGrading);
+        var geminiEnabled = _configuration.GetValue(
+            "Features:Ai.GeminiDirect",
+            false);
+        var openRouterEnabled = _configuration.GetValue(
+            "Features:Ai.OpenRouter",
+            false);
+        var profile = await db.AiTaskProfiles
+            .AsNoTracking()
+            .Include(item => item.AiConnection)
+            .Where(item => item.TaskType == AiTaskTypes.InitialGrading
+                && item.Active
+                && AiTaskProfileRuntimePolicy.ReadyApprovalStates.Contains(
+                    item.ApprovalState)
+                && item.PromptVersion == bundle.PromptVersion
+                && item.SchemaVersion == bundle.SchemaVersion
+                && item.PromptContentHash == bundle.ContentHash
+                && item.ModelId == item.AiConnection.ModelId
+                && item.ConnectionRevision
+                    == item.AiConnection.CredentialRevision
+                && item.AiConnection.State == "active"
+                && item.AiConnection.LastCapabilityProbeState == "passed"
+                && ((item.AiConnection.Provider == AiProviders.GeminiDirect
+                        && geminiEnabled)
+                    || (item.AiConnection.Provider == AiProviders.OpenRouter
+                        && openRouterEnabled)))
+            .OrderByDescending(item => item.ActivatedAt)
+            .ThenBy(item => item.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (profile is null)
+        {
+            return;
+        }
+
+        var templateVersionId = await db.TestSessions
+            .AsNoTracking()
+            .Where(item => item.Id == submission.TestSessionId)
+            .Select(item => item.TemplateVersionId)
+            .SingleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var manifestHash = submission.PreprocessingManifestHash!;
+        var deduplicationKey =
+            AiInitialGradingJobWorker.RootJobDeduplicationKey(
+                submission.Id,
+                manifestHash,
+                profile.Id,
+                profile.Revision,
+                bundle.ContentHash);
+        if (await db.BackgroundJobs.AsNoTracking().AnyAsync(
+                item => item.DeduplicationKey == deduplicationKey,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            return;
+        }
+
+        db.BackgroundJobs.Add(new BackgroundJobEntity
+        {
+            Id = UlidId.New(now),
+            Type = AiInitialGradingJobWorker.JobType,
+            SchemaVersion = AiInitialGradingJobWorker.JobSchemaVersion,
+            DeduplicationKey = deduplicationKey,
+            Priority = 0,
+            PayloadJson = JsonSerializer.Serialize(new
+            {
+                submissionId = submission.Id,
+                templateVersionId,
+                manifestHash,
+            }),
+            State = "queued",
+            MaxAttempts = 8,
+            NextAttemptAt = now,
+            CorrelationId = correlationId,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
     }
 
     private static async Task<Dictionary<string, FileObjectEntity>>
@@ -990,6 +1154,24 @@ public sealed partial class SubmissionPreprocessingWorker : BackgroundService
         return value == "managed_scan_original"
             ? ContentStorageClass.ManagedScanOriginal
             : throw Permanent("preprocessing_source_storage_class_invalid");
+    }
+
+    private static bool TryParseTemplateStorageClass(
+        string value,
+        out ContentStorageClass storageClass)
+    {
+        if (Enum.TryParse(
+                value,
+                ignoreCase: false,
+                out storageClass)
+            && storageClass is ContentStorageClass.TemplateSource
+                or ContentStorageClass.TemplateDerived)
+        {
+            return true;
+        }
+
+        storageClass = default;
+        return false;
     }
 
     private static bool QualityWasAccepted(string? json)

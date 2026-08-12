@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
@@ -16,14 +18,24 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Application.Templates;
+using OokiGrader.Domain.Grading;
+using OokiGrader.Domain.Templates;
 using OokiGrader.Host.Api;
+using OokiGrader.Host.Jobs;
+using OokiGrader.Host.Services;
+using OokiGrader.Host.Uploads;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
+using OokiGrader.Preprocessing;
 
 namespace OokiGrader.IntegrationTests;
 
 public sealed class TemplateWorkflowTests
 {
+    private static readonly JsonSerializerOptions WebJsonOptions = new(
+        JsonSerializerDefaults.Web);
+
     [Theory]
     [InlineData("中1社会_問題用紙.pdf", "blank_test", 9_000)]
     [InlineData("中1社会_模範解答.pdf", "separate_answer_key", 9_500)]
@@ -73,6 +85,513 @@ public sealed class TemplateWorkflowTests
         Assert.Equal(HttpStatusCode.Forbidden, readOnlyMutation.StatusCode);
         Assert.Equal(HttpStatusCode.Created, teacherMutation.StatusCode);
         Assert.NotNull(teacherMutation.Headers.ETag);
+    }
+
+    [Fact]
+    public async Task DeleteArchivesDraftAndRestoreIsAuditedIdempotentAndRecoverable()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var detailResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}",
+            "teacher");
+        var originalEtag = RequiredEtag(detailResponse);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var version = await db.TemplateVersions.SingleAsync(
+                item => item.Id == versionId);
+            version.State = "generating";
+            await db.SaveChangesAsync();
+        });
+        var extractionInProgress = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher",
+            etag: originalEtag);
+        Assert.Equal(HttpStatusCode.Conflict, extractionInProgress.StatusCode);
+        Assert.Equal(
+            "TEMPLATE_EXTRACTION_IN_PROGRESS",
+            RequiredString(await ReadJsonAsync(extractionInProgress), "code"));
+        await application.WithDatabaseAsync(async db =>
+        {
+            var version = await db.TemplateVersions.SingleAsync(
+                item => item.Id == versionId);
+            version.State = "draft";
+            await db.SaveChangesAsync();
+        });
+
+        var missingRevision = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher");
+        var staleRevision = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher",
+            etag: "\"rev-999\"");
+        var archivedResponse = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher",
+            etag: originalEtag);
+
+        Assert.Equal(
+            HttpStatusCode.PreconditionRequired,
+            missingRevision.StatusCode);
+        Assert.Equal(
+            HttpStatusCode.PreconditionFailed,
+            staleRevision.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, archivedResponse.StatusCode);
+        var archivedEtag = RequiredEtag(archivedResponse);
+
+        var createVersionWhileArchived = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions",
+            "teacher",
+            new { sourceVersionId = (string?)null });
+        var createQuestionWhileArchived = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new { });
+        var versionWhileArchived = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        var publishWhileArchived = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            new { revision = (long?)null },
+            RequiredEtag(versionWhileArchived));
+        Assert.Equal(HttpStatusCode.Conflict, createVersionWhileArchived.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, createQuestionWhileArchived.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, publishWhileArchived.StatusCode);
+        foreach (var blocked in new[]
+                 {
+                     createVersionWhileArchived,
+                     createQuestionWhileArchived,
+                     publishWhileArchived,
+                 })
+        {
+            var problem = await ReadJsonAsync(blocked);
+            Assert.Equal("TEMPLATE_ARCHIVED", RequiredString(problem, "code"));
+        }
+
+        var ordinaryList = await application.SendAsync(
+            HttpMethod.Get,
+            "/api/v1/templates",
+            "teacher");
+        var ordinaryBody = await ReadJsonAsync(ordinaryList);
+        Assert.Empty(ordinaryBody.GetProperty("items").EnumerateArray());
+
+        var archivedList = await application.SendAsync(
+            HttpMethod.Get,
+            "/api/v1/templates?state=archived",
+            "teacher");
+        var archivedBody = await ReadJsonAsync(archivedList);
+        Assert.Equal(
+            templateId,
+            RequiredString(
+                Assert.Single(
+                    archivedBody.GetProperty("items").EnumerateArray()),
+                "id"));
+
+        var repeatedArchive = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher");
+        Assert.Equal(HttpStatusCode.NoContent, repeatedArchive.StatusCode);
+        Assert.Equal(archivedEtag, RequiredEtag(repeatedArchive));
+
+        var missingRestoreRevision = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}:restore",
+            "teacher");
+        Assert.Equal(
+            HttpStatusCode.PreconditionRequired,
+            missingRestoreRevision.StatusCode);
+
+        var restoredResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}:restore",
+            "teacher",
+            new { revision = (long?)null },
+            archivedEtag);
+        Assert.Equal(HttpStatusCode.OK, restoredResponse.StatusCode);
+        var restored = await ReadJsonAsync(restoredResponse);
+        Assert.Equal("draft", RequiredString(restored, "lifecycleState"));
+        var restoredEtag = RequiredEtag(restoredResponse);
+
+        var repeatedRestore = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}:restore",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, repeatedRestore.StatusCode);
+        Assert.Equal(restoredEtag, RequiredEtag(repeatedRestore));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var template = await db.TestTemplates.AsNoTracking().SingleAsync();
+            var version = await db.TemplateVersions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == versionId);
+            Assert.Equal("draft", template.State);
+            Assert.Equal("draft", version.State);
+            Assert.Equal(
+                1,
+                await db.AuditEvents.CountAsync(
+                    item => item.EventType == "template.archived"));
+            Assert.Equal(
+                1,
+                await db.AuditEvents.CountAsync(
+                    item => item.EventType == "template.restored"));
+        });
+    }
+
+    [Fact]
+    public async Task ArchivePreservesPublishedVersionAndRestoreReturnsTemplateToActive()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var sessionId = UlidId.New(DateTimeOffset.UtcNow.AddMinutes(1));
+        await application.WithDatabaseAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var template = await db.TestTemplates.SingleAsync(
+                item => item.Id == templateId);
+            var version = await db.TemplateVersions.SingleAsync(
+                item => item.Id == versionId);
+            version.State = "published";
+            version.PublishedAt = now;
+            version.PublishedByStaffUserId = TestAuthenticationHandler.StaffId;
+            version.ContentHash = new string('a', 64);
+            template.State = "active";
+            template.ActiveVersionId = version.Id;
+            db.TestSessions.Add(new TestSessionEntity
+            {
+                Id = sessionId,
+                TemplateVersionId = version.Id,
+                TitleOverride = "保存済みテスト実施",
+                TestDate = new DateOnly(2026, 8, 10),
+                Priority = "economy",
+                State = "closed",
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now,
+                UpdatedAt = now,
+                ClosedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var detailResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}",
+            "teacher");
+        var archiveResponse = await application.SendAsync(
+            HttpMethod.Delete,
+            $"/api/v1/templates/{templateId}",
+            "teacher",
+            etag: RequiredEtag(detailResponse));
+        Assert.Equal(HttpStatusCode.NoContent, archiveResponse.StatusCode);
+
+        var historicalSession = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, historicalSession.StatusCode);
+        var historicalSessionBody = await ReadJsonAsync(historicalSession);
+        Assert.Equal(sessionId, RequiredString(historicalSessionBody, "id"));
+        Assert.Equal(
+            versionId,
+            RequiredString(historicalSessionBody, "templateVersionId"));
+        Assert.Equal(
+            "保存済みテスト実施",
+            RequiredString(historicalSessionBody, "sessionName"));
+
+        var newSession = await application.SendAsync(
+            HttpMethod.Post,
+            "/api/v1/test-sessions",
+            "teacher",
+            new
+            {
+                templateVersionId = versionId,
+                testDate = "2026-08-11",
+                sessionName = "作成不可",
+                classLabel = (string?)null,
+                course = (string?)null,
+                priority = "economy",
+            });
+        Assert.Equal(HttpStatusCode.Conflict, newSession.StatusCode);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Equal(
+                "published",
+                (await db.TemplateVersions.AsNoTracking().SingleAsync(
+                    item => item.Id == versionId)).State);
+            Assert.True(await db.TestSessions.AsNoTracking().AnyAsync(
+                item => item.Id == sessionId));
+        });
+
+        var restoreResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}:restore",
+            "teacher",
+            new { revision = (long?)null },
+            RequiredEtag(archiveResponse));
+        Assert.Equal(HttpStatusCode.OK, restoreResponse.StatusCode);
+        var restored = await ReadJsonAsync(restoreResponse);
+        Assert.Equal("active", RequiredString(restored, "lifecycleState"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var template = await db.TestTemplates.AsNoTracking().SingleAsync(
+                item => item.Id == templateId);
+            var version = await db.TemplateVersions.AsNoTracking().SingleAsync(
+                item => item.Id == versionId);
+            Assert.Equal("active", template.State);
+            Assert.Equal(versionId, template.ActiveVersionId);
+            Assert.Equal("published", version.State);
+            Assert.NotNull(version.PublishedAt);
+            Assert.Equal(new string('a', 64), version.ContentHash);
+        });
+    }
+
+    [Fact]
+    public async Task SessionArchiveWaitsForTerminalWorkThenFreezesMutationsButKeepsHistory()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var now = DateTimeOffset.UtcNow;
+        var sessionId = UlidId.New(now.AddTicks(1));
+        var submissionId = UlidId.New(now.AddTicks(2));
+        var jobId = UlidId.New(now.AddTicks(3));
+        var uploadId = UlidId.New(now.AddTicks(4));
+        var batchId = UlidId.New(now.AddTicks(5));
+        await application.WithDatabaseAsync(async db =>
+        {
+            var template = await db.TestTemplates.SingleAsync(
+                item => item.Id == templateId);
+            var version = await db.TemplateVersions.SingleAsync(
+                item => item.Id == versionId);
+            version.State = "published";
+            version.PublishedAt = now;
+            version.PublishedByStaffUserId = TestAuthenticationHandler.StaffId;
+            version.ContentHash = new string('b', 64);
+            template.State = "active";
+            template.ActiveVersionId = version.Id;
+            db.StaffUsers.Add(new StaffUserEntity
+            {
+                Id = TestAuthenticationHandler.StaffId,
+                Username = "session-archive-test-teacher",
+                UsernameNormalized = "session-archive-test-teacher",
+                DisplayName = "Session Archive Test Teacher",
+                PasswordHash = "test",
+                PasswordAlgorithm = "test",
+                PasswordAlgorithmVersion = 1,
+                Status = "active",
+                CredentialChangedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.TestSessions.Add(new TestSessionEntity
+            {
+                Id = sessionId,
+                TemplateVersionId = version.Id,
+                TitleOverride = "アーカイブ確認",
+                TestDate = new DateOnly(2026, 8, 10),
+                Priority = "economy",
+                State = "closed",
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now,
+                UpdatedAt = now,
+                ClosedAt = now,
+            });
+            db.Submissions.Add(new SubmissionEntity
+            {
+                Id = submissionId,
+                TestSessionId = sessionId,
+                State = "needs_grade_review",
+                ScanPayloadState = "scan_available",
+                AssignmentMethod = "none",
+                AttemptNumber = 1,
+                UploadedByStaffUserId = TestAuthenticationHandler.StaffId,
+                OriginalFileName = "答案.pdf",
+                UploadCompletedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var incomplete = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/test-sessions/{sessionId}:archive",
+            "teacher");
+        Assert.Equal(HttpStatusCode.Conflict, incomplete.StatusCode);
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVE_SUBMISSIONS_INCOMPLETE",
+            RequiredString(await ReadJsonAsync(incomplete), "code"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var submission = await db.Submissions.SingleAsync(
+                item => item.Id == submissionId);
+            submission.State = "finalized";
+            submission.FinalizedAt = now;
+            submission.FinalizedByStaffUserId = TestAuthenticationHandler.StaffId;
+            db.BackgroundJobs.Add(new BackgroundJobEntity
+            {
+                Id = jobId,
+                Type = AiInitialGradingJobWorker.JobType,
+                SchemaVersion = 1,
+                DeduplicationKey = $"submission:{submissionId}:grade:r1",
+                Priority = 0,
+                PayloadJson = JsonSerializer.Serialize(new { submissionId }),
+                State = "queued",
+                MaxAttempts = 8,
+                NextAttemptAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var gradingActive = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/test-sessions/{sessionId}:archive",
+            "teacher");
+        Assert.Equal(HttpStatusCode.Conflict, gradingActive.StatusCode);
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVE_GRADING_ACTIVE",
+            RequiredString(await ReadJsonAsync(gradingActive), "code"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var job = await db.BackgroundJobs.SingleAsync(item => item.Id == jobId);
+            job.State = "succeeded";
+            job.ProgressBasisPoints = 10_000;
+            job.CompletedAt = now;
+            db.UploadSessions.Add(new UploadSessionEntity
+            {
+                Id = uploadId,
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                Purpose = "completed_test",
+                TestSessionId = sessionId,
+                OriginalFileName = "処理中.pdf",
+                DeclaredMimeType = "application/pdf",
+                ExpectedBytes = 1,
+                CurrentBytes = 0,
+                IncomingRelativePath = $"test/{uploadId}.part",
+                State = "uploading",
+                ExpiresAt = now.AddHours(1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var uploadActive = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/test-sessions/{sessionId}:archive",
+            "teacher");
+        Assert.Equal(HttpStatusCode.Conflict, uploadActive.StatusCode);
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVE_UPLOADS_ACTIVE",
+            RequiredString(await ReadJsonAsync(uploadActive), "code"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var upload = await db.UploadSessions.SingleAsync(
+                item => item.Id == uploadId);
+            upload.State = "cancelled";
+            db.OrderedScanBatches.Add(new OrderedScanBatchEntity
+            {
+                Id = batchId,
+                TestSessionId = sessionId,
+                ExpectedPageCount = 1,
+                Status = OrderedScanBatchStatus.NeedsReview,
+                AssemblyPolicyVersion = "ordered-scan-assembly-v1",
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                ExpiresAt = now.AddHours(24),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        var scanBatchActive = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/test-sessions/{sessionId}:archive",
+            "teacher");
+        Assert.Equal(HttpStatusCode.Conflict, scanBatchActive.StatusCode);
+        Assert.Equal(
+            "TEST_SESSION_ARCHIVE_SCAN_BATCHES_ACTIVE",
+            RequiredString(await ReadJsonAsync(scanBatchActive), "code"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var batch = await db.OrderedScanBatches.SingleAsync(
+                item => item.Id == batchId);
+            batch.Status = OrderedScanBatchStatus.Cancelled;
+            batch.CompletedAt = now;
+            await db.SaveChangesAsync();
+        });
+
+        var archived = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/test-sessions/{sessionId}:archive",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, archived.StatusCode);
+        Assert.Equal(
+            "archived",
+            RequiredString(await ReadJsonAsync(archived), "state"));
+
+        var priorityMutation = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/test-sessions/{sessionId}",
+            "teacher",
+            new { priority = "expedite", revision = (long?)null });
+        var rosterMutation = await application.SendAsync(
+            HttpMethod.Put,
+            $"/api/v1/test-sessions/{sessionId}/roster",
+            "teacher",
+            new { studentIds = Array.Empty<string>() });
+        foreach (var blocked in new[] { priorityMutation, rosterMutation })
+        {
+            Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
+            Assert.Equal(
+                "TEST_SESSION_ARCHIVED_READ_ONLY",
+                RequiredString(await ReadJsonAsync(blocked), "code"));
+        }
+
+        var history = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}",
+            "teacher");
+        var summary = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}/summary",
+            "teacher");
+        var uploadHistory = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}/upload-status",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, history.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, summary.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, uploadHistory.StatusCode);
+        Assert.Equal(
+            1,
+            (await ReadJsonAsync(summary)).GetProperty("finalizedCount").GetInt32());
     }
 
     [Fact]
@@ -184,6 +703,189 @@ public sealed class TemplateWorkflowTests
             $"/sources/{sourceId}/content",
             "teacher");
         Assert.Equal(HttpStatusCode.NotFound, wrongTemplateResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task ClonedGeneratedVersionRetainsDerivedSourceAccessAndProvenance()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var now = DateTimeOffset.UtcNow;
+        var batchId = UlidId.New(now);
+        var unitId = UlidId.New(now.AddTicks(1));
+        var uploadId = UlidId.New(now.AddTicks(2));
+        var fileObjectId = UlidId.New(now.AddTicks(3));
+        var fileReferenceId = UlidId.New(now.AddTicks(4));
+        var sourceId = UlidId.New(now.AddTicks(5));
+        var sourceSha = new string('a', 64);
+        var derivedSha = new string('b', 64);
+        var derivedBytes = Enumerable.Repeat((byte)0x25, 321).ToArray();
+        var profile = new TemplateGenerationProfile(
+            TemplateGenerationProfile.CurrentProfileVersion,
+            TestType.Hop,
+            "算数",
+            AnswerStyle: null,
+            TemplatePromptSystem.Standard,
+            SourcePageCount: 1,
+            UnitSequence: 1,
+            FirstPage: 1,
+            LastPage: 1,
+            StepSetIndex: null,
+            StepVariationIndex: null,
+            DeterministicSuffix: null,
+            TemplateGenerationProfile.CurrentSplitPolicyVersion,
+            TemplateGenerationProfile.CurrentNamingPolicyVersion,
+            "template-extract-v2.0.0",
+            "template_extract_v5");
+        var profileJson = JsonSerializer.Serialize(profile);
+        var profileHash = profile.ComputeHash();
+        application.AddContent(
+            new ContentObjectLocator(
+                ContentStorageClass.TemplateDerived,
+                derivedSha,
+                derivedBytes.Length,
+                "pdf"),
+            derivedBytes);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            db.UploadSessions.Add(new UploadSessionEntity
+            {
+                Id = uploadId,
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                Purpose = "template_source",
+                DestinationType = "template_source",
+                OriginalFileName = "HOP算数_小学4年.pdf",
+                DeclaredMimeType = "application/pdf",
+                ExpectedBytes = derivedBytes.Length,
+                CurrentBytes = derivedBytes.Length,
+                FinalSha256 = sourceSha,
+                IncomingRelativePath = "test/generated-source",
+                State = "completed",
+                ExpiresAt = now.AddHours(1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.FileObjects.Add(new FileObjectEntity
+            {
+                Id = fileObjectId,
+                Sha256 = derivedSha,
+                Bytes = derivedBytes.Length,
+                VerifiedMime = "application/pdf",
+                Extension = "pdf",
+                RelativeObjectPath = $"template/derived/{derivedSha}.pdf",
+                StorageClass = ContentStorageClass.TemplateDerived.ToString(),
+                RetentionClass = "template_source",
+                State = "available",
+                CreatedAt = now,
+                VerifiedAt = now,
+                ReferenceCountCache = 1,
+            });
+            db.FileReferences.Add(new FileReferenceEntity
+            {
+                Id = fileReferenceId,
+                FileObjectId = fileObjectId,
+                OwnerType = "template_generation_unit",
+                OwnerId = unitId,
+                Purpose = "derived_source",
+                RetentionAnchorAt = now,
+                CreatedAt = now,
+            });
+            db.TemplateSources.Add(new TemplateSourceEntity
+            {
+                Id = sourceId,
+                TemplateVersionId = versionId,
+                UploadSessionId = uploadId,
+                FileReferenceId = fileReferenceId,
+                SourceRole = "blank_test",
+                DisplayName = "HOP算数 第1回.pdf",
+                Ordinal = 0,
+                UploadedByStaffUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now,
+            });
+            var version = await db.TemplateVersions.SingleAsync(
+                item => item.Id == versionId);
+            version.TestType = TestType.Hop;
+            version.PromptSystem = TemplatePromptSystem.Standard;
+            version.OriginatingBatchId = batchId;
+            version.OriginatingUnitId = unitId;
+            version.GenerationProfileVersion = profile.ProfileVersion;
+            version.GenerationProfileJson = profileJson;
+            version.GenerationProfileHash = profileHash;
+            version.PrintedTestName = "HOP算数 第1回";
+            version.ResolvedGrade = GradeLevel.Grade4;
+            await db.SaveChangesAsync();
+        });
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var generatedVersion = await db.TemplateVersions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == versionId);
+            Assert.Equal(unitId, generatedVersion.OriginatingUnitId);
+            Assert.Equal(profileHash, generatedVersion.GenerationProfileHash);
+        });
+
+        var cloneResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions",
+            "teacher",
+            new { sourceVersionId = versionId });
+        Assert.Equal(HttpStatusCode.Created, cloneResponse.StatusCode);
+        var clone = await ReadJsonAsync(cloneResponse);
+        var cloneVersionId = RequiredString(clone, "id");
+        var clonedSource = Assert.Single(
+            clone.GetProperty("sources").EnumerateArray());
+        var cloneSourceId = RequiredString(clonedSource, "id");
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var clonedVersion = await db.TemplateVersions
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == cloneVersionId);
+            var clonedSourceEntity = await db.TemplateSources
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == cloneSourceId);
+            Assert.Equal(batchId, clonedVersion.OriginatingBatchId);
+            Assert.Equal(unitId, clonedVersion.OriginatingUnitId);
+            Assert.Equal(
+                profile.ProfileVersion,
+                clonedVersion.GenerationProfileVersion);
+            Assert.Equal(profileJson, clonedVersion.GenerationProfileJson);
+            Assert.Equal(profileHash, clonedVersion.GenerationProfileHash);
+            Assert.Equal(TestType.Hop, clonedVersion.TestType);
+            Assert.Equal(
+                TemplatePromptSystem.Standard,
+                clonedVersion.PromptSystem);
+            Assert.Equal(GradeLevel.Grade4, clonedVersion.ResolvedGrade);
+            Assert.Equal(fileReferenceId, clonedSourceEntity.FileReferenceId);
+        });
+
+        var contentResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{cloneVersionId}" +
+                $"/sources/{cloneSourceId}/content",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, contentResponse.StatusCode);
+        Assert.Equal(
+            derivedBytes,
+            await contentResponse.Content.ReadAsByteArrayAsync());
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var clonedVersion = await db.TemplateVersions.SingleAsync(
+                item => item.Id == cloneVersionId);
+            clonedVersion.OriginatingUnitId = UlidId.New();
+            await db.SaveChangesAsync();
+        });
+        var crossUnitResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{cloneVersionId}" +
+                $"/sources/{cloneSourceId}/content",
+            "teacher");
+        Assert.Equal(HttpStatusCode.Gone, crossUnitResponse.StatusCode);
     }
 
     [Fact]
@@ -493,6 +1195,7 @@ public sealed class TemplateWorkflowTests
                 .Single(item => item.Id == subjectiveQuestionId);
             subjective.AiConfidenceBasisPoints = 9_800;
             subjective.QuestionType = "subjective";
+            subjective.RequiresReviewAlways = true;
             await db.SaveChangesAsync();
         });
 
@@ -528,7 +1231,7 @@ public sealed class TemplateWorkflowTests
             "question.low_confidence",
             RequiredString(issues[blockedQuestionId], "code"));
         Assert.Equal(
-            "question.individual_review_required",
+            "question.review_always",
             RequiredString(issues[subjectiveQuestionId], "code"));
         Assert.All(issues.Values, issue =>
             Assert.True(issue.GetProperty("blocking").GetBoolean()));
@@ -709,6 +1412,8 @@ public sealed class TemplateWorkflowTests
                 questionType = "semantic_short_text",
                 gradingMode = "ai_rubric",
                 allowNonKanji = true,
+                requiresCompleteAnswer = true,
+                answerOrderInsensitive = true,
                 canonicalAnswer = "説明",
                 rubric = "要点Aを含む場合は1点。",
                 teacherNote = "採点者だけが確認するメモ",
@@ -733,6 +1438,8 @@ public sealed class TemplateWorkflowTests
         Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
         var created = await ReadJsonAsync(createdResponse);
         Assert.Equal(1_750, created.GetProperty("maxPointsMilli").GetInt64());
+        Assert.True(created.GetProperty("requiresCompleteAnswer").GetBoolean());
+        Assert.True(created.GetProperty("answerOrderInsensitive").GetBoolean());
         Assert.Equal(
             "要点Aを含む場合は1点。",
             created.GetProperty("rubric").GetString());
@@ -768,6 +1475,405 @@ public sealed class TemplateWorkflowTests
                 .ToListAsync();
             Assert.Equal(2, regions.Count);
             Assert.All(regions, region => Assert.Equal("question", region.OwnerType));
+            var question = await db.Questions.AsNoTracking().SingleAsync();
+            Assert.True(question.RequiresCompleteAnswer);
+            Assert.True(question.AnswerOrderInsensitive);
+        });
+    }
+
+    [Theory]
+    [InlineData("multiple_choice")]
+    [InlineData("boolean")]
+    [InlineData("numeric")]
+    [InlineData("exact_short_text")]
+    [InlineData("semantic_short_text")]
+    [InlineData("multi_part")]
+    [InlineData("subjective")]
+    public async Task QuestionCreationDefaultsSupportedTypesToAiRubric(
+        string questionType)
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            defaultPointsMilli: 1_750);
+
+        var response = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "問1",
+                questionText = "理由を説明しなさい。",
+                questionType,
+                canonicalAnswer = "模範解答",
+            });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var question = await ReadJsonAsync(response);
+        Assert.Equal("ai_rubric", RequiredString(question, "gradingMode"));
+        Assert.Contains(
+            "模範解答",
+            RequiredString(question, "rubric"),
+            StringComparison.Ordinal);
+        Assert.Equal(250, question.GetProperty("pointIncrementMilli").GetInt64());
+        Assert.False(question.GetProperty("requiresReviewAlways").GetBoolean());
+    }
+
+    [Fact]
+    public async Task QuestionTypeChangeDerivesDefaultsButPreservesExplicitMode()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+        var createdResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "問1",
+                questionText = "答えなさい。",
+                questionType = "exact_short_text",
+                gradingMode = "manual",
+                canonicalAnswer = "答え",
+            });
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = await ReadJsonAsync(createdResponse);
+        var questionId = RequiredString(created, "id");
+
+        var sameTypeResponse = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/{questionId}",
+            "teacher",
+            new { questionType = "exact_short_text" },
+            RequiredEtag(createdResponse));
+        Assert.Equal(HttpStatusCode.OK, sameTypeResponse.StatusCode);
+        var sameType = await ReadJsonAsync(sameTypeResponse);
+        Assert.Equal("manual", RequiredString(sameType, "gradingMode"));
+
+        var changedTypeResponse = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/{questionId}",
+            "teacher",
+            new { questionType = "subjective" },
+            RequiredEtag(sameTypeResponse));
+        Assert.Equal(HttpStatusCode.OK, changedTypeResponse.StatusCode);
+        var changedType = await ReadJsonAsync(changedTypeResponse);
+        Assert.Equal("ai_rubric", RequiredString(changedType, "gradingMode"));
+        Assert.False(changedType.GetProperty("requiresReviewAlways").GetBoolean());
+        Assert.Contains(
+            "答え",
+            RequiredString(changedType, "rubric"),
+            StringComparison.Ordinal);
+
+        var explicitModeResponse = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/{questionId}",
+            "teacher",
+            new
+            {
+                questionType = "semantic_short_text",
+                gradingMode = "manual",
+            },
+            RequiredEtag(changedTypeResponse));
+        Assert.Equal(HttpStatusCode.OK, explicitModeResponse.StatusCode);
+        Assert.Equal(
+            "manual",
+            RequiredString(await ReadJsonAsync(explicitModeResponse), "gradingMode"));
+    }
+
+    [Fact]
+    public async Task DefaultSubjectiveAiRubricCanBePublished()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+        var created = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "問1",
+                questionText = "理由を説明しなさい。",
+                questionType = "subjective",
+                canonicalAnswer = "模範解答",
+            });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        var validation = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:validate",
+            "teacher",
+            new { });
+        Assert.True((await ReadJsonAsync(validation))
+            .GetProperty("valid")
+            .GetBoolean());
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        var published = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            new { },
+            RequiredEtag(current));
+        Assert.Equal(HttpStatusCode.OK, published.StatusCode);
+    }
+
+    [Fact]
+    public async Task PublishAtomicallyStartsOpenSessionAndSnapshotsCanonicalMetadata()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+        var created = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            ExactQuestionRequest("次の語を漢字で書きなさい。", 1_000));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        var etag = RequiredEtag(current);
+        var request = new
+        {
+            testDate = "2026-08-11",
+            classLabel = "A組",
+        };
+        var publishedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            request,
+            etag);
+        Assert.Equal(HttpStatusCode.OK, publishedResponse.StatusCode);
+        var published = await ReadJsonAsync(publishedResponse);
+        Assert.Equal("published", RequiredString(published, "state"));
+        var session = published.GetProperty("testSession");
+        var sessionId = RequiredString(session, "id");
+        Assert.Equal("open", RequiredString(session, "state"));
+        Assert.Equal("expedite", RequiredString(session, "priority"));
+        Assert.Equal("漢字確認テスト", RequiredString(session, "title"));
+        Assert.Equal("漢字確認テスト", RequiredString(session, "templateTitle"));
+        Assert.Equal("国語", RequiredString(session, "subject"));
+        Assert.Equal("中学1年", RequiredString(session, "gradeLabel"));
+        Assert.Equal("漢字", RequiredString(session, "category"));
+        Assert.Equal("標準", RequiredString(session, "course"));
+        Assert.Equal("A組", RequiredString(session, "classLabel"));
+        Assert.Equal("2026-08-11", RequiredString(session, "testDate"));
+        Assert.Equal(
+            "template_publish",
+            RequiredString(session, "creationSource"));
+
+        // A retry that outlives the middleware's response cache resolves the
+        // durable publish-created session rather than making a duplicate.
+        var retriedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            request,
+            etag);
+        Assert.Equal(HttpStatusCode.OK, retriedResponse.StatusCode);
+        Assert.Equal(
+            sessionId,
+            RequiredString(
+                (await ReadJsonAsync(retriedResponse)).GetProperty("testSession"),
+                "id"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var template = await db.TestTemplates.SingleAsync(
+                item => item.Id == templateId);
+            template.Title = "後から変更された名前";
+            template.Subject = "変更後教科";
+            template.Course = "変更後コース";
+            await db.SaveChangesAsync();
+        });
+
+        var detailResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}",
+            "teacher");
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        var detail = await ReadJsonAsync(detailResponse);
+        Assert.Equal("漢字確認テスト", RequiredString(detail, "title"));
+        Assert.Equal("国語", RequiredString(detail, "subject"));
+        Assert.Equal("標準", RequiredString(detail, "course"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var persistedSession = await db.TestSessions
+                .AsNoTracking()
+                .SingleAsync();
+            Assert.Equal(sessionId, persistedSession.Id);
+            Assert.Null(persistedSession.TitleOverride);
+            Assert.Equal("漢字確認テスト", persistedSession.TemplateTitleSnapshot);
+            Assert.Equal("国語", persistedSession.TemplateSubjectSnapshot);
+            Assert.Equal("中学1年", persistedSession.TemplateGradeLabelSnapshot);
+            Assert.Equal("漢字", persistedSession.TemplateCategorySnapshot);
+            Assert.Equal("標準", persistedSession.TemplateCourseSnapshot);
+            Assert.Equal(
+                1,
+                await db.AuditEvents.CountAsync(
+                    item => item.EventType == "template_version.published"));
+            Assert.Equal(
+                1,
+                await db.AuditEvents.CountAsync(
+                    item => item.EventType == "test_session.created"));
+            Assert.Equal(
+                1,
+                await db.AuditEvents.CountAsync(
+                    item => item.EventType == "test_session.opened"));
+        });
+    }
+
+    [Fact]
+    public async Task SessionInsertFailureRollsBackTemplatePublication()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+        var created = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            ExactQuestionRequest("次の語を漢字で書きなさい。", 1_000));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        await application.WithDatabaseAsync(db =>
+            db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TRIGGER force_publish_session_failure
+                BEFORE INSERT ON test_session
+                WHEN NEW.creation_source = 'template_publish'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced publish session failure');
+                END;
+                """));
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        var response = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            new { testDate = "2026-08-11" },
+            RequiredEtag(current));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(
+            "TEST_SESSION_START_FAILED",
+            RequiredString(await ReadJsonAsync(response), "code"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var template = await db.TestTemplates.AsNoTracking().SingleAsync(
+                item => item.Id == templateId);
+            var version = await db.TemplateVersions.AsNoTracking().SingleAsync(
+                item => item.Id == versionId);
+            Assert.Equal("draft", template.State);
+            Assert.Null(template.ActiveVersionId);
+            Assert.Equal("draft", version.State);
+            Assert.Null(version.PublishedAt);
+            Assert.Null(version.ContentHash);
+            Assert.Empty(await db.TestSessions.AsNoTracking().ToArrayAsync());
+            Assert.DoesNotContain(
+                await db.AuditEvents.AsNoTracking().ToArrayAsync(),
+                item => item.EventType is "template_version.published"
+                    or "test_session.created"
+                    or "test_session.opened");
+        });
+    }
+
+    [Fact]
+    public async Task ExistingPublishedVersionCanStartAnotherOpenCanonicalSession()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+        var created = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            ExactQuestionRequest("次の語を漢字で書きなさい。", 1_000));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await application.SendAsync(
+                HttpMethod.Post,
+                $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+                "teacher",
+                new { testDate = "2026-08-11" },
+                RequiredEtag(current))).StatusCode);
+
+        var idempotencyKey = UlidId.New();
+        var sessionRequest = new
+        {
+            templateVersionId = versionId,
+            testDate = "2026-08-12",
+            classLabel = "B組",
+            openImmediately = true,
+        };
+        var createdSessionResponse = await application.SendAsync(
+            HttpMethod.Post,
+            "/api/v1/test-sessions",
+            "teacher",
+            sessionRequest,
+            idempotencyKey: idempotencyKey);
+        Assert.Equal(HttpStatusCode.Created, createdSessionResponse.StatusCode);
+        var session = await ReadJsonAsync(createdSessionResponse);
+        var sessionId = RequiredString(session, "id");
+        Assert.Equal("open", RequiredString(session, "state"));
+        Assert.Equal("expedite", RequiredString(session, "priority"));
+        Assert.Equal("漢字確認テスト", RequiredString(session, "title"));
+        Assert.Equal("標準", RequiredString(session, "course"));
+        Assert.Equal("manual", RequiredString(session, "creationSource"));
+
+        // Simulate a committed endpoint response whose middleware replay row
+        // was lost: the session row's actor/key fence returns the same resource.
+        var replayResponse = await application.SendAsync(
+            HttpMethod.Post,
+            "/api/v1/test-sessions",
+            "teacher",
+            sessionRequest,
+            idempotencyKey: idempotencyKey);
+        Assert.Equal(HttpStatusCode.Created, replayResponse.StatusCode);
+        Assert.Equal(
+            sessionId,
+            RequiredString(await ReadJsonAsync(replayResponse), "id"));
+
+        var reusedKey = await application.SendAsync(
+            HttpMethod.Post,
+            "/api/v1/test-sessions",
+            "teacher",
+            new
+            {
+                templateVersionId = versionId,
+                testDate = "2026-08-13",
+                openImmediately = true,
+            },
+            idempotencyKey: idempotencyKey);
+        Assert.Equal(HttpStatusCode.Conflict, reusedKey.StatusCode);
+        Assert.Equal(
+            "IDEMPOTENCY_KEY_REUSED",
+            RequiredString(await ReadJsonAsync(reusedKey), "code"));
+        await application.WithDatabaseAsync(async db =>
+        {
+            Assert.Equal(2, await db.TestSessions.CountAsync());
+            Assert.Equal(
+                1,
+                await db.TestSessions.CountAsync(
+                    item => item.CreationSource == "template_publish"));
+            Assert.Equal(
+                idempotencyKey,
+                (await db.TestSessions.SingleAsync(item => item.Id == sessionId))
+                .RequestIdempotencyKey);
         });
     }
 
@@ -892,6 +1998,258 @@ public sealed class TemplateWorkflowTests
                     item.SafeMetadataJson ?? string.Empty,
                     StringComparison.Ordinal));
         });
+    }
+
+    [Fact]
+    public async Task ExplicitNonKanjiExceptionRoundTripsThroughQuestionUpdates()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+
+        var createdResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            ExactQuestionRequest("次の語を漢字で書きなさい。", 1_000));
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = await ReadJsonAsync(createdResponse);
+        var questionId = RequiredString(created, "id");
+        var createdException = Assert.Single(
+            created.GetProperty("acceptedAnswers").EnumerateArray(),
+            answer => RequiredString(answer, "variantType") == "explicitException");
+        Assert.Equal("かんじ", RequiredString(createdException, "text"));
+
+        var updatedResponse = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/{questionId}",
+            "teacher",
+            ExactQuestionRequest("更新した問題文", 1_000),
+            RequiredEtag(createdResponse));
+        Assert.Equal(HttpStatusCode.OK, updatedResponse.StatusCode);
+        var updated = await ReadJsonAsync(updatedResponse);
+        var updatedException = Assert.Single(
+            updated.GetProperty("acceptedAnswers").EnumerateArray(),
+            answer => RequiredString(answer, "variantType") == "explicitException");
+        Assert.Equal("かんじ", RequiredString(updatedException, "text"));
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var stored = await db.AcceptedAnswers
+                .AsNoTracking()
+                .SingleAsync(answer =>
+                    answer.QuestionId == questionId
+                    && answer.VariantType == "phonetic_exception");
+            Assert.Equal("かんじ", stored.AnswerText);
+        });
+    }
+
+    [Theory]
+    [InlineData("profileHash", "generation.profile_invalid", false)]
+    [InlineData("promptRoute", "generation.prompt_route_invalid", false)]
+    [InlineData("grade", "generation.grade_required", false)]
+    [InlineData("title", "generation.final_name_required", false)]
+    [InlineData("range", "generation.source_range_invalid", false)]
+    [InlineData("draftHash", "generation.extraction_draft_hash_invalid", false)]
+    [InlineData("derivedObject", "generation.derived_object_unavailable", false)]
+    [InlineData("blockingWarning", "generation.blocking_warning", false)]
+    [InlineData("stepSuffix", "generation.step_suffix_invalid", true)]
+    public async Task GeneratedPublicationBlocksTamperedProfileAndProvenance(
+        string tamper,
+        string expectedIssueCode,
+        bool step)
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var seeded = await SeedGeneratedPublicationVersionAsync(
+            application,
+            step ? TestType.Step : TestType.Hop);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var version = await db.TemplateVersions
+                .Include(item => item.TestTemplate)
+                .SingleAsync(item => item.Id == seeded.VersionId);
+            var unit = await db.TemplateGenerationUnits
+                .SingleAsync(item => item.Id == seeded.UnitId);
+            switch (tamper)
+            {
+                case "profileHash":
+                    version.GenerationProfileHash = new string('f', 64);
+                    break;
+                case "promptRoute":
+                    version.PromptSystem = TemplatePromptSystem.ClassPlacement;
+                    break;
+                case "grade":
+                    version.ResolvedGrade = GradeLevel.Unknown;
+                    break;
+                case "title":
+                    version.TestTemplate.Title = " ";
+                    break;
+                case "range":
+                    unit.FirstPage = 2;
+                    unit.LastPage = 2;
+                    break;
+                case "draftHash":
+                    unit.ExtractionDraftHash = new string('e', 64);
+                    break;
+                case "derivedObject":
+                    var fileObject = await db.FileObjects.SingleAsync(
+                        item => item.Id == seeded.FileObjectId);
+                    fileObject.State = "missing";
+                    break;
+                case "blockingWarning":
+                    unit.WarningsJson = JsonSerializer.Serialize(
+                        new[]
+                        {
+                            new GenerationWarning(
+                                "GRADE_REQUIRED",
+                                GenerationWarningSeverity.Blocking,
+                                "学年を確認してください。"),
+                        },
+                        WebJsonOptions);
+                    break;
+                case "stepSuffix":
+                    version.TestTemplate.Title += "-1";
+                    unit.FinalTemplateName = version.TestTemplate.Title;
+                    break;
+                default:
+                    throw new InvalidOperationException(tamper);
+            }
+
+            await db.SaveChangesAsync();
+        });
+
+        var validationResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:validate",
+            "teacher",
+            new { });
+        Assert.Equal(HttpStatusCode.OK, validationResponse.StatusCode);
+        var validation = await ReadJsonAsync(validationResponse);
+        Assert.False(validation.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.GetProperty("issues").EnumerateArray(),
+            item => RequiredString(item, "code") == expectedIssueCode);
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/{seeded.VersionId}",
+            "teacher");
+        var publishResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:publish",
+            "teacher",
+            new { },
+            RequiredEtag(current));
+        Assert.Equal(
+            HttpStatusCode.UnprocessableEntity,
+            publishResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task GeneratedUnitPaperCanPublishMixedProvidedAndAiAnswers()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var seeded = await SeedGeneratedPublicationVersionAsync(
+            application,
+            TestType.Hop);
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/{seeded.VersionId}",
+            "teacher");
+        var verifiedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}/questions:verifyProposals",
+            "teacher",
+            new { selectionMode = "all" },
+            RequiredEtag(current),
+            UlidId.New());
+        Assert.Equal(HttpStatusCode.OK, verifiedResponse.StatusCode);
+        var verified = await ReadJsonAsync(verifiedResponse);
+        Assert.Equal(
+            2,
+            verified.GetProperty("verifiedQuestionCount").GetInt32());
+        Assert.Equal(
+            2,
+            verified.GetProperty("verifiedAnswerCount").GetInt32());
+        Assert.Equal(
+            0,
+            verified.GetProperty("skippedQuestionCount").GetInt32());
+        Assert.DoesNotContain(
+            verified.GetProperty("issues").EnumerateArray(),
+            item => RequiredString(item, "code") ==
+                "answer.authoritative_source_required");
+
+        var validatedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:validate",
+            "teacher",
+            new { });
+        var validated = await ReadJsonAsync(validatedResponse);
+        Assert.True(validated.GetProperty("valid").GetBoolean());
+
+        var updated = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/{seeded.VersionId}",
+            "teacher");
+        var publishedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:publish",
+            "teacher",
+            new { },
+            RequiredEtag(updated));
+        Assert.Equal(HttpStatusCode.OK, publishedResponse.StatusCode);
+        var published = await ReadJsonAsync(publishedResponse);
+        Assert.Equal("published", RequiredString(published, "state"));
+    }
+
+    [Fact]
+    public async Task GeneratedUnitPaperStillRequiresPerAnswerSourceProvenance()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var seeded = await SeedGeneratedPublicationVersionAsync(
+            application,
+            TestType.Hop);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var questions = await db.Questions
+                .Include(item => item.AcceptedAnswers)
+                .Where(item => item.TemplateVersionId == seeded.VersionId)
+                .ToListAsync();
+            foreach (var question in questions)
+            {
+                question.TeacherVerified = true;
+                foreach (var answer in question.AcceptedAnswers)
+                {
+                    answer.TeacherVerified = true;
+                }
+            }
+
+            questions
+                .SelectMany(item => item.AcceptedAnswers)
+                .Single(item =>
+                    item.AnswerProvenance == "provided_model_answer")
+                .SourcePageNumber = null;
+            await db.SaveChangesAsync();
+        });
+
+        var validationResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:validate",
+            "teacher",
+            new { });
+        var validation = await ReadJsonAsync(validationResponse);
+        Assert.False(validation.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.GetProperty("issues").EnumerateArray(),
+            item => RequiredString(item, "code") ==
+                "answer.invalid_provided_source");
     }
 
     [Fact]
@@ -1309,6 +2667,313 @@ public sealed class TemplateWorkflowTests
             teacherVerified = false,
         };
 
+    private static async Task<SeededGeneratedPublicationVersion>
+        SeedGeneratedPublicationVersionAsync(
+            TemplateTestApplication application,
+            TestType testType)
+    {
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var now = DateTimeOffset.UtcNow;
+        var batchId = UlidId.New(now.AddTicks(1));
+        var unitId = UlidId.New(now.AddTicks(2));
+        var uploadId = UlidId.New(now.AddTicks(3));
+        var fileObjectId = UlidId.New(now.AddTicks(4));
+        var fileReferenceId = UlidId.New(now.AddTicks(5));
+        var sourceId = UlidId.New(now.AddTicks(6));
+        var firstQuestionId = UlidId.New(now.AddTicks(7));
+        var secondQuestionId = UlidId.New(now.AddTicks(8));
+        var sourceSha = new string('a', 64);
+        var derivedSha = new string('b', 64);
+        var sourcePageCount = testType == TestType.Step ? 6 : 1;
+        var expectedUnitCount = testType == TestType.Step ? 3 : 1;
+        var lastPage = testType == TestType.Step ? 2 : 1;
+        var suffix = testType == TestType.Step ? "-1" : null;
+        var finalName = TemplateNamePolicy.CreateKnownTestName(
+            testType,
+            "国語",
+            GradeLevel.Grade4,
+            unitSequence: 1,
+            stepSetIndex: testType == TestType.Step ? 1 : null,
+            stepVariationIndex: testType == TestType.Step ? 1 : null);
+        var profile = new TemplateGenerationProfile(
+            TemplateGenerationProfile.CurrentProfileVersion,
+            testType,
+            "国語",
+            AnswerStyle: null,
+            TemplatePromptSystem.Standard,
+            sourcePageCount,
+            UnitSequence: 1,
+            FirstPage: 1,
+            LastPage: lastPage,
+            StepSetIndex: testType == TestType.Step ? 1 : null,
+            StepVariationIndex: testType == TestType.Step ? 1 : null,
+            DeterministicSuffix: suffix,
+            TemplateGenerationProfile.CurrentSplitPolicyVersion,
+            TemplateGenerationProfile.CurrentNamingPolicyVersion,
+            "template-extract-v2.0.0",
+            "template_extract_v5");
+        var profileJson = JsonSerializer.Serialize(profile, WebJsonOptions);
+        const string draftJson = "{\"schemaVersion\":\"template_extract_v5\"}";
+        var draftHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(draftJson)))
+            .ToLowerInvariant();
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var version = await db.TemplateVersions
+                .Include(item => item.TestTemplate)
+                .SingleAsync(item => item.Id == versionId);
+            db.StaffUsers.Add(new StaffUserEntity
+            {
+                Id = TestAuthenticationHandler.StaffId,
+                Username = "generated.teacher",
+                UsernameNormalized = "generated.teacher",
+                DisplayName = "生成確認担当",
+                PasswordHash = "argon2id:test",
+                PasswordAlgorithm = "argon2id",
+                PasswordAlgorithmVersion = 1,
+                Status = "active",
+                CredentialChangedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            version.TestTemplate.Title = finalName;
+            version.TargetTotalPointsMilli = 2_000;
+            version.AiGenerationProvenanceId = UlidId.New(now.AddTicks(9));
+            version.TestType = testType;
+            version.PromptSystem = TemplatePromptSystem.Standard;
+            version.OriginatingBatchId = batchId;
+            version.OriginatingUnitId = unitId;
+            version.GenerationProfileVersion = profile.ProfileVersion;
+            version.GenerationProfileJson = profileJson;
+            version.GenerationProfileHash = profile.ComputeHash();
+            version.StepSetIndex = testType == TestType.Step ? 1 : null;
+            version.StepVariationIndex = testType == TestType.Step ? 1 : null;
+            version.PrintedTestName = "漢字確認テスト";
+            version.ResolvedGrade = GradeLevel.Grade4;
+            version.ExpectedSubmissionPageCount = lastPage;
+
+            db.UploadSessions.Add(new UploadSessionEntity
+            {
+                Id = uploadId,
+                CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                Purpose = "template_source",
+                DestinationType = "template_source",
+                OriginalFileName = "HOP国語_小学4年.pdf",
+                DeclaredMimeType = "application/pdf",
+                ExpectedBytes = 1_000,
+                CurrentBytes = 1_000,
+                FinalSha256 = sourceSha,
+                IncomingRelativePath = $"test/{uploadId}",
+                State = "completed",
+                ExpiresAt = now.AddHours(1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.TemplateGenerationBatches.Add(new TemplateGenerationBatchEntity
+            {
+                Id = batchId,
+                Status = TemplateGenerationBatchStatus.Completed,
+                TestType = testType,
+                Subject = "国語",
+                PromptSystem = TemplatePromptSystem.Standard,
+                SourceId = uploadId,
+                SourcePageCount = sourcePageCount,
+                ExpectedUnitCount = expectedUnitCount,
+                CompletedUnitCount = expectedUnitCount,
+                FailedUnitCount = 0,
+                PlanHash = new string('c', 64),
+                CreatedByUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now,
+                UpdatedAt = now,
+                CompletedAt = now,
+            });
+            db.TemplateGenerationUnits.Add(new TemplateGenerationUnitEntity
+            {
+                Id = unitId,
+                BatchId = batchId,
+                Sequence = 1,
+                Status = TemplateGenerationUnitStatus.Confirmed,
+                TestType = testType,
+                FirstPage = 1,
+                LastPage = lastPage,
+                StepSetIndex = testType == TestType.Step ? 1 : null,
+                StepVariationIndex = testType == TestType.Step ? 1 : null,
+                DeterministicSuffix = suffix,
+                PromptSystem = TemplatePromptSystem.Standard,
+                GenerationProfileJson = profileJson,
+                GenerationProfileHash = profile.ComputeHash(),
+                AppliedRotationsJson = "[]",
+                DerivedSourceObjectKey = $"template/derived/{derivedSha}.pdf",
+                DerivedSourceSha256 = derivedSha,
+                ExtractionDraftJson = draftJson,
+                ExtractionDraftHash = draftHash,
+                PrintedTestName = "漢字確認テスト",
+                UserConfirmedBaseName = null,
+                FinalTemplateName = finalName,
+                FilenameGrade = GradeLevel.Grade4,
+                PaperGrade = GradeLevel.Grade4,
+                ResolvedGrade = GradeLevel.Grade4,
+                GradeEvidence = GradeEvidence.FileNameAndPaper,
+                GradeConfirmedByUser = true,
+                WarningsJson = "[]",
+                CreatedTemplateId = templateId,
+                CreatedTemplateVersionId = versionId,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.FileObjects.Add(new FileObjectEntity
+            {
+                Id = fileObjectId,
+                Sha256 = derivedSha,
+                Bytes = 500,
+                VerifiedMime = "application/pdf",
+                Extension = "pdf",
+                RelativeObjectPath = $"template/derived/{derivedSha}.pdf",
+                StorageClass = ContentStorageClass.TemplateDerived.ToString(),
+                RetentionClass = "template_source",
+                State = "available",
+                CreatedAt = now,
+                VerifiedAt = now,
+                ReferenceCountCache = 1,
+            });
+            db.FileReferences.Add(new FileReferenceEntity
+            {
+                Id = fileReferenceId,
+                FileObjectId = fileObjectId,
+                OwnerType = "template_generation_unit",
+                OwnerId = unitId,
+                Purpose = "derived_source",
+                RetentionAnchorAt = now,
+                CreatedAt = now,
+            });
+            db.TemplateGenerationDerivedSources.Add(
+                new TemplateGenerationDerivedSourceEntity
+                {
+                    Id = UlidId.New(now.AddTicks(10)),
+                    UnitId = unitId,
+                    ParentSourceId = uploadId,
+                    ParentFirstPage = 1,
+                    ParentLastPage = lastPage,
+                    OriginalContentSha256 = sourceSha,
+                    DerivationType = "pageRange",
+                    AppliedRotationsJson = "[]",
+                    DerivationPolicyVersion =
+                        PdfPageRangeDerivationPolicy.CurrentVersion,
+                    DerivedContentSha256 = derivedSha,
+                    FileReferenceId = fileReferenceId,
+                    CreatedAt = now,
+                });
+            db.TemplateSources.Add(new TemplateSourceEntity
+            {
+                Id = sourceId,
+                TemplateVersionId = versionId,
+                UploadSessionId = uploadId,
+                FileReferenceId = fileReferenceId,
+                SourceRole = "contains_model_answers",
+                DisplayName = $"{finalName}.pdf",
+                Ordinal = 0,
+                UploadedByStaffUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now,
+            });
+            db.Questions.AddRange(
+                CreateGeneratedQuestion(
+                    firstQuestionId,
+                    versionId,
+                    orderIndex: 0,
+                    "問1",
+                    "光を漢字で書きなさい。",
+                    "模範解答の転記候補です。原資料との照合が必要です。",
+                    now),
+                CreateGeneratedQuestion(
+                    secondQuestionId,
+                    versionId,
+                    orderIndex: 1,
+                    "問2",
+                    "東南アジア諸国連合の略称を書きなさい。",
+                    "正答はAIによる提案です。先生が根拠資料と照合してください。",
+                    now));
+            db.AcceptedAnswers.AddRange(
+                CreateGeneratedAnswer(
+                    UlidId.New(now.AddTicks(11)),
+                    firstQuestionId,
+                    "光",
+                    "provided_model_answer",
+                    fileReferenceId,
+                    now),
+                CreateGeneratedAnswer(
+                    UlidId.New(now.AddTicks(12)),
+                    secondQuestionId,
+                    "ASEAN",
+                    "ai_proposed",
+                    sourceFileReferenceId: null,
+                    now));
+            await db.SaveChangesAsync();
+        });
+
+        return new SeededGeneratedPublicationVersion(
+            templateId,
+            versionId,
+            unitId,
+            fileObjectId);
+    }
+
+    private static QuestionEntity CreateGeneratedQuestion(
+        string id,
+        string versionId,
+        int orderIndex,
+        string displayLabel,
+        string questionText,
+        string teacherNote,
+        DateTimeOffset now) =>
+        new()
+        {
+            Id = id,
+            TemplateVersionId = versionId,
+            LogicalQuestionId = UlidId.New(now.AddTicks(20 + orderIndex)),
+            OrderIndex = orderIndex,
+            DisplayLabel = displayLabel,
+            QuestionText = questionText,
+            QuestionType = "exact_short_text",
+            GradingMode = "transcribe_then_rules",
+            MaxPointsMilli = 1_000,
+            PointIncrementMilli = 1_000,
+            AllowNonKanji = false,
+            TeacherNote = teacherNote
+                + "\n[AI確認] [question.filled_answer_removal_unconfirmed] "
+                + "記入済み内容を除外できたか確認してください。",
+            RequiresReviewAlways = false,
+            AiConfidenceBasisPoints = 9_800,
+            TeacherVerified = false,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+    private static AcceptedAnswerEntity CreateGeneratedAnswer(
+        string id,
+        string questionId,
+        string text,
+        string provenance,
+        string? sourceFileReferenceId,
+        DateTimeOffset now) =>
+        new()
+        {
+            Id = id,
+            QuestionId = questionId,
+            AnswerText = text,
+            NormalizedText = JapaneseTextNormalizer.NormalizeForComparison(text),
+            VariantType = "canonical",
+            TeacherVerified = false,
+            AnswerProvenance = provenance,
+            SourceFileReferenceId = sourceFileReferenceId,
+            SourcePageNumber = sourceFileReferenceId is null ? null : 1,
+            Locale = "ja-JP",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
     private static async Task<(
         string UploadId,
         string FileReferenceId,
@@ -1400,6 +3065,16 @@ public sealed class TemplateWorkflowTests
         Assert.Equal(HttpStatusCode.Created, versionResponse.StatusCode);
         var version = await ReadJsonAsync(versionResponse);
         var versionId = RequiredString(version, "id");
+        await application.WithDatabaseAsync(async db =>
+        {
+            var persistedVersion = await db.TemplateVersions
+                .SingleAsync(item => item.Id == versionId);
+            // The fixture's synthetic source has no readable PDF payload. Keep
+            // the canonical page-count metadata that a real upload/publish flow
+            // derives from its verified source.
+            persistedVersion.ExpectedSubmissionPageCount = 1;
+            await db.SaveChangesAsync();
+        });
         if (addBlankSource)
         {
             await application.WithDatabaseAsync(async db =>
@@ -1462,6 +3137,12 @@ public sealed class TemplateWorkflowTests
         return value!;
     }
 
+    private sealed record SeededGeneratedPublicationVersion(
+        string TemplateId,
+        string VersionId,
+        string UnitId,
+        string FileObjectId);
+
     private sealed class TemplateTestApplication : IAsyncDisposable
     {
         private readonly IHost _host;
@@ -1498,11 +3179,15 @@ public sealed class TemplateWorkflowTests
                         services.AddSingleton<ProtectedCursorCodec>();
                         services.AddSingleton(TimeProvider.System);
                         services.AddSingleton<TestContentStore>();
+                        services.AddSingleton<ContentObjectLockProvider>();
                         services.AddSingleton<IContentStore>(provider =>
                             provider.GetRequiredService<TestContentStore>());
+                        services.AddSingleton<IPdfPageCountReader,
+                            LocalPdfPageCountReader>();
                         services.AddSingleton(connection);
                         services.AddDbContext<OokiGraderDbContext>(
                             options => options.UseSqlite(connection));
+                        services.AddScoped<OrderedScanBatchService>();
                         services
                             .AddAuthentication(TestAuthenticationHandler.SchemeName)
                             .AddScheme<
@@ -1521,7 +3206,25 @@ public sealed class TemplateWorkflowTests
                                 policy => policy
                                     .AddAuthenticationSchemes(
                                         TestAuthenticationHandler.SchemeName)
-                                    .RequireRole("administrator", "teacher"));
+                                    .RequireRole("administrator", "teacher"))
+                            .AddPolicy(
+                                "upload",
+                                policy => policy
+                                    .AddAuthenticationSchemes(
+                                        TestAuthenticationHandler.SchemeName)
+                                    .RequireRole(
+                                        "administrator",
+                                        "teacher",
+                                        "scanOperator"))
+                            .AddPolicy(
+                                "review",
+                                policy => policy
+                                    .AddAuthenticationSchemes(
+                                        TestAuthenticationHandler.SchemeName)
+                                    .RequireRole(
+                                        "administrator",
+                                        "teacher",
+                                        "readOnlyReviewer"));
                     });
                     webBuilder.Configure(application =>
                     {
@@ -1533,6 +3236,7 @@ public sealed class TemplateWorkflowTests
                             {
                                 endpoints.MapTemplatesEndpoints();
                                 endpoints.MapTemplateAutomationEndpoints();
+                                endpoints.MapTestSessionsEndpoints();
                             });
                     });
                 });

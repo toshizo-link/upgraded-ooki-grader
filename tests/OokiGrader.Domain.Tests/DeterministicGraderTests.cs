@@ -134,6 +134,56 @@ public sealed class DeterministicGraderTests
         Assert.Equal(GradingStage.ExplicitVariant, result.Stage);
     }
 
+    [Theory]
+    [InlineData("大阪;東京;大阪")]
+    [InlineData("大阪／東京／大阪")]
+    [InlineData("大阪\n東京\n大阪")]
+    public void OrderInsensitiveAnswerMatchesACompleteComponentMultiset(
+        string transcription)
+    {
+        var result = DeterministicGrader.Grade(
+            TestQuestionFactory.ExactText(
+                canonicalText: "東京、大阪、大阪",
+                allowNonKanji: true,
+                answerOrderInsensitive: true),
+            new AnswerObservation(transcription));
+
+        Assert.Equal(GradeDisposition.Correct, result.Disposition);
+        Assert.Equal(GradeReason.OrderInsensitiveMatch, result.Reason);
+    }
+
+    [Theory]
+    [InlineData("大阪、東京")]
+    [InlineData("大阪、東京、京都")]
+    [InlineData("大阪、大阪、東京、東京")]
+    public void OrderInsensitiveAnswerRejectsMissingExtraOrWrongDuplicateComponents(
+        string transcription)
+    {
+        var result = DeterministicGrader.Grade(
+            TestQuestionFactory.ExactText(
+                canonicalText: "東京、大阪、大阪",
+                allowNonKanji: true,
+                answerOrderInsensitive: true),
+            new AnswerObservation(transcription));
+
+        Assert.Equal(GradeDisposition.Incorrect, result.Disposition);
+        Assert.Equal(MilliPoints.Zero, result.AwardedPoints);
+    }
+
+    [Fact]
+    public void OrderStillMattersWhenOnlyCompleteAnswerIsEnabled()
+    {
+        var result = DeterministicGrader.Grade(
+            TestQuestionFactory.ExactText(
+                canonicalText: "東京、大阪",
+                allowNonKanji: true,
+                requiresCompleteAnswer: true,
+                answerOrderInsensitive: false),
+            new AnswerObservation("大阪、東京"));
+
+        Assert.Equal(GradeDisposition.Incorrect, result.Disposition);
+    }
+
     [Fact]
     public void FullWidthNumericAnswerIsParsedLocally()
     {
@@ -335,6 +385,26 @@ public sealed class DeterministicGraderTests
     }
 
     [Fact]
+    public void CompleteAnswerQuestionCoercesPartialRubricAwardToZero()
+    {
+        var question = RubricQuestion(requiresCompleteAnswer: true);
+        var result = DeterministicGrader.Grade(
+            question,
+            new AnswerObservation(
+                "説明",
+                rubricAssessments:
+                [
+                    new RubricRuleAssessment("r1", true),
+                    new RubricRuleAssessment("r2", false),
+                ]));
+
+        Assert.Equal(GradeDisposition.Incorrect, result.Disposition);
+        Assert.Equal(MilliPoints.Zero, result.AwardedPoints);
+        Assert.Equal(GradeReason.CompleteAnswerRequired, result.Reason);
+        Assert.True(result.RequiresReview);
+    }
+
+    [Fact]
     public void MissingRubricAssessmentRequiresReviewWithoutGuessing()
     {
         var result = DeterministicGrader.Grade(
@@ -348,7 +418,8 @@ public sealed class DeterministicGraderTests
         Assert.Equal(MilliPoints.Zero, result.AwardedPoints);
     }
 
-    private static QuestionDefinition RubricQuestion() =>
+    private static QuestionDefinition RubricQuestion(
+        bool requiresCompleteAnswer = false) =>
         new(
             "q-rubric",
             "logical-q-rubric",
@@ -378,5 +449,6 @@ public sealed class DeterministicGraderTests
                     "要素2",
                     new MilliPoints(1000),
                     teacherVerified: true),
-            ]);
+            ],
+            requiresCompleteAnswer: requiresCompleteAnswer);
 }

@@ -151,7 +151,7 @@ internal static class AiSecretStoreValidation
 
     private static void ValidateScheme(string scheme)
     {
-        if (scheme is not ("dpapi-v1" or "memory-v1"))
+        if (scheme is not ("devfile-v1" or "dpapi-v1" or "memory-v1"))
         {
             throw new ArgumentException(
                 "The AI secret reference scheme is unsupported.",

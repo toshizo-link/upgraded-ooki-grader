@@ -1,7 +1,16 @@
-import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "../router";
+import { useRef, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "../router";
 import { useSession } from "../auth/SessionContext";
 import { Icon } from "../components/Icon";
+import { TemplateSessionMetadata } from "../components/TemplateSessionMetadata";
+import {
+  ActiveFilterSummary,
+  facetOptions,
+  facetSuggestions,
+  FilterTextInput,
+  ListPagination,
+  ListSortControls,
+} from "../components/ListControls";
 import {
   Button,
   Card,
@@ -11,12 +20,12 @@ import {
   InlineAlert,
   Modal,
   PageHeader,
-  Score,
   SearchInput,
   SkeletonRows,
   StatusBadge,
 } from "../components/ui";
 import { useApiQuery } from "../hooks/useApiQuery";
+import { useListQueryState } from "../hooks/useListQueryState";
 import { ApiError, api, asPaged, newIdempotencyKey } from "../lib/api";
 import { formatDate, toDateInput } from "../lib/format";
 import type {
@@ -25,14 +34,80 @@ import type {
   TestSessionSummary,
 } from "../types";
 
+const SESSION_SORTS = [
+  { value: "testDate", label: "実施日", defaultDirection: "desc" },
+  { value: "updatedAt", label: "更新日時", defaultDirection: "desc" },
+  { value: "name", label: "試験名", defaultDirection: "asc" },
+] as const;
+
+export async function loadActiveTemplates(signal: AbortSignal) {
+  const items: TemplateSummary[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  do {
+    const page = asPaged(
+      await api.get<PagedResponse<TemplateSummary> | TemplateSummary[]>(
+        "/templates",
+        {
+          state: "active",
+          cursor,
+          pageSize: 200,
+        },
+        signal,
+      ),
+    );
+    items.push(...page.items);
+    const nextCursor = page.nextCursor || undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+  return {
+    items,
+    nextCursor: null,
+    totalApproximate: items.length,
+  } satisfies PagedResponse<TemplateSummary>;
+}
+
+const SESSION_QUERY_OPTIONS = {
+  allowedSorts: [
+    "-testDate",
+    "testDate",
+    "-updatedAt",
+    "updatedAt",
+    "name",
+    "-name",
+  ],
+  defaultSort: "-testDate",
+  enumParams: { state: ["draft", "open", "closed", "archived", "all"] },
+  dateParams: ["from", "to"],
+  textParams: ["templateId", "class", "course"],
+  defaultPageSize: 50,
+} as const;
+
+const SESSION_FILTER_KEYS = [
+  "q",
+  "state",
+  "from",
+  "to",
+  "templateId",
+  "class",
+  "course",
+] as const;
+
 export function SessionsPage() {
   const navigate = useNavigate();
   const { hasAnyRole } = useSession();
   const canManageSessions = hasAnyRole("administrator", "teacher");
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get("q") || "");
+  const list = useListQueryState(SESSION_QUERY_OPTIONS);
+  const { searchParams } = list;
   const [createOpen, setCreateOpen] = useState(false);
   const state = searchParams.get("state") || "open";
+  const from = searchParams.get("from") || "";
+  const to = searchParams.get("to") || "";
+  const templateId = searchParams.get("templateId") || "";
+  const classFilter = searchParams.get("class") || "";
+  const courseFilter = searchParams.get("course") || "";
   const sessions = useApiQuery<PagedResponse<TestSessionSummary>>(
     `sessions:${searchParams.toString()}`,
     async (signal) =>
@@ -42,19 +117,64 @@ export function SessionsPage() {
           {
             search: searchParams.get("q"),
             state: state === "all" ? undefined : state,
-            pageSize: 100,
+            from: from || undefined,
+            to: to || undefined,
+            templateId: templateId || undefined,
+            class: classFilter || undefined,
+            course: courseFilter || undefined,
+            sort: list.sort,
+            cursor: list.cursor,
+            pageSize: list.pageSize,
+            includeFacets: true,
           },
           signal,
         ),
       ),
   );
-
-  function updateParam(key: string, value: string) {
-    const next = new URLSearchParams(searchParams);
-    if (value && value !== "all") next.set(key, value);
-    else next.delete(key);
-    setSearchParams(next, { replace: true });
-  }
+  const templates = facetOptions(
+    sessions.data?.facets,
+    "templates",
+    (sessions.data?.items || []).map((session) => ({
+      value: session.templateId,
+      label: session.templateTitle || session.templateId,
+    })),
+  );
+  const classes = facetSuggestions(
+    sessions.data?.facets,
+    "classes",
+    (sessions.data?.items || []).map((session) => session.classLabel),
+  );
+  const courses = facetSuggestions(
+    sessions.data?.facets,
+    "courses",
+    (sessions.data?.items || []).map((session) => session.course),
+  );
+  const activeFilters = [
+    searchParams.get("q")
+      ? { key: "q", label: "検索", value: `「${searchParams.get("q")}」` }
+      : undefined,
+    state !== "all"
+      ? {
+          key: "state",
+          label: "状態",
+          value:
+            { draft: "準備中", open: "受付中", closed: "終了", archived: "アーカイブ" }[
+              state
+            ] || state,
+        }
+      : undefined,
+    from ? { key: "from", label: "開始日", value: from } : undefined,
+    to ? { key: "to", label: "終了日", value: to } : undefined,
+    templateId
+      ? {
+          key: "templateId",
+          label: "ひな形",
+          value: templates.find((item) => item.value === templateId)?.label || templateId,
+        }
+      : undefined,
+    classFilter ? { key: "class", label: "クラス", value: classFilter } : undefined,
+    courseFilter ? { key: "course", label: "コース", value: courseFilter } : undefined,
+  ].filter((value): value is { key: string; label: string; value: string } => Boolean(value));
 
   return (
     <div className="page">
@@ -73,32 +193,89 @@ export function SessionsPage() {
       <Card>
         <div className="list-toolbar">
           <SearchInput
-            value={search}
-            onChange={(value) => {
-              setSearch(value);
-              updateParam("q", value);
-            }}
+            value={list.search}
+            onChange={list.setSearch}
             placeholder="テスト名・クラスで検索"
             label="テスト実施を検索"
           />
-          <div className="list-toolbar__filters">
-            <select
-              aria-label="実施状態"
-              value={state}
-              onChange={(event) => updateParam("state", event.target.value)}
-            >
-              <option value="open">受付中</option>
-              <option value="draft">準備中</option>
-              <option value="closed">終了</option>
-              <option value="all">すべて</option>
-            </select>
-          </div>
+          <ListSortControls
+            value={list.sort}
+            options={SESSION_SORTS}
+            defaultValue="-testDate"
+            onChange={(value) => list.updateParam("sort", value)}
+          />
           {sessions.data ? (
             <span className="result-count">
               {sessions.data.totalApproximate ?? sessions.data.items.length}件
             </span>
           ) : null}
         </div>
+        <div className="list-filter-panel" aria-label="テスト実施の絞り込み">
+          <label className="filter-field">
+            <span>実施状態</span>
+            <select
+              value={state}
+              onChange={(event) => list.updateParam("state", event.target.value)}
+            >
+              <option value="open">受付中</option>
+              <option value="draft">準備中</option>
+              <option value="closed">終了</option>
+              <option value="archived">アーカイブ</option>
+              <option value="all">すべて</option>
+            </select>
+          </label>
+          <label className="filter-field">
+            <span>ひな形</span>
+            <select
+              value={templateId}
+              onChange={(event) => list.updateParam("templateId", event.target.value)}
+            >
+              <option value="">すべてのひな形</option>
+              {templateId && !templates.some((item) => item.value === templateId) ? (
+                <option value={templateId}>{templateId}</option>
+              ) : null}
+              {templates.map((item) => (
+                <option value={item.value} key={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <FilterTextInput
+            label="クラス"
+            value={classFilter}
+            suggestions={classes}
+            onCommit={(value) => list.updateParam("class", value)}
+          />
+          <FilterTextInput
+            label="コース"
+            value={courseFilter}
+            suggestions={courses}
+            onCommit={(value) => list.updateParam("course", value)}
+          />
+          <label className="filter-field">
+            <span>開始日</span>
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(event) => list.updateParam("from", event.target.value)}
+            />
+          </label>
+          <label className="filter-field">
+            <span>終了日</span>
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(event) => list.updateParam("to", event.target.value)}
+            />
+          </label>
+        </div>
+        <ActiveFilterSummary
+          filters={activeFilters}
+          onClear={() => list.clearFilters(SESSION_FILTER_KEYS, { state: "all" })}
+        />
         {sessions.status === "loading" ? (
           <SkeletonRows rows={6} />
         ) : sessions.status === "error" ? (
@@ -117,17 +294,33 @@ export function SessionsPage() {
           <EmptyState
             icon="sessions"
             title={
-              searchParams.toString()
+              activeFilters.length
                 ? "条件に一致するテスト実施はありません"
                 : "受付中のテストはありません"
             }
             description={
-              searchParams.toString()
+              activeFilters.length
                 ? "状態や検索条件を変更してください。"
-                : "公開済みのひな形を選んで、答案受付を開始します。"
+                : "受付に使えるひな形を選んで、答案受付を開始します。"
             }
           />
         )}
+        <ListPagination
+          page={list.page}
+          pageSize={list.pageSize}
+          itemCount={sessions.data?.items.length || 0}
+          totalApproximate={sessions.data?.totalApproximate}
+          hasNext={list.canNavigateNext(sessions.data?.nextCursor)}
+          nextBlockedReason={
+            sessions.data?.nextCursor && !list.canNavigateNext(sessions.data.nextCursor)
+              ? "これ以上は絞り込みを追加するか、1ページの件数を増やしてください。"
+              : undefined
+          }
+          canGoPrevious={list.canGoPrevious}
+          onNext={() => list.nextPage(sessions.data?.nextCursor)}
+          onPrevious={list.previousPage}
+          onPageSizeChange={list.setPageSize}
+        />
       </Card>
       <CreateSessionDialog
         open={canManageSessions && createOpen}
@@ -176,9 +369,10 @@ function SessionCard({
           <StatusBadge status={session.state} />
         </div>
         <h2>
-          {session.sessionName ||
+          {session.templateTitle ||
+            session.title ||
             session.name ||
-            session.templateTitle ||
+            session.sessionName ||
             "名称未設定"}
         </h2>
         <p>
@@ -228,35 +422,32 @@ function CreateSessionDialog({
 }) {
   const templates = useApiQuery<PagedResponse<TemplateSummary>>(
     "published-templates-for-session",
-    async (signal) =>
-      asPaged(
-        await api.get(
-          "/templates",
-          { state: "active", pageSize: 200 },
-          signal,
-        ),
-      ),
+    loadActiveTemplates,
     open,
   );
   const [values, setValues] = useState({
     templateId: "",
     templateVersionId: "",
-    sessionName: "",
     testDate: toDateInput(),
     classLabel: "",
-    course: "",
   });
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>();
+  const idempotencyKeyRef = useRef("");
+
+  function closeDialog() {
+    idempotencyKeyRef.current = "";
+    onClose();
+  }
 
   function selectTemplate(id: string) {
     const template = templates.data?.items.find((item) => item.id === id);
-    setValues({
-      ...values,
+    idempotencyKeyRef.current = "";
+    setValues((current) => ({
+      ...current,
       templateId: id,
       templateVersionId: template?.activeVersionId || "",
-      sessionName: values.sessionName || template?.title || "",
-    });
+    }));
   }
 
   async function submit(event: FormEvent) {
@@ -264,25 +455,25 @@ function CreateSessionDialog({
     setWorking(true);
     setError(undefined);
     try {
+      const idempotencyKey =
+        idempotencyKeyRef.current || newIdempotencyKey();
+      idempotencyKeyRef.current = idempotencyKey;
       const created = await api.post<TestSessionSummary>(
         "/test-sessions",
         {
           templateVersionId: values.templateVersionId,
           testDate: values.testDate,
           classLabel: values.classLabel || undefined,
-          course: values.course || undefined,
-          priority: "expedite",
-          sessionName: values.sessionName,
+          openImmediately: true,
         },
-        { idempotencyKey: newIdempotencyKey() },
+        { idempotencyKey },
       );
-      await api.post(
-        `/test-sessions/${encodeURIComponent(created.id)}:open`,
-        {},
-        { idempotencyKey: newIdempotencyKey() },
-      );
+      idempotencyKeyRef.current = "";
       onCreated(created.id);
     } catch (reason) {
+      if (reason instanceof ApiError) {
+        idempotencyKeyRef.current = "";
+      }
       setError(
         reason instanceof ApiError
           ? reason.problem.errors?.[0]?.message || reason.message
@@ -293,12 +484,16 @@ function CreateSessionDialog({
     }
   }
 
+  const selectedTemplate = templates.data?.items.find(
+    (item) => item.id === values.templateId,
+  );
+
   return (
     <Modal
       open={open}
-      onClose={() => !working && onClose()}
+      onClose={() => !working && closeDialog()}
       title="答案受付を開始"
-      description="公開済みのひな形と、答案に記載された実施日を選びます。"
+      description="受付に使えるひな形を選び、実施日だけを入力します。必要な場合は対象クラスも指定できます。"
       size="large"
     >
       {templates.status === "loading" ? (
@@ -308,8 +503,8 @@ function CreateSessionDialog({
       ) : !templates.data?.items.length ? (
         <EmptyState
           icon="templates"
-          title="公開済みのひな形がありません"
-          description="先に採点基準を確認し、ひな形を公開してください。"
+          title="受付に使えるひな形がありません"
+          description="ひな形を開き、採点基準を確認して「受付を開始」を押してください。"
           action={
             <Link className="button button--primary button--medium" to="/templates">
               <span>ひな形を開く</span>
@@ -338,20 +533,12 @@ function CreateSessionDialog({
               ))}
             </select>
           </Field>
+          {selectedTemplate ? (
+            <TemplateSessionMetadata template={selectedTemplate} />
+          ) : null}
           <div className="form-grid form-grid--2">
-            <Field label="実施名" htmlFor="session-name" required>
-              <input
-                id="session-name"
-                value={values.sessionName}
-                onChange={(event) =>
-                  setValues({ ...values, sessionName: event.target.value })
-                }
-                placeholder="例：7月27日 漢字確認テスト"
-                required
-              />
-            </Field>
             <Field
-              label="テスト実施日"
+              label="実施日"
               htmlFor="session-date"
               required
               hint="進捗グラフと帳票にはこの日付が使われます。"
@@ -360,9 +547,10 @@ function CreateSessionDialog({
                 id="session-date"
                 type="date"
                 value={values.testDate}
-                onChange={(event) =>
-                  setValues({ ...values, testDate: event.target.value })
-                }
+                onChange={(event) => {
+                  idempotencyKeyRef.current = "";
+                  setValues({ ...values, testDate: event.target.value });
+                }}
                 required
               />
             </Field>
@@ -370,24 +558,26 @@ function CreateSessionDialog({
               <input
                 id="session-class"
                 value={values.classLabel}
-                onChange={(event) =>
-                  setValues({ ...values, classLabel: event.target.value })
-                }
+                onChange={(event) => {
+                  idempotencyKeyRef.current = "";
+                  setValues({ ...values, classLabel: event.target.value });
+                }}
                 placeholder="例：中2-A"
               />
             </Field>
-            <Field label="コース" htmlFor="session-course">
-              <input
-                id="session-course"
-                value={values.course}
-                onChange={(event) =>
-                  setValues({ ...values, course: event.target.value })
-                }
-              />
-            </Field>
           </div>
+          <InlineAlert tone="info">
+            <p>
+              試験名・教科・学年・カテゴリ・コースはひな形から引き継がれます。ここで入力し直す必要はありません。
+            </p>
+          </InlineAlert>
           <div className="form-actions">
-            <Button type="button" variant="secondary" onClick={onClose}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={closeDialog}
+              disabled={working}
+            >
               キャンセル
             </Button>
             <Button
@@ -395,7 +585,7 @@ function CreateSessionDialog({
               disabled={
                 working ||
                 !values.templateVersionId ||
-                !values.sessionName.trim()
+                !values.testDate
               }
             >
               {working ? "開始しています…" : "答案受付を開始"}

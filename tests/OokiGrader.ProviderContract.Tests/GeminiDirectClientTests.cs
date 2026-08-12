@@ -14,8 +14,16 @@ public sealed class GeminiDirectClientTests
         using var catalog = new ApprovedPromptBundleCatalog();
         var bundle = catalog.GetRequired(AiTaskTypes.TemplateExtraction);
 
-        Assert.Equal("template-extract-v1.8.3", bundle.PromptVersion);
-        Assert.Equal("template_extract_v4", bundle.SchemaVersion);
+        Assert.Equal("template-extract-v2.0.0", bundle.PromptVersion);
+        Assert.Equal("template_extract_v5", bundle.SchemaVersion);
+        Assert.Contains(
+            "If any page needs a non-zero\nturn, return action=rotate",
+            bundle.SystemInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Do not return questions, answers, names, grades",
+            bundle.SystemInstruction,
+            StringComparison.Ordinal);
         Assert.Contains(
             "use your own subject-matter knowledge only",
             bundle.SystemInstruction,
@@ -47,8 +55,21 @@ public sealed class GeminiDirectClientTests
         var metadataProperties = bundle.ResponseJsonSchema
             .GetProperty("properties")
             .GetProperty("metadata")
-            .GetProperty("$ref");
-        Assert.Equal("#/$defs/metadata", metadataProperties.GetString());
+            .GetProperty("anyOf");
+        Assert.Contains(metadataProperties.EnumerateArray(), item =>
+            item.TryGetProperty("$ref", out var reference)
+            && reference.GetString() == "#/$defs/metadata");
+        var rootProperties = bundle.ResponseJsonSchema.GetProperty("properties");
+        Assert.True(rootProperties.TryGetProperty("action", out _));
+        Assert.True(rootProperties.TryGetProperty("orientation", out _));
+        var extractedMetadata = bundle.ResponseJsonSchema
+            .GetProperty("$defs")
+            .GetProperty("metadata")
+            .GetProperty("properties");
+        Assert.True(extractedMetadata.TryGetProperty("printed_test_name", out _));
+        Assert.True(extractedMetadata.TryGetProperty("printed_grade_label", out _));
+        Assert.False(extractedMetadata.TryGetProperty("category", out _));
+        Assert.False(extractedMetadata.TryGetProperty("subject", out _));
         var pageProperties = bundle.ResponseJsonSchema
             .GetProperty("properties")
             .GetProperty("pages")
@@ -86,15 +107,15 @@ public sealed class GeminiDirectClientTests
     }
 
     [Fact]
-    public void ApprovedGradingBundlesDefineBlankCoverageAndPointIncrementContract()
+    public void ApprovedGradingBundlesDefineCombinedIdentityAndGradingContract()
     {
         using var catalog = new ApprovedPromptBundleCatalog();
         var initial = catalog.GetRequired(AiTaskTypes.InitialGrading);
         var adjudication = catalog.GetRequired(AiTaskTypes.Adjudication);
 
-        Assert.Equal("answer-transcribe-grade-v1.2.0", initial.PromptVersion);
-        Assert.Equal("answer-recheck-v1.2.0", adjudication.PromptVersion);
-        Assert.Equal("answer_transcribe_grade_v1", initial.SchemaVersion);
+        Assert.Equal("submission-analyze-v2.1.0", initial.PromptVersion);
+        Assert.Equal("answer-recheck-v1.3.0", adjudication.PromptVersion);
+        Assert.Equal("submission_analysis_v2", initial.SchemaVersion);
         Assert.Equal("answer_transcribe_grade_v1", adjudication.SchemaVersion);
 
         foreach (var bundle in new[] { initial, adjudication })
@@ -105,6 +126,14 @@ public sealed class GeminiDirectClientTests
                 StringComparison.Ordinal);
             Assert.Contains(
                 "exact integer\nmultiple of that question's point_increment_milli",
+                bundle.SystemInstruction,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "directly from the original supplied\npage pixels in one integrated inspection",
+                bundle.SystemInstruction,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "must\nnever be the sole input to the grading decision",
                 bundle.SystemInstruction,
                 StringComparison.Ordinal);
 
@@ -129,6 +158,13 @@ public sealed class GeminiDirectClientTests
                     .GetString() ?? string.Empty,
                 StringComparison.Ordinal);
             Assert.Contains(
+                "line boundary preserved as \\n",
+                resultProperties
+                    .GetProperty("transcription")
+                    .GetProperty("description")
+                    .GetString() ?? string.Empty,
+                StringComparison.Ordinal);
+            Assert.Contains(
                 "Do not include located blank, unreadable, cropped, or ambiguous answers",
                 responseProperties
                     .GetProperty("missing_question_ids")
@@ -136,6 +172,36 @@ public sealed class GeminiDirectClientTests
                     .GetString() ?? string.Empty,
                 StringComparison.Ordinal);
         }
+
+        Assert.Contains(
+            "Only when identity_required=true",
+            initial.SystemInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The host matches against its roster locally",
+            initial.SystemInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "evidence_media_index",
+            initial.SystemInstruction,
+            StringComparison.Ordinal);
+        var initialProperties = initial.ResponseJsonSchema
+            .GetProperty("properties");
+        Assert.True(initialProperties.TryGetProperty("identity", out var identity));
+        Assert.Contains(identity.GetProperty("anyOf").EnumerateArray(), item =>
+            item.ValueKind == JsonValueKind.Object
+            && item.TryGetProperty("type", out var type)
+            && type.GetString() == "null");
+        var initialResultProperties = initialProperties
+            .GetProperty("results")
+            .GetProperty("items")
+            .GetProperty("properties");
+        Assert.True(initialResultProperties.TryGetProperty(
+            "evidence_media_index",
+            out _));
+        Assert.False(adjudication.ResponseJsonSchema
+            .GetProperty("properties")
+            .TryGetProperty("identity", out _));
 
         var nameTranscription = catalog.GetRequired(AiTaskTypes.NameTranscription);
         Assert.DoesNotContain(

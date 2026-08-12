@@ -49,54 +49,177 @@ public static class StudentsEndpoints
         OokiGraderDbContext db,
         string? search,
         string? status,
+        bool? active,
         string? @class,
+        string? course,
+        string? grade,
+        string? sort,
+        bool? includeFacets,
         string? cursor,
         int? pageSize,
         int? limit,
         ProtectedCursorCodec cursorCodec,
         CancellationToken cancellationToken)
     {
-        var take = Math.Clamp(pageSize ?? limit ?? 50, 1, 200);
+        if (!ListQuery.TryPageSize(
+                context,
+                pageSize,
+                limit,
+                out var take,
+                out var pageSizeError))
+        {
+            return pageSizeError!;
+        }
+
         var query = db.Students.AsNoTracking();
-        var normalizedStatus = status is "active" or "inactive"
-            ? status
+        var normalizedStatus = CursorPagination.TrimToNull(status);
+        if (normalizedStatus is not null
+            && normalizedStatus is not ("active" or "inactive"))
+        {
+            return ListQuery.Invalid(
+                context,
+                "status は active または inactive を指定してください。");
+        }
+
+        var statusFromActive = active.HasValue
+            ? active.Value ? "active" : "inactive"
             : null;
+        if (normalizedStatus is not null
+            && statusFromActive is not null
+            && normalizedStatus != statusFromActive)
+        {
+            return ListQuery.Invalid(
+                context,
+                "status と active には同じ在籍状態を指定してください。");
+        }
+
+        normalizedStatus ??= statusFromActive;
+
         if (normalizedStatus is not null)
         {
             query = query.Where(student => student.Status == normalizedStatus);
         }
 
-        var classLabel = CursorPagination.TrimToNull(@class);
+        if (!ListQuery.TryTrimFilter(
+                context,
+                @class,
+                "class",
+                out var classLabel,
+                out var filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                course,
+                "course",
+                out var normalizedCourse,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                grade,
+                "grade",
+                out var normalizedGrade,
+                out filterError))
+        {
+            return filterError!;
+        }
+
         if (classLabel is not null)
         {
             query = query.Where(student => student.SchoolClass == classLabel);
         }
 
-        var normalized = JapaneseTextNormalizer.NormalizeForComparison(
-            search,
-            new JapaneseNormalizationOptions { RemoveAllWhitespace = true });
-        if (normalized.Length > 0)
+        if (normalizedCourse is not null)
         {
-            if (normalized.Length > 200)
-            {
-                return Results.BadRequest();
-            }
-
-            query = query.Where(student =>
-                student.StudentNumberNormalized.Contains(normalized)
-                || student.FamilyNameNormalized.Contains(normalized)
-                || student.GivenNameNormalized.Contains(normalized)
-                || (student.FamilyNameKanaNormalized != null
-                    && student.FamilyNameKanaNormalized.Contains(normalized))
-                || (student.GivenNameKanaNormalized != null
-                    && student.GivenNameKanaNormalized.Contains(normalized))
-                || student.Aliases.Any(alias => alias.NormalizedValue.Contains(normalized)));
+            query = query.Where(student => student.Course == normalizedCourse);
         }
 
+        if (normalizedGrade is not null)
+        {
+            query = query.Where(student => student.GradeLabel == normalizedGrade);
+        }
+
+        if (!ListQuery.TryNormalizeSearch(
+                context,
+                search,
+                out var normalizedSearch,
+                out var searchTokens,
+                out var searchError))
+        {
+            return searchError!;
+        }
+
+        foreach (var token in searchTokens)
+        {
+            var pattern = ListQuery.ContainsPattern(token);
+            query = query.Where(student =>
+                EF.Functions.Like(
+                    student.StudentNumberNormalized,
+                    pattern,
+                    "\\")
+                || EF.Functions.Like(
+                    student.FamilyNameNormalized,
+                    pattern,
+                    "\\")
+                || EF.Functions.Like(
+                    student.GivenNameNormalized,
+                    pattern,
+                    "\\")
+                || EF.Functions.Like(
+                    student.FamilyNameNormalized
+                        + student.GivenNameNormalized,
+                    pattern,
+                    "\\")
+                || (student.FamilyNameKanaNormalized != null
+                    && EF.Functions.Like(
+                        student.FamilyNameKanaNormalized,
+                        pattern,
+                        "\\"))
+                || (student.GivenNameKanaNormalized != null
+                    && EF.Functions.Like(
+                        student.GivenNameKanaNormalized,
+                        pattern,
+                        "\\"))
+                || EF.Functions.Like(
+                    (student.FamilyNameKanaNormalized ?? string.Empty)
+                        + (student.GivenNameKanaNormalized ?? string.Empty),
+                    pattern,
+                    "\\")
+                || student.Aliases.Any(alias =>
+                    EF.Functions.Like(
+                        alias.NormalizedValue,
+                        pattern,
+                        "\\")));
+        }
+
+        var normalizedSort = CursorPagination.TrimToNull(sort)
+            ?? "studentNumber";
+        if (normalizedSort is not (
+            "studentNumber"
+            or "-studentNumber"
+            or "name"
+            or "-name"
+            or "updatedAt"
+            or "-updatedAt"))
+        {
+            return ListQuery.Invalid(
+                context,
+                "sort は studentNumber、name、updatedAt のいずれかに、必要なら先頭の - を付けて指定してください。");
+        }
+
+        var cursorSort = normalizedSort switch
+        {
+            "studentNumber" => "studentNumberNormalized,id",
+            "-studentNumber" => "-studentNumberNormalized,id",
+            "name" => "nameNormalized,id",
+            "-name" => "-nameNormalized,id",
+            "updatedAt" => "updatedAt,id",
+            _ => "-updatedAt,id",
+        };
         var filterBinding = CursorPagination.Bind(
             ("class", classLabel),
-            ("search", normalized),
-            ("sort", "studentNumberNormalized,id"),
+            ("course", normalizedCourse),
+            ("grade", normalizedGrade),
+            ("search", normalizedSearch),
+            ("sort", cursorSort),
             ("status", normalizedStatus));
         if (!CursorPagination.TryRead(
                 context,
@@ -111,10 +234,12 @@ public static class StudentsEndpoints
         }
 
         if (position is not null
-            && (string.IsNullOrEmpty(position.StudentNumberNormalized)
-                || position.StudentNumberNormalized.Length > 500
-                || string.IsNullOrEmpty(position.Id)
-                || position.Id.Length > 128))
+            && (string.IsNullOrEmpty(position.Id)
+                || position.Id.Length > ListQuery.MaximumIdLength
+                || (normalizedSort is "updatedAt" or "-updatedAt"
+                    ? position.Timestamp is null
+                    : string.IsNullOrEmpty(position.Text)
+                        || position.Text.Length > 1_000)))
         {
             return CursorPagination.Invalid(context);
         }
@@ -122,17 +247,59 @@ public static class StudentsEndpoints
         var total = await query.CountAsync(cancellationToken);
         if (position is not null)
         {
-            query = query.Where(student =>
-                string.Compare(
-                    student.StudentNumberNormalized,
-                    position.StudentNumberNormalized) > 0
-                || (student.StudentNumberNormalized
-                        == position.StudentNumberNormalized
-                    && string.Compare(student.Id, position.Id) > 0));
+            query = normalizedSort switch
+            {
+                "studentNumber" => query.Where(student =>
+                    string.Compare(
+                        student.StudentNumberNormalized,
+                        position.Text) > 0
+                    || (student.StudentNumberNormalized == position.Text
+                        && string.Compare(student.Id, position.Id) > 0)),
+                "-studentNumber" => query.Where(student =>
+                    string.Compare(
+                        student.StudentNumberNormalized,
+                        position.Text) < 0
+                    || (student.StudentNumberNormalized == position.Text
+                        && string.Compare(student.Id, position.Id) > 0)),
+                "name" => query.Where(student =>
+                    string.Compare(
+                        student.FamilyNameNormalized + student.GivenNameNormalized,
+                        position.Text) > 0
+                    || (student.FamilyNameNormalized + student.GivenNameNormalized
+                            == position.Text
+                        && string.Compare(student.Id, position.Id) > 0)),
+                "-name" => query.Where(student =>
+                    string.Compare(
+                        student.FamilyNameNormalized + student.GivenNameNormalized,
+                        position.Text) < 0
+                    || (student.FamilyNameNormalized + student.GivenNameNormalized
+                            == position.Text
+                        && string.Compare(student.Id, position.Id) > 0)),
+                "updatedAt" => query.Where(student =>
+                    student.UpdatedAt > position.Timestamp
+                    || (student.UpdatedAt == position.Timestamp
+                        && string.Compare(student.Id, position.Id) > 0)),
+                _ => query.Where(student =>
+                    student.UpdatedAt < position.Timestamp
+                    || (student.UpdatedAt == position.Timestamp
+                        && string.Compare(student.Id, position.Id) > 0)),
+            };
         }
 
-        var students = await query
-            .OrderBy(student => student.StudentNumberNormalized)
+        IOrderedQueryable<StudentEntity> ordered = normalizedSort switch
+        {
+            "studentNumber" => query.OrderBy(
+                student => student.StudentNumberNormalized),
+            "-studentNumber" => query.OrderByDescending(
+                student => student.StudentNumberNormalized),
+            "name" => query.OrderBy(student =>
+                student.FamilyNameNormalized + student.GivenNameNormalized),
+            "-name" => query.OrderByDescending(student =>
+                student.FamilyNameNormalized + student.GivenNameNormalized),
+            "updatedAt" => query.OrderBy(student => student.UpdatedAt),
+            _ => query.OrderByDescending(student => student.UpdatedAt),
+        };
+        var students = await ordered
             .ThenBy(student => student.Id)
             .Take(take + 1)
             .Select(student => new
@@ -169,20 +336,84 @@ public static class StudentsEndpoints
                 filterBinding,
                 hasMore,
                 new StudentCursorPosition(
-                    NormalizeSearch(students[^1].StudentNumber),
+                    normalizedSort switch
+                    {
+                        "studentNumber" or "-studentNumber" =>
+                            NormalizeSearch(students[^1].StudentNumber),
+                        "name" or "-name" =>
+                            NormalizeSearch(students[^1].FamilyName)
+                                + NormalizeSearch(students[^1].GivenName),
+                        _ => null,
+                    },
+                    normalizedSort is "updatedAt" or "-updatedAt"
+                        ? students[^1].UpdatedAt
+                        : null,
                     students[^1].Id));
+        var facets = includeFacets == true
+            ? await LoadStudentFacetsAsync(db, cancellationToken)
+            : null;
 
         return Results.Ok(new
         {
             items = students,
             nextCursor,
             totalApproximate = total,
+            facets,
         });
     }
 
     private sealed record StudentCursorPosition(
-        string StudentNumberNormalized,
+        string? Text,
+        DateTimeOffset? Timestamp,
         string Id);
+
+    private static async Task<object> LoadStudentFacetsAsync(
+        OokiGraderDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var gradeRows = await db.Students
+            .AsNoTracking()
+            .Where(student => student.GradeLabel != null
+                && student.GradeLabel != string.Empty
+                && student.GradeLabel.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(student => student.GradeLabel!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var grades = gradeRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var classRows = await db.Students
+            .AsNoTracking()
+            .Where(student => student.SchoolClass != null
+                && student.SchoolClass != string.Empty
+                && student.SchoolClass.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(student => student.SchoolClass!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var classes = classRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var courseRows = await db.Students
+            .AsNoTracking()
+            .Where(student => student.Course != null
+                && student.Course != string.Empty
+                && student.Course.Length <= ListQuery.MaximumFilterLength)
+            .GroupBy(student => student.Course!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var courses = courseRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        return new { grades, classes, courses };
+    }
+
+    private sealed record FacetValue(string Value, string Label, int Count);
 
     private static async Task<IResult> GetStudent(
         string studentId,
@@ -674,7 +905,9 @@ public static class StudentsEndpoints
         if (!string.IsNullOrWhiteSpace(subject))
         {
             seriesQuery = seriesQuery.Where(submission =>
-                submission.TestSession.TemplateVersion.TestTemplate.Subject == subject);
+                (submission.TestSession.TemplateSubjectSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Subject)
+                == subject);
         }
 
         var series = await seriesQuery
@@ -685,6 +918,7 @@ public static class StudentsEndpoints
                 submissionId = submission.Id,
                 testDate = submission.TestSession.TestDate,
                 testTitle = submission.TestSession.TitleOverride
+                    ?? submission.TestSession.TemplateTitleSnapshot
                     ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
                 earnedPointsMilli = submission.GradingRuns
                     .Where(run => run.Id == submission.CurrentGradingRunId)

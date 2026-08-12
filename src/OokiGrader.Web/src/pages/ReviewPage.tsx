@@ -36,6 +36,7 @@ import type {
   NameCandidate,
   NameReviewItem,
   PagedResponse,
+  ReviewCounts,
   StudentSummary,
   SubmissionSummary,
 } from "../types";
@@ -56,6 +57,10 @@ export function ReviewPage() {
       : "name";
   const submissionParam = searchParams.get("submission");
 
+  const reviewCounts = useApiQuery<ReviewCounts>(
+    "review-counts",
+    (signal) => api.get("/review/counts", undefined, signal),
+  );
   const nameQueue = useApiQuery<PagedResponse<NameReviewItem>>(
     "review-name",
     async (signal) =>
@@ -81,12 +86,29 @@ export function ReviewPage() {
     tab === "finalize" && canGrade,
   );
 
+  useEffect(() => {
+    function handleStatus(event: Event) {
+      const detail = (event as CustomEvent<{ type?: string }>).detail;
+      if (detail?.type === "review.counts") reviewCounts.reload();
+    }
+
+    window.addEventListener("ooki:status", handleStatus);
+    return () => window.removeEventListener("ooki:status", handleStatus);
+  }, [reviewCounts.reload]);
+
   const counts = {
-    name: nameQueue.data?.totalApproximate ?? nameQueue.data?.items.length,
+    name:
+      reviewCounts.data?.needsNameReview ??
+      nameQueue.data?.totalApproximate ??
+      nameQueue.data?.items.length,
     grading:
-      gradeQueue.data?.totalApproximate ?? gradeQueue.data?.items.length,
+      reviewCounts.data?.needsGradeReview ??
+      gradeQueue.data?.totalApproximate ??
+      gradeQueue.data?.items.length,
     finalize:
-      finalizeQueue.data?.totalApproximate ?? finalizeQueue.data?.items.length,
+      reviewCounts.data?.readyToFinalize ??
+      finalizeQueue.data?.totalApproximate ??
+      finalizeQueue.data?.items.length,
   };
 
   function setTab(value: ReviewTab) {
@@ -129,18 +151,21 @@ export function ReviewPage() {
         <NameReview
           query={nameQueue}
           preferredSubmission={submissionParam || undefined}
+          onQueueChanged={reviewCounts.reload}
         />
       ) : null}
       {tab === "grading" && canGrade ? (
         <GradeReview
           query={gradeQueue}
           preferredSubmission={submissionParam || undefined}
+          onQueueChanged={reviewCounts.reload}
         />
       ) : null}
       {tab === "finalize" && canGrade ? (
         <FinalizeReview
           query={finalizeQueue}
           preferredSubmission={submissionParam || undefined}
+          onQueueChanged={reviewCounts.reload}
         />
       ) : null}
     </div>
@@ -150,9 +175,11 @@ export function ReviewPage() {
 function NameReview({
   query,
   preferredSubmission,
+  onQueueChanged,
 }: {
   query: ReturnType<typeof useApiQuery<PagedResponse<NameReviewItem>>>;
   preferredSubmission?: string;
+  onQueueChanged: () => void;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [candidateId, setCandidateId] = useState("");
@@ -265,6 +292,7 @@ function NameReview({
         { idempotencyKey: newIdempotencyKey() },
       );
       query.reload();
+      onQueueChanged();
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "割り当てを保存できませんでした。",
@@ -301,6 +329,7 @@ function NameReview({
       );
       setDuplicateConflict(undefined);
       query.reload();
+      onQueueChanged();
     } catch (reason) {
       if (
         reason instanceof ApiError &&
@@ -571,9 +600,11 @@ function NameReview({
 function GradeReview({
   query,
   preferredSubmission,
+  onQueueChanged,
 }: {
   query: ReturnType<typeof useApiQuery<PagedResponse<GradeReviewItem>>>;
   preferredSubmission?: string;
+  onQueueChanged: () => void;
 }) {
   const [mode, setMode] = useState<ReviewMode>("question");
   const [selectedId, setSelectedId] = useState("");
@@ -628,6 +659,7 @@ function GradeReview({
         { idempotencyKey: newIdempotencyKey() },
       );
       query.reload();
+      onQueueChanged();
     } catch (reasonValue) {
       setError(
         reasonValue instanceof ApiError && reasonValue.status === 412
@@ -736,6 +768,12 @@ function GradeReview({
               {selected.kanjiRequired ? (
                 <Badge tone="warning">漢字必須</Badge>
               ) : null}
+              <Link
+                className="button button--secondary button--small"
+                to={`/submissions/${encodeURIComponent(selected.submissionId)}/grading`}
+              >
+                この答案をまとめて確認
+              </Link>
             </div>
           </header>
           {error ? (
@@ -891,9 +929,11 @@ interface SubmissionForFinalize extends SubmissionSummary {
 function FinalizeReview({
   query,
   preferredSubmission,
+  onQueueChanged,
 }: {
   query: ReturnType<typeof useApiQuery<PagedResponse<SubmissionSummary>>>;
   preferredSubmission?: string;
+  onQueueChanged: () => void;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -930,6 +970,7 @@ function FinalizeReview({
       );
       setConfirmOpen(false);
       query.reload();
+      onQueueChanged();
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "答案を確定できませんでした。",

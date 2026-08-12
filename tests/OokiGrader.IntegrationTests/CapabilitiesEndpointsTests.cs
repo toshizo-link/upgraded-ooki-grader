@@ -13,7 +13,7 @@ namespace OokiGrader.IntegrationTests;
 public sealed class CapabilitiesEndpointsTests
 {
     [Fact]
-    public async Task CapabilitiesRequireAnActiveApprovedHealthyExactModelProfile()
+    public async Task CapabilitiesAcceptAnActiveCapabilityPassedHealthyExactProfile()
     {
         await using var connection = new SqliteConnection(
             "Data Source=:memory:");
@@ -262,7 +262,7 @@ public sealed class CapabilitiesEndpointsTests
             PromptVersion = bundle.PromptVersion,
             SchemaVersion = bundle.SchemaVersion,
             PromptContentHash = bundle.ContentHash,
-            ApprovalState = "pilot_approved",
+            ApprovalState = "capability_passed",
             Active = true,
             ActivatedAt = now,
             CreatedByStaffUserId = UlidId.New(now.AddMilliseconds(1)),

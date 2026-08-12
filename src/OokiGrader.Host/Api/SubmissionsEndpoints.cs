@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Host.Jobs;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Preprocessing;
@@ -19,6 +20,30 @@ public static partial class SubmissionsEndpoints
 {
     private static readonly string[] DuplicateResolutions =
         ["additionalAttempt", "replaceCanonical"];
+    private static readonly HashSet<string> AllowedSubmissionListStates =
+        new(StringComparer.Ordinal)
+        {
+            "uploading",
+            "validating",
+            "preprocessing",
+            "duplicate_pending",
+            "awaiting_name",
+            "awaiting_grading",
+            "awaiting_ai",
+            "grading",
+            "gemini_batch_running",
+            "openrouter_queued",
+            "budget_blocked",
+            "needs_attention",
+            "needs_name_review",
+            "needs_grade_review",
+            "ready_for_review",
+            "ready_to_finalize",
+            "finalized",
+            "failed",
+            "voided",
+            "scan_deleted",
+        };
     private const string SubmissionsListRoute = "GET:/api/v1/submissions";
 
     public static IEndpointRouteBuilder MapSubmissionsEndpoints(
@@ -26,7 +51,9 @@ public static partial class SubmissionsEndpoints
     {
         var group = endpoints.MapGroup("/api/v1/submissions")
             .WithTags("Submissions");
-        group.MapGet("/", ListSubmissions).RequireAuthorization("results");
+        group.MapGet("/", ListSubmissions)
+            .RequireAuthorization("results")
+            .RequireRateLimiting("search");
         group.MapGet("/{submissionId}", GetSubmission).RequireAuthorization("results");
         group.MapPost("/{submissionId}:assignStudent", AssignStudent)
             .RequireAuthorization("teacher");
@@ -56,12 +83,29 @@ public static partial class SubmissionsEndpoints
         DateOnly? to,
         DateOnly? finalizedOn,
         string? sort,
+        string? studentId,
+        string? templateId,
+        string? subject,
+        string? category,
+        string? course,
+        string? @class,
+        bool? finalizedOnly,
+        bool? includeFacets,
         ClaimsPrincipal principal,
         OokiGraderDbContext db,
         ProtectedCursorCodec cursorCodec,
         CancellationToken cancellationToken)
     {
-        var take = Math.Clamp(pageSize ?? limit ?? 50, 1, 200);
+        if (!ListQuery.TryPageSize(
+                context,
+                pageSize,
+                limit,
+                out var take,
+                out var pageSizeError))
+        {
+            return pageSizeError!;
+        }
+
         var query = db.Submissions
             .AsNoTracking()
             .Include(submission => submission.AssignedStudent)
@@ -97,12 +141,56 @@ public static partial class SubmissionsEndpoints
             }
 
             normalizedState = NormalizeState(state);
+            if (!AllowedSubmissionListStates.Contains(normalizedState))
+            {
+                return ListQuery.Invalid(
+                    context,
+                    "state に認識できる答案状態を指定してください。");
+            }
+
             if (readOnlyReviewer && normalizedState != "finalized")
             {
                 query = query.Where(_ => false);
             }
 
-            query = query.Where(submission => submission.State == normalizedState);
+            query = normalizedState switch
+            {
+                "awaiting_ai" => query.Where(submission =>
+                    submission.State == "awaiting_name"
+                    || submission.State == "awaiting_grading"
+                    || submission.State == "grading"),
+                "ready_for_review" => query.Where(submission =>
+                    submission.State == "needs_name_review"
+                    || submission.State == "needs_grade_review"
+                    || submission.State == "ready_to_finalize"),
+                "scan_deleted" => query.Where(submission =>
+                    submission.ScanPayloadState == "scan_deleted"),
+                _ => query.Where(submission =>
+                    submission.State == normalizedState),
+            };
+        }
+
+        var reportQuery = normalizedState == "finalized"
+            || finalizedOnly == true;
+        if (finalizedOnly == true
+            && normalizedState is not null
+            && normalizedState != "finalized")
+        {
+            return ListQuery.Invalid(
+                context,
+                "finalizedOnly=true の場合、state は finalized を指定してください。");
+        }
+
+        if (finalizedOnly == true && normalizedState is null)
+        {
+            query = query.Where(submission => submission.State == "finalized");
+        }
+
+        if (reportQuery)
+        {
+            query = query.Where(submission =>
+                submission.FinalizedAt != null
+                && submission.VoidedAt == null);
         }
 
         if (assigned.HasValue)
@@ -110,6 +198,13 @@ public static partial class SubmissionsEndpoints
             query = assigned.Value
                 ? query.Where(submission => submission.AssignedStudentId != null)
                 : query.Where(submission => submission.AssignedStudentId == null);
+        }
+
+        if (from.HasValue && to.HasValue && from.Value > to.Value)
+        {
+            return ListQuery.Invalid(
+                context,
+                "from は to と同じ日付またはそれ以前を指定してください。");
         }
 
         if (from.HasValue)
@@ -146,47 +241,203 @@ public static partial class SubmissionsEndpoints
                 && submission.FinalizedAt < end);
         }
 
-        var normalizedSearch = CursorPagination.TrimToNull(search);
-        if (normalizedSearch is not null)
+        if (!ListQuery.TryTrimFilter(
+                context,
+                studentId,
+                "studentId",
+                out var normalizedStudentId,
+                out var filterError,
+                ListQuery.MaximumIdLength)
+            || !ListQuery.TryTrimFilter(
+                context,
+                templateId,
+                "templateId",
+                out var normalizedTemplateId,
+                out filterError,
+                ListQuery.MaximumIdLength)
+            || !ListQuery.TryTrimFilter(
+                context,
+                subject,
+                "subject",
+                out var normalizedSubject,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                category,
+                "category",
+                out var normalizedCategory,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                course,
+                "course",
+                out var normalizedCourse,
+                out filterError)
+            || !ListQuery.TryTrimFilter(
+                context,
+                @class,
+                "class",
+                out var normalizedClass,
+                out filterError))
         {
-            if (normalizedSearch.Length > 200)
-            {
-                return Results.BadRequest();
-            }
+            return filterError!;
+        }
 
+        if (normalizedStudentId is not null)
+        {
+            query = query.Where(submission =>
+                submission.AssignedStudentId == normalizedStudentId);
+        }
+
+        if (normalizedTemplateId is not null)
+        {
+            query = query.Where(submission =>
+                submission.TestSession.TemplateVersion.TestTemplateId
+                    == normalizedTemplateId);
+        }
+
+        if (normalizedSubject is not null)
+        {
+            query = query.Where(submission =>
+                (submission.TestSession.TemplateSubjectSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Subject)
+                    == normalizedSubject);
+        }
+
+        if (normalizedCategory is not null)
+        {
+            query = query.Where(submission =>
+                (submission.TestSession.TemplateCategorySnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Category)
+                    == normalizedCategory);
+        }
+
+        if (normalizedCourse is not null)
+        {
+            query = query.Where(submission =>
+                submission.TestSession.Course == normalizedCourse);
+        }
+
+        if (normalizedClass is not null)
+        {
+            query = query.Where(submission =>
+                submission.TestSession.ClassLabel == normalizedClass);
+        }
+
+        if (!ListQuery.TryNormalizeSearch(
+                context,
+                search,
+                out var normalizedSearch,
+                out var searchTokens,
+                out var searchError))
+        {
+            return searchError!;
+        }
+
+        foreach (var token in searchTokens)
+        {
+            var pattern = ListQuery.ContainsPattern(token);
             query = query.Where(submission =>
                 (submission.OriginalFileName != null
-                    && submission.OriginalFileName.Contains(normalizedSearch))
+                    && EF.Functions.Like(
+                        submission.OriginalFileName,
+                        pattern,
+                        "\\"))
                 || (submission.AssignedStudent != null
-                    && (submission.AssignedStudent.DisplayName
-                            .Contains(normalizedSearch)
-                        || submission.AssignedStudent.StudentNumber
-                            .Contains(normalizedSearch)))
-                || submission.TestSession.TemplateVersion.TestTemplate.Title
-                    .Contains(normalizedSearch));
+                    && (EF.Functions.Like(
+                            submission.AssignedStudent.StudentNumberNormalized,
+                            pattern,
+                            "\\")
+                        || EF.Functions.Like(
+                            submission.AssignedStudent.FamilyNameNormalized,
+                            pattern,
+                            "\\")
+                        || EF.Functions.Like(
+                            submission.AssignedStudent.GivenNameNormalized,
+                            pattern,
+                            "\\")
+                        || EF.Functions.Like(
+                            submission.AssignedStudent.FamilyNameNormalized
+                                + submission.AssignedStudent.GivenNameNormalized,
+                            pattern,
+                            "\\")
+                        || submission.AssignedStudent.Aliases.Any(alias =>
+                            EF.Functions.Like(
+                                alias.NormalizedValue,
+                                pattern,
+                                "\\"))))
+                || EF.Functions.Like(
+                    submission.TestSession.TemplateVersion.TestTemplate.Title,
+                    pattern,
+                    "\\")
+                || (submission.TestSession.TemplateTitleSnapshot != null
+                    && EF.Functions.Like(
+                        submission.TestSession.TemplateTitleSnapshot,
+                        pattern,
+                        "\\"))
+                || (submission.TestSession.TitleOverride != null
+                    && EF.Functions.Like(
+                        submission.TestSession.TitleOverride,
+                        pattern,
+                        "\\")));
         }
 
-        if (sort is not (null or "" or "-updatedAt"))
+        var requestedSort = CursorPagination.TrimToNull(sort);
+        var normalizedSort = requestedSort
+            ?? (reportQuery ? "-testDate" : "-uploadCompletedAt");
+        var validSort = normalizedSort is "-uploadCompletedAt" or "-updatedAt"
+            || (reportQuery && normalizedSort is (
+                "-testDate"
+                or "testDate"
+                or "-finalizedAt"
+                or "finalizedAt"
+                or "studentName"
+                or "-studentName"
+                or "testTitle"
+                or "-testTitle"));
+        if (!validSort)
         {
-            return Results.BadRequest();
+            return ListQuery.Invalid(
+                context,
+                reportQuery
+                    ? "sort は testDate、finalizedAt、studentName、testTitle、updatedAt のいずれかに、必要なら先頭の - を付けて指定してください。"
+                    : "sort は -uploadCompletedAt または -updatedAt を指定してください。");
         }
 
-        var normalizedSort = sort == "-updatedAt"
-            ? "-updatedAt,-createdAt,id"
-            : "-uploadCompletedAt,-createdAt,id";
+        var cursorSort = normalizedSort switch
+        {
+            "-uploadCompletedAt" => "-uploadCompletedAt,-createdAt,id",
+            "-updatedAt" => "-updatedAt,-createdAt,id",
+            "-testDate" => "-testDate,id",
+            "testDate" => "testDate,id",
+            "-finalizedAt" => "-finalizedAt,id",
+            "finalizedAt" => "finalizedAt,id",
+            "studentName" => "studentName,id",
+            "-studentName" => "-studentName,id",
+            "testTitle" => "testTitle,id",
+            _ => "-testTitle,id",
+        };
         var filterBinding = CursorPagination.Bind(
             ("assigned", assigned?.ToString(CultureInfo.InvariantCulture)
                 .ToLowerInvariant()),
+            ("category", normalizedCategory),
+            ("class", normalizedClass),
+            ("course", normalizedCourse),
             ("finalizedOn", finalizedOn?.ToString(
                 "yyyy-MM-dd",
                 CultureInfo.InvariantCulture)),
+            ("finalizedOnly", finalizedOnly?.ToString(
+                CultureInfo.InvariantCulture).ToLowerInvariant()),
             ("from", from?.ToString(
                 "yyyy-MM-dd",
                 CultureInfo.InvariantCulture)),
             ("search", normalizedSearch),
             ("sessionId", requestedSessionId),
-            ("sort", normalizedSort),
+            ("sort", cursorSort),
             ("state", normalizedState),
+            ("studentId", normalizedStudentId),
+            ("subject", normalizedSubject),
+            ("templateId", normalizedTemplateId),
             ("to", to?.ToString(
                 "yyyy-MM-dd",
                 CultureInfo.InvariantCulture)),
@@ -205,8 +456,18 @@ public static partial class SubmissionsEndpoints
 
         if (position is not null
             && (string.IsNullOrEmpty(position.Id)
-                || position.Id.Length > 128
-                || (sort == "-updatedAt" && position.PrimaryAt is null)))
+                || position.Id.Length > ListQuery.MaximumIdLength
+                || (normalizedSort == "-updatedAt" && position.Timestamp is null)
+                || (normalizedSort is "-testDate" or "testDate"
+                    && position.Date is null)
+                || (normalizedSort is "-finalizedAt" or "finalizedAt"
+                    && position.Timestamp is null)
+                || (normalizedSort is (
+                        "studentName"
+                        or "-studentName"
+                        or "testTitle"
+                        or "-testTitle")
+                    && (position.Text is null || position.Text.Length > 1_000))))
         {
             return CursorPagination.Invalid(context);
         }
@@ -214,18 +475,19 @@ public static partial class SubmissionsEndpoints
         var total = await query.CountAsync(cancellationToken);
         if (position is not null)
         {
-            if (sort == "-updatedAt")
+            if (normalizedSort == "-updatedAt")
             {
                 query = query.Where(submission =>
-                    submission.UpdatedAt < position.PrimaryAt!.Value
-                    || (submission.UpdatedAt == position.PrimaryAt.Value
+                    submission.UpdatedAt < position.Timestamp!.Value
+                    || (submission.UpdatedAt == position.Timestamp.Value
                         && (submission.CreatedAt < position.CreatedAt
                             || (submission.CreatedAt == position.CreatedAt
                                 && string.Compare(
                                     submission.Id,
                                     position.Id) > 0))));
             }
-            else if (position.PrimaryAt is null)
+            else if (normalizedSort == "-uploadCompletedAt"
+                && position.Timestamp is null)
             {
                 query = query.Where(submission =>
                     submission.UploadCompletedAt == null
@@ -235,25 +497,123 @@ public static partial class SubmissionsEndpoints
                                 submission.Id,
                                 position.Id) > 0)));
             }
-            else
+            else if (normalizedSort == "-uploadCompletedAt")
             {
                 query = query.Where(submission =>
                     submission.UploadCompletedAt == null
-                    || submission.UploadCompletedAt < position.PrimaryAt.Value
-                    || (submission.UploadCompletedAt == position.PrimaryAt.Value
+                    || submission.UploadCompletedAt < position.Timestamp!.Value
+                    || (submission.UploadCompletedAt == position.Timestamp.Value
                         && (submission.CreatedAt < position.CreatedAt
                             || (submission.CreatedAt == position.CreatedAt
                                 && string.Compare(
                                     submission.Id,
                                     position.Id) > 0))));
             }
+            else
+            {
+                query = normalizedSort switch
+                {
+                    "-testDate" => query.Where(submission =>
+                        submission.TestSession.TestDate < position.Date
+                        || (submission.TestSession.TestDate == position.Date
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "testDate" => query.Where(submission =>
+                        submission.TestSession.TestDate > position.Date
+                        || (submission.TestSession.TestDate == position.Date
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "-finalizedAt" => query.Where(submission =>
+                        submission.FinalizedAt < position.Timestamp
+                        || (submission.FinalizedAt == position.Timestamp
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "finalizedAt" => query.Where(submission =>
+                        submission.FinalizedAt > position.Timestamp
+                        || (submission.FinalizedAt == position.Timestamp
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "studentName" => query.Where(submission =>
+                        string.Compare(
+                            submission.AssignedStudent == null
+                                ? string.Empty
+                                : submission.AssignedStudent.DisplayName,
+                            position.Text) > 0
+                        || ((submission.AssignedStudent == null
+                                    ? string.Empty
+                                    : submission.AssignedStudent.DisplayName)
+                                == position.Text
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "-studentName" => query.Where(submission =>
+                        string.Compare(
+                            submission.AssignedStudent == null
+                                ? string.Empty
+                                : submission.AssignedStudent.DisplayName,
+                            position.Text) < 0
+                        || ((submission.AssignedStudent == null
+                                    ? string.Empty
+                                    : submission.AssignedStudent.DisplayName)
+                                == position.Text
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    "testTitle" => query.Where(submission =>
+                        string.Compare(
+                            submission.TestSession.TitleOverride
+                                ?? submission.TestSession.TemplateTitleSnapshot
+                                ?? submission.TestSession.TemplateVersion
+                                    .TestTemplate.Title,
+                            position.Text) > 0
+                        || ((submission.TestSession.TitleOverride
+                                    ?? submission.TestSession.TemplateTitleSnapshot
+                                    ?? submission.TestSession.TemplateVersion
+                                        .TestTemplate.Title)
+                                == position.Text
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                    _ => query.Where(submission =>
+                        string.Compare(
+                            submission.TestSession.TitleOverride
+                                ?? submission.TestSession.TemplateTitleSnapshot
+                                ?? submission.TestSession.TemplateVersion
+                                    .TestTemplate.Title,
+                            position.Text) < 0
+                        || ((submission.TestSession.TitleOverride
+                                    ?? submission.TestSession.TemplateTitleSnapshot
+                                    ?? submission.TestSession.TemplateVersion
+                                        .TestTemplate.Title)
+                                == position.Text
+                            && string.Compare(submission.Id, position.Id) > 0)),
+                };
+            }
         }
 
-        var ordered = sort == "-updatedAt"
-            ? query.OrderByDescending(submission => submission.UpdatedAt)
-            : query.OrderByDescending(submission => submission.UploadCompletedAt);
+        IOrderedQueryable<SubmissionEntity> ordered = normalizedSort switch
+        {
+            "-uploadCompletedAt" => query
+                .OrderByDescending(submission => submission.UploadCompletedAt)
+                .ThenByDescending(submission => submission.CreatedAt),
+            "-updatedAt" => query
+                .OrderByDescending(submission => submission.UpdatedAt)
+                .ThenByDescending(submission => submission.CreatedAt),
+            "-testDate" => query.OrderByDescending(
+                submission => submission.TestSession.TestDate),
+            "testDate" => query.OrderBy(
+                submission => submission.TestSession.TestDate),
+            "-finalizedAt" => query.OrderByDescending(
+                submission => submission.FinalizedAt),
+            "finalizedAt" => query.OrderBy(submission => submission.FinalizedAt),
+            "studentName" => query.OrderBy(submission =>
+                submission.AssignedStudent == null
+                    ? string.Empty
+                    : submission.AssignedStudent.DisplayName),
+            "-studentName" => query.OrderByDescending(submission =>
+                submission.AssignedStudent == null
+                    ? string.Empty
+                    : submission.AssignedStudent.DisplayName),
+            "testTitle" => query.OrderBy(submission =>
+                submission.TestSession.TitleOverride
+                    ?? submission.TestSession.TemplateTitleSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Title),
+            _ => query.OrderByDescending(submission =>
+                submission.TestSession.TitleOverride
+                    ?? submission.TestSession.TemplateTitleSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Title),
+        };
         var submissions = await ordered
-            .ThenByDescending(submission => submission.CreatedAt)
             .ThenBy(submission => submission.Id)
             .Take(take + 1)
             .ToListAsync(cancellationToken);
@@ -278,11 +638,39 @@ public static partial class SubmissionsEndpoints
                 filterBinding,
                 hasMore,
                 new SubmissionCursorPosition(
-                    sort == "-updatedAt"
-                        ? submissions[^1].UpdatedAt
-                        : submissions[^1].UploadCompletedAt,
+                    normalizedSort switch
+                    {
+                        "-uploadCompletedAt" =>
+                            submissions[^1].UploadCompletedAt,
+                        "-updatedAt" => submissions[^1].UpdatedAt,
+                        "-finalizedAt" or "finalizedAt" =>
+                            submissions[^1].FinalizedAt,
+                        _ => null,
+                    },
+                    normalizedSort is "-testDate" or "testDate"
+                        ? submissions[^1].TestSession.TestDate
+                        : null,
+                    normalizedSort switch
+                    {
+                        "studentName" or "-studentName" =>
+                            submissions[^1].AssignedStudent?.DisplayName
+                                ?? string.Empty,
+                        "testTitle" or "-testTitle" =>
+                            submissions[^1].TestSession.TitleOverride
+                                ?? submissions[^1].TestSession.TemplateTitleSnapshot
+                                ?? submissions[^1].TestSession.TemplateVersion
+                                    .TestTemplate.Title,
+                        _ => null,
+                    },
                     submissions[^1].CreatedAt,
                     submissions[^1].Id));
+
+        var facets = includeFacets == true
+            ? await LoadReportFacetsAsync(
+                db,
+                readOnlyReviewer,
+                cancellationToken)
+            : null;
 
         return Results.Ok(new
         {
@@ -291,13 +679,159 @@ public static partial class SubmissionsEndpoints
                 exportStates.GetValueOrDefault(submission.Id))),
             nextCursor,
             totalApproximate = total,
+            facets,
         });
     }
 
     private sealed record SubmissionCursorPosition(
-        DateTimeOffset? PrimaryAt,
+        DateTimeOffset? Timestamp,
+        DateOnly? Date,
+        string? Text,
         DateTimeOffset CreatedAt,
         string Id);
+
+    private static async Task<object> LoadReportFacetsAsync(
+        OokiGraderDbContext db,
+        bool readOnlyReviewer,
+        CancellationToken cancellationToken)
+    {
+        // Both results-capable roles see the same finalized-only report corpus;
+        // keeping the visibility flag explicit prevents accidental widening if
+        // role-specific report visibility is added later.
+        var query = db.Submissions
+            .AsNoTracking()
+            .Where(submission => submission.State == "finalized"
+                && submission.FinalizedAt != null
+                && submission.VoidedAt == null);
+        if (readOnlyReviewer)
+        {
+            query = query.Where(submission => submission.FinalizedAt != null);
+        }
+
+        var subjectRows = await query
+            .Where(submission =>
+                (submission.TestSession.TemplateSubjectSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Subject) != null
+                && (submission.TestSession.TemplateSubjectSnapshot
+                        ?? submission.TestSession.TemplateVersion.TestTemplate.Subject)
+                    != string.Empty
+                && (submission.TestSession.TemplateSubjectSnapshot
+                        ?? submission.TestSession.TemplateVersion.TestTemplate.Subject)!.Length
+                    <= ListQuery.MaximumFilterLength)
+            .GroupBy(submission =>
+                submission.TestSession.TemplateSubjectSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Subject!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var subjects = subjectRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var categoryRows = await query
+            .Where(submission =>
+                (submission.TestSession.TemplateCategorySnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Category) != null
+                && (submission.TestSession.TemplateCategorySnapshot
+                        ?? submission.TestSession.TemplateVersion.TestTemplate.Category)
+                    != string.Empty
+                && (submission.TestSession.TemplateCategorySnapshot
+                        ?? submission.TestSession.TemplateVersion.TestTemplate.Category)!.Length
+                    <= ListQuery.MaximumFilterLength)
+            .GroupBy(submission =>
+                submission.TestSession.TemplateCategorySnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Category!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var categories = categoryRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var courseRows = await query
+            .Where(submission => submission.TestSession.Course != null
+                && submission.TestSession.Course != string.Empty
+                && submission.TestSession.Course.Length
+                    <= ListQuery.MaximumFilterLength)
+            .GroupBy(submission => submission.TestSession.Course!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var courses = courseRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var classRows = await query
+            .Where(submission => submission.TestSession.ClassLabel != null
+                && submission.TestSession.ClassLabel != string.Empty
+                && submission.TestSession.ClassLabel.Length
+                    <= ListQuery.MaximumFilterLength)
+            .GroupBy(submission => submission.TestSession.ClassLabel!)
+            .Select(group => new { Value = group.Key, Count = group.Count() })
+            .OrderBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var classes = classRows
+            .Select(item => new FacetValue(item.Value, item.Value, item.Count))
+            .ToArray();
+        var templateRows = await query
+            .GroupBy(submission => new
+            {
+                Value = submission.TestSession.TemplateVersion.TestTemplateId,
+                Label = submission.TestSession.TemplateTitleSnapshot
+                    ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
+            })
+            .Select(group => new
+            {
+                group.Key.Value,
+                group.Key.Label,
+                Count = group.Count(),
+            })
+            .OrderBy(item => item.Label)
+            .ThenBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var templates = templateRows
+            .Select(item => new FacetValue(
+                item.Value,
+                item.Label,
+                item.Count))
+            .ToArray();
+        var studentRows = await query
+            .Where(submission => submission.AssignedStudentId != null)
+            .GroupBy(submission => new
+            {
+                Value = submission.AssignedStudentId!,
+                Label = submission.AssignedStudent!.DisplayName,
+            })
+            .Select(group => new
+            {
+                group.Key.Value,
+                group.Key.Label,
+                Count = group.Count(),
+            })
+            .OrderBy(item => item.Label)
+            .ThenBy(item => item.Value)
+            .Take(ListQuery.MaximumFacetValues)
+            .ToArrayAsync(cancellationToken);
+        var students = studentRows
+            .Select(item => new FacetValue(
+                item.Value,
+                item.Label,
+                item.Count))
+            .ToArray();
+        return new
+        {
+            subjects,
+            categories,
+            courses,
+            classes,
+            templates,
+            students,
+        };
+    }
+
+    private sealed record FacetValue(string Value, string Label, int Count);
 
     private static async Task<IResult> GetSubmission(
         string submissionId,
@@ -351,13 +885,18 @@ public static partial class SubmissionsEndpoints
         {
             submission.Id,
             testSessionId = submission.TestSessionId,
-            sessionName = submission.TestSession.TitleOverride,
+            sessionName = submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
             submission.TestSession.TestDate,
             templateId = submission.TestSession.TemplateVersion.TestTemplateId,
             templateVersionId = submission.TestSession.TemplateVersionId,
             templateTitle =
-                submission.TestSession.TemplateVersion.TestTemplate.Title,
-            testTitle = submission.TestSession.TemplateVersion.TestTemplate.Title,
+                submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
+            testTitle = submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
             submission.State,
             submission.ScanPayloadState,
             submission.ScanDeletedAt,
@@ -450,12 +989,19 @@ public static partial class SubmissionsEndpoints
             .Include(item => item.TestSession)
                 .ThenInclude(session => session.TemplateVersion)
                     .ThenInclude(version => version.Questions)
+            .Include(item => item.GradingRuns)
+                .ThenInclude(run => run.QuestionResults)
             .SingleOrDefaultAsync(
                 item => item.Id == submissionId,
                 cancellationToken);
         if (submission is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         if (!ApiHelpers.TryReadExpectedRevision(
@@ -636,28 +1182,40 @@ public static partial class SubmissionsEndpoints
         submission.AssignmentMethod = "teacher";
         submission.AssignmentConfidenceBasisPoints = null;
         submission.AssignmentPolicyVersion = null;
-        submission.AssignmentEvidenceJson = null;
         BackgroundJobEntity? job = null;
         string? gradingQueueReason = null;
         if (submission.CurrentGradingRunId is null)
         {
-            var grading = await PrepareGradingJobAsync(
+            var stagedRun = await ActivateStagedCombinedRunAsync(
                 db,
                 submission,
-                submission.TestSession.TemplateVersion,
-                now,
-                context,
-                configuration,
-                cancellationToken);
-            job = grading.Job;
-            gradingQueueReason = grading.QueueReason;
-            await CancelSupersededGradingJobsAsync(
-                db,
-                submission.Id,
-                job.Id,
+                ApiHelpers.StaffId(principal),
                 now,
                 cancellationToken);
-            submission.State = "grading";
+            if (stagedRun is not null)
+            {
+                gradingQueueReason = "combined_analysis_activated";
+            }
+            else
+            {
+                var grading = await PrepareGradingJobAsync(
+                    db,
+                    submission,
+                    submission.TestSession.TemplateVersion,
+                    now,
+                    context,
+                    configuration,
+                    cancellationToken);
+                job = grading.Job;
+                gradingQueueReason = grading.QueueReason;
+                await CancelSupersededGradingJobsAsync(
+                    db,
+                    submission.Id,
+                    job.Id,
+                    now,
+                    cancellationToken);
+                submission.State = "grading";
+            }
         }
 
         var assignmentEvent = previousStudentId is not null
@@ -771,12 +1329,19 @@ public static partial class SubmissionsEndpoints
             .Include(item => item.TestSession)
                 .ThenInclude(session => session.TemplateVersion)
                     .ThenInclude(version => version.Questions)
+            .Include(item => item.GradingRuns)
+                .ThenInclude(run => run.QuestionResults)
             .SingleOrDefaultAsync(
                 item => item.Id == submissionId,
                 cancellationToken);
         if (submission is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         if (!ApiHelpers.TryReadExpectedRevision(
@@ -827,20 +1392,42 @@ public static partial class SubmissionsEndpoints
             submission.VoidedAt = now;
             submission.VoidedByStaffUserId = ApiHelpers.StaffId(principal);
             submission.VoidReason = "non_student_sample";
+            foreach (var stagedRun in submission.GradingRuns.Where(run =>
+                         run.State == "awaiting_identity"))
+            {
+                stagedRun.State = "discarded_non_student";
+            }
+
+            await CancelPendingCombinedAnalysisJobsAsync(
+                db,
+                submission,
+                now,
+                cancellationToken);
         }
         else
         {
             submission.AssignmentEvidenceJson =
                 """{"disposition":"unidentified"}""";
-            var grading = await PrepareGradingJobAsync(
+            var stagedRun = await ActivateStagedCombinedRunAsync(
                 db,
                 submission,
-                submission.TestSession.TemplateVersion,
+                ApiHelpers.StaffId(principal),
                 now,
-                context,
-                configuration,
                 cancellationToken);
-            submission.State = "grading";
+            GradingJobSelection? grading = null;
+            if (stagedRun is null)
+            {
+                grading = await PrepareGradingJobAsync(
+                    db,
+                    submission,
+                    submission.TestSession.TemplateVersion,
+                    now,
+                    context,
+                    configuration,
+                    cancellationToken);
+                submission.State = "grading";
+            }
+
             AddAudit(
                 db,
                 now.AddTicks(1),
@@ -848,7 +1435,9 @@ public static partial class SubmissionsEndpoints
                 context,
                 "submission.grading_queued",
                 submission.Id,
-                grading.QueueReason);
+                stagedRun is not null
+                    ? "combined_analysis_activated"
+                    : grading!.QueueReason);
         }
 
         var reasonCode = request.Status == "nonStudentSample"
@@ -893,6 +1482,11 @@ public static partial class SubmissionsEndpoints
         if (submission is null)
         {
             return Results.NotFound();
+        }
+
+        if (submission.TestSession.State == "archived")
+        {
+            return ArchivedSessionReadOnly(context);
         }
 
         if (!ApiHelpers.TryReadExpectedRevision(
@@ -951,14 +1545,15 @@ public static partial class SubmissionsEndpoints
         }
 
         var version = submission.TestSession.TemplateVersion;
-        if (version.State != "published" || version.Questions.Count == 0)
+        if (!TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(version.State)
+            || version.Questions.Count == 0)
         {
             return ApiHelpers.Problem(
                 context,
                 StatusCodes.Status409Conflict,
                 "TEMPLATE_VERSION_INVALID",
                 "採点基準を使用できません",
-                "公開済みの設問を持つひな形が必要です。");
+                "確定済みの設問を持つひな形が必要です。");
         }
 
         var now = timeProvider.GetUtcNow();
@@ -1031,8 +1626,8 @@ public static partial class SubmissionsEndpoints
                 .Where(item =>
                     item.TaskType == AiTaskTypes.InitialGrading
                     && item.Active
-                    && (item.ApprovalState == "pilot_approved"
-                        || item.ApprovalState == "production_approved")
+                    && AiTaskProfileRuntimePolicy.ReadyApprovalStates.Contains(
+                        item.ApprovalState)
                     && item.ModelId == item.AiConnection.ModelId
                     && item.ConnectionRevision
                         == item.AiConnection.CredentialRevision
@@ -1094,6 +1689,7 @@ public static partial class SubmissionsEndpoints
                         db,
                         submission,
                         version,
+                        profile,
                         now,
                         context,
                         cancellationToken),
@@ -1117,16 +1713,33 @@ public static partial class SubmissionsEndpoints
             OokiGraderDbContext db,
             SubmissionEntity submission,
             TemplateVersionEntity version,
+            AiTaskProfileEntity profile,
             DateTimeOffset now,
             HttpContext context,
             CancellationToken cancellationToken)
     {
         var manifestHash = submission.PreprocessingManifestHash!;
-        var deduplicationKey =
-            $"submission:{submission.Id}:gemini-grade:{manifestHash}";
-        var existing = await db.BackgroundJobs.SingleOrDefaultAsync(
-            job => job.DeduplicationKey == deduplicationKey,
-            cancellationToken);
+        var deduplicationKey = AiInitialGradingJobWorker
+            .RootJobDeduplicationKey(
+                submission.Id,
+                manifestHash,
+                profile.Id,
+                profile.Revision,
+                profile.PromptContentHash);
+        var combinedPrefix =
+            $"submission:{submission.Id}:gemini-analyze:{manifestHash}:";
+        var existing = await db.BackgroundJobs
+            .Where(job => job.Type == AiInitialGradingJobWorker.JobType
+                && (job.DeduplicationKey == deduplicationKey
+                    || (job.DeduplicationKey.StartsWith(combinedPrefix)
+                        && (job.State == "leased"
+                            || job.State == "queued"
+                            || job.State == "retry_waiting"))))
+            .OrderByDescending(job => job.State == "leased"
+                || job.State == "queued"
+                || job.State == "retry_waiting")
+            .ThenByDescending(job => job.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
         if (existing is null)
         {
             existing = new BackgroundJobEntity
@@ -1239,8 +1852,7 @@ public static partial class SubmissionsEndpoints
         var superseded = await db.BackgroundJobs
             .Where(job =>
                 job.Id != currentJobId
-                && (job.Type == "provider_free_grade"
-                    || job.Type == AiInitialGradingJobWorker.JobType)
+                && job.Type == "provider_free_grade"
                 && job.DeduplicationKey.StartsWith(keyPrefix)
                 && (job.State == "queued"
                     || job.State == "retry_waiting"
@@ -1257,6 +1869,120 @@ public static partial class SubmissionsEndpoints
         }
     }
 
+    private static async Task<GradingRunEntity?> ActivateStagedCombinedRunAsync(
+        OokiGraderDbContext db,
+        SubmissionEntity submission,
+        string actorStaffUserId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (submission.CurrentGradingRunId is not null
+            || submission.VoidedAt is not null)
+        {
+            return null;
+        }
+
+        var staged = submission.GradingRuns
+            .Where(run => run.PipelineVersion
+                    == AiInitialGradingJobWorker.PipelineVersion
+                && run.State == "awaiting_identity")
+            .OrderByDescending(run => run.RunNumber)
+            .ThenByDescending(run => run.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (staged is null)
+        {
+            return null;
+        }
+
+        var blockingReview = staged.QuestionResults.Any(result =>
+            result.ReviewRequired && result.ReviewStatus != "resolved");
+        staged.State = blockingReview
+            ? "needs_grade_review"
+            : "ready_to_finalize";
+        staged.ActivatedAt = now;
+        staged.ActivatedByStaffUserId = actorStaffUserId;
+        submission.CurrentGradingRunId = staged.Id;
+        submission.State = staged.State;
+        submission.UpdatedAt = now;
+        var resultPrefixes = staged.QuestionResults.Select(result =>
+                $"question-result:{result.Id}:adjudication:")
+            .ToArray();
+        if (resultPrefixes.Length > 0)
+        {
+            var waiting = await db.BackgroundJobs
+                .Where(job => job.Type == AiAdjudicationJobWorker.JobType
+                    && job.State == "blocked"
+                    && job.ErrorCode == "awaiting_identity")
+                .ToListAsync(cancellationToken);
+            foreach (var job in waiting.Where(job => resultPrefixes.Any(prefix =>
+                         job.DeduplicationKey.StartsWith(
+                             prefix,
+                             StringComparison.Ordinal))))
+            {
+                job.State = "queued";
+                job.NextAttemptAt = now;
+                job.ErrorCode = null;
+                job.SafeErrorDetail = null;
+                job.CompletedAt = null;
+            }
+        }
+
+        return staged;
+    }
+
+    private static async Task CancelPendingCombinedAnalysisJobsAsync(
+        OokiGraderDbContext db,
+        SubmissionEntity submission,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var prefix = $"submission:{submission.Id}:";
+        var pending = await db.BackgroundJobs
+            .Where(job => (job.Type == AiInitialGradingJobWorker.JobType
+                    || job.Type == AiInitialGradingJobWorker.ApplyJobType)
+                && job.DeduplicationKey.StartsWith(prefix)
+                && (job.State == "queued" || job.State == "retry_waiting"))
+            .ToListAsync(cancellationToken);
+        foreach (var job in pending)
+        {
+            job.State = "cancelled";
+            job.CompletedAt = now;
+            job.ErrorCode = "submission_voided_non_student";
+            job.SafeErrorDetail = null;
+            job.LeaseOwner = null;
+            job.LeaseExpiresAt = null;
+        }
+
+        var resultPrefixes = submission.GradingRuns
+            .SelectMany(run => run.QuestionResults)
+            .Select(result => $"question-result:{result.Id}:adjudication:")
+            .ToArray();
+        if (resultPrefixes.Length == 0)
+        {
+            return;
+        }
+
+        var adjudicationJobs = await db.BackgroundJobs
+            .Where(job => job.Type == AiAdjudicationJobWorker.JobType
+                && (job.State == "queued"
+                    || job.State == "retry_waiting"
+                    || job.State == "blocked"))
+            .ToListAsync(cancellationToken);
+        foreach (var job in adjudicationJobs.Where(job =>
+                     resultPrefixes.Any(resultPrefix =>
+                         job.DeduplicationKey.StartsWith(
+                             resultPrefix,
+                             StringComparison.Ordinal))))
+        {
+            job.State = "cancelled";
+            job.CompletedAt = now;
+            job.ErrorCode = "submission_voided_non_student";
+            job.SafeErrorDetail = null;
+            job.LeaseOwner = null;
+            job.LeaseExpiresAt = null;
+        }
+    }
+
     private static object ToListItem(
         SubmissionEntity submission,
         string? exportState)
@@ -1267,11 +1993,16 @@ public static partial class SubmissionsEndpoints
         {
             submission.Id,
             testSessionId = submission.TestSessionId,
-            sessionName = submission.TestSession.TitleOverride,
+            sessionName = submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
             submission.TestSession.TestDate,
             templateTitle =
-                submission.TestSession.TemplateVersion.TestTemplate.Title,
-            testTitle = submission.TestSession.TemplateVersion.TestTemplate.Title,
+                submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
+            testTitle = submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
+                ?? submission.TestSession.TemplateVersion.TestTemplate.Title,
             submission.State,
             submission.ScanPayloadState,
             submission.ScanDeletedAt,
@@ -1664,6 +2395,14 @@ public static partial class SubmissionsEndpoints
         principal.IsInRole("readOnlyReviewer")
         && !principal.IsInRole("administrator")
         && !principal.IsInRole("teacher");
+
+    private static IResult ArchivedSessionReadOnly(HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status409Conflict,
+            "TEST_SESSION_ARCHIVED_READ_ONLY",
+            "アーカイブ済みのテスト実施は変更できません",
+            "過去の答案は閲覧できますが、生徒の割り当て、重複解決、採点開始はできません。");
 
     private sealed record AssignStudentBody(
         string StudentId,

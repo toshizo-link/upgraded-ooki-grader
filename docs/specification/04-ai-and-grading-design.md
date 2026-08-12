@@ -1,10 +1,31 @@
 # AI, recognition, and grading design
 
-> **Current-flow note (2026-08-06):** all new work uses one durable queue of
+> **Current-flow note (2026-08-11):** all new work uses one durable queue of
 > standard provider requests. Gemini Batch, teacher-visible economy/priority,
 > expedite, coordinate crops, and automatic cross-provider failover are disabled.
 > Batch tables below describe retained legacy persistence/recovery compatibility,
 > not an option in the current teacher or administrator workflow.
+>
+> **Gemini-setup update (2026-08-11):** normal add/replace probes the supplied
+> candidate before persistence and, only on a complete capability/image-task
+> pass, atomically enables the four exact-current advisory task profiles.
+> Failure preserves the previous working configuration. Manual connection test
+> and startup reconciliation self-heal current Gemini profile revisions; formal
+> evaluation/manual activation remains an advanced OpenRouter/release concern.
+>
+> **Template-creation update (2026-08-09):** new creation is settings-first and
+> deterministic. The user selects test type and subject before upload; the host
+> owns HOP/STEP splitting and prompt routing. Template extraction uses prompt
+> `template-extract-v2.0.0` with schema `template_extract_v5`, including an
+> in-band orientation gate. Earlier source-role inference, v1/v4 extraction,
+> detail-view reconciliation, and separate AI preflight/classification behavior
+> are retained only for historical readability and are not a new-creation path.
+>
+> **Completed-paper update (2026-08-10):** the current scanner contract is an
+> explicitly ordered manifest of one-page PDFs. HOP uses one page, a registered
+> STEP variation/session uses two, and class-placement/Other use their complete
+> published count up to 50. Ordered name reading uses logical page 1 only;
+> initial grading uses bounded deterministic page chunks.
 
 ## 1. Purpose and safety position
 
@@ -56,14 +77,21 @@ The configuration supports separate profiles for:
 - initial answer transcription/grading;
 - low-confidence recheck/adjudication.
 
-A profile contains provider connection, exact model ID, standard-request strategy, reasoning/media settings, prompt/schema version, concurrency, price snapshot, and approved accuracy evaluation. This allows, for example:
+A profile contains provider connection, exact model ID, standard-request
+strategy, reasoning/media settings, prompt/schema/configuration hashes,
+concurrency, price snapshot, capability/approval state, and optional formal
+accuracy evaluation. This allows, for example:
 
 - Gemini 3.5 Flash Lite as the checked-in default for visual tasks;
 - an image-capable OpenRouter model after connection and accuracy gates pass;
 - a more accurate, separately validated OpenRouter vision model only for ambiguous answers;
 - official Gemini only with bounded standard inference.
 
-Cross-provider or cross-model failover is disabled. Changing provider/model is an explicit administrator action and the replacement profile must pass the same capability and accuracy gates.
+Cross-provider or cross-model failover is disabled. Current Gemini setup selects
+the four checked-in profiles only after the complete candidate-key capability
+probe, with `approval_state=capability_passed`. OpenRouter or another advanced
+provider/model/routing change is an explicit administrator action and the
+replacement profile must pass its capability and accuracy gates.
 
 ### 2.3 Selection priority
 
@@ -74,11 +102,17 @@ Profiles are compared lexicographically:
 3. meet the required turnaround;
 4. minimize total expected cost per finalized paper, including retry and teacher-review cost.
 
-The cheapest raw token rate does not win if it creates materially more corrections. The settings UI recommends a profile based on measured school validation results, not generic benchmark marketing.
+The cheapest raw token rate does not win if it creates materially more
+corrections. Release evaluation selects the checked-in Gemini defaults. The
+advanced/manual profile UI recommends OpenRouter or other candidate profiles
+from measured school validation results, not generic benchmark marketing; the
+normal Gemini key screen does not expose profile selection or approval.
 
 ### 2.4 Capability probe
 
-The model is configuration, not code. Startup/activation probes verify:
+The model is configuration, not code. Gemini create/replace probes the supplied
+candidate before any secret or profile persistence. Startup/activation probes
+verify:
 
 - key authentication and sufficient billing/credits;
 - exact model exists and accepts image input;
@@ -88,7 +122,20 @@ The model is configuration, not code. Startup/activation probes verify:
 - ordinary Japanese handwriting fixtures are not blocked;
 - OpenRouter endpoint/routing support with `provider.require_parameters=true`.
 
-The in-app OpenRouter connection test uses synthetic standard text and image inference rather than relying on catalog metadata alone. Release evaluation may consult official model metadata, but actual inference still uses only profiles the school has approved. Probe content is synthetic and contains no student data.
+The candidate must pass every check, including a representative synthetic image
+task, before the host atomically encrypts/persists the key and activates the
+exact current template-extraction, name-transcription, initial-grading, and
+adjudication profiles. Failure or ambiguous replacement preserves the previous
+working connection/profile set. A later manual Gemini connection test runs the
+same contract and self-heals missing/stale exact-current profiles; startup
+reconciles active Gemini profiles after prompt/schema/hash changes. In-flight
+jobs remain pinned to the immutable profile revision with which they started.
+
+The in-app OpenRouter connection test uses synthetic standard text and image
+inference rather than relying on catalog metadata alone. Release evaluation may
+consult official model metadata, but actual inference uses only exact-current
+`capability_passed` Gemini profiles or separately evaluated/approved advanced
+profiles. Probe content is synthetic and contains no student data.
 
 ### 2.5 Provider account prerequisites
 
@@ -101,76 +148,129 @@ The in-app OpenRouter connection test uses synthetic standard text and image inf
 
 | Task | Input disclosed | Output | Default route | Teacher gate |
 |---|---|---|---|---|
-| `template_extract_v3` | complete blank/model-answer/non-model-answer test pages, answer-key pages, source roles, replaceable template metadata | grading-key draft with inferred metadata, logical questions, answers, provenance, and review issues | selected task profile | exception review and publish always |
-| `name_transcribe_v1` | all complete normalized pages | raw name/number transcription and legibility | selected task profile | uncertain assignment |
-| `answer_transcribe_grade_v1` | all complete normalized pages, approved compact question list/rubrics, anonymous request ID | transcription and proposed per-question outcome | selected task profile | threshold/type dependent |
+| `TemplateExtraction` (`template_extract_v5`) | one host-planned source unit, trusted test type/subject/answer style, exact page manifest | rotation-only action or paper metadata plus a grading-key draft | selected task profile | batch final check, then normal editor/publish |
+| `submission_analysis_v2` | one deterministic consecutive normalized-page chunk, approved compact question list/rubrics, anonymous request ID; chunk 1 also contains logical page 1 | chunk 1: raw name/number transcription plus visible-answer grading; later chunks: visible-answer grading with `identity=null` | selected initial-grading profile | local roster/teacher identity confirmation and threshold/type-dependent grade review |
+| `name_transcribe_v1` | logical page 1 for ordered intake; complete normalized pages for a legacy non-ordered submission | raw name/number transcription and legibility | fallback/legacy selected task profile | uncertain assignment |
+| `answer_transcribe_grade_v1` | historical deterministic page chunk | visible-answer transcription and proposed per-question outcome | compatibility reader only | threshold/type dependent |
 | `answer_recheck_v1` | all complete normalized pages and one rubric | independent second assessment | explicit teacher/system policy | review still required if disagreement |
 
-Name transcription and answer grading MAY share one direct Gemini batch or OpenRouter dispatch group but remain separate requests/payloads.
+The normal Gemini path combines page-1 identity transcription with the first
+bounded grading request so the same page is not uploaded twice. Identity and
+grading remain separate validated components: malformed identity output does
+not invalidate valid grades, and malformed grading does not discard a valid
+transcription. The host never sends the roster. It matches the transcription
+locally, and the teacher still assigns the student or explicitly leaves the
+paper unidentified. Name-only dispatch remains available for legacy and
+provider-free fallback paths.
 
 ## 4. Input preparation
 
-### 4.1 Blank template
+### 4.1 Template-generation source
 
-For each source:
+The teacher selects one of the following routes before a file picker is
+enabled. The selected subject is one of `算数`, `国語`, `理科`, or `社会` and
+is trusted host context, never an AI output.
 
-- preserve original locally;
-- correct orientation/deskew;
-- create a clean raster at a validated resolution;
-- optionally include native PDF when the active profile handles it consistently and it is below discovered provider limits;
-- provide page index;
-- request logical questions and printed labels without coordinates;
-- never infer that a model-proposed answer is authoritative.
+| Test type | Local source plan | Prompt system |
+|---|---|---|
+| `HOP` | one independent unit per page | System ① standard |
+| `STEP` | one independent unit per consecutive two pages; page count must be divisible by six | System ① standard |
+| `クラス分けテスト` | whole PDF as one unit | System ② class placement |
+| `その他` + `通常` | whole PDF as one unit | System ① standard |
+| `その他` + `穴埋め` | whole PDF as one unit | System ③ fill blank |
 
-For direct Gemini, PDFs are kept below Google's documented 50 MB/1,000-page limits. For OpenRouter, the adapter uses local raster images by default so PDF parser/endpoint differences do not change extraction behavior. Encrypted/corrupt files are rejected locally.
+The original is preserved locally. Before provider work, the host verifies the
+source hash, reads page count, rejects encrypted/corrupt media, validates STEP
+divisibility, plans immutable ranges, and derives bounded unit documents. HOP
+has no cover-page exclusion. STEP page ranges are always two pages; each
+six-page set receives fixed `-1`, `-2`, and `-3` suffixes in page order. A set
+never crosses a file boundary and the three resulting tests share no template,
+version, question, grading-session, or result identities.
 
-### 4.1.1 Source answer authority
+Final naming is also host-owned. The grade must be resolved before a known-type
+name can be computed. HOP uses `{subject}{grade}年HOP{unitSequence}`, STEP uses
+`{subject}{grade}年STEPセット{set}-{variation}`, and class placement uses
+`{subject}{grade}年クラス分けテスト`. These names are immutable. For these
+three types, `printed_test_name` is stored and displayed only as extraction
+provenance/reference; it never supplies or overrides the final name. Only Other
+normalizes the printed title into a teacher-editable proposed final name.
 
-Every page part is tagged in the prompt as one of:
+Small-angle deskew and metadata normalization remain local preprocessing.
+Quarter-turn orientation is not guessed locally or stored as deskew: the
+template-extraction response supplies explicit per-page clockwise rotations as
+part of the orientation gate described below. Native PDF or bounded raster
+media may be used according to the eligible profile (exact-current
+`capability_passed` Gemini or separately evaluated advanced profile) and
+provider limit.
 
-- `BLANK_TEST`;
-- `TEST_WITH_MODEL_ANSWERS`;
-- `TEST_WITH_NON_MODEL_ANSWERS`;
-- `SEPARATE_ANSWER_KEY`.
-
-Only `TEST_WITH_MODEL_ANSWERS` and `SEPARATE_ANSWER_KEY` are authoritative.
-For those roles, the prompt requires the model to transcribe the supplied
-answer exactly and return `answer_provenance = provided_model_answer`. It must
-not silently substitute its own solution. `TEST_WITH_NON_MODEL_ANSWERS`
-instead requires the model to ignore visible responses and independently solve
-the printed questions as `ai_proposed`. It must associate supplied model
-answers with a question using printed label, text, page, and layout evidence,
-and return `unmatched` or `conflict` rather than guess.
-
-The output distinguishes:
-
-- `provided_answer_text` — authoritative source transcription;
-- `ai_solved_comparison` — optional non-authoritative check;
-- `answer_source_page`;
-- `mapping_confidence`;
-- `conflict_reason`;
-- `requires_teacher_answer`.
-
-If only a solved paper is supplied, question text excludes
-handwritten/printed answer annotations. No geometry is required.
+System ① uses visible model answers when present and otherwise marks generated
+answers as `ai_proposed`; System ② preserves diagnostic sections without
+inventing placement decisions; System ③ treats each meaningful blank as an
+independent answer slot unless an authoritative rubric scores blanks jointly.
+All routes preserve answer provenance and require teacher verification before
+publication. The old new-creation source-role classifier and role selector do
+not participate in routing.
 
 ### 4.2 Completed paper
 
+The scanner produces one-page PDFs. Before normal submission preprocessing, the
+host freezes their explicit client ordinals in an ordered-scan batch and groups
+them by the published template version's expected submission page count:
+
+| Test type | Pages in one graded submission |
+|---|---:|
+| HOP | 1 |
+| STEP | 2 for the selected registered variation/session |
+| Class placement | complete published template page count, 1–50 |
+| Other | complete published template page count, 1–50 |
+
+Each published STEP `-1`, `-2`, or `-3` variation has its own template and test
+session. The two-page rule therefore applies to that selected variation; a
+six-page source pack or a larger collection of STEP tests is never assembled as
+one student's grading submission.
+
+Transfer completion order and filenames are not grouping evidence. Each input
+must decode as exactly one page. The host compares it locally with every
+template page and requires both a minimum alignment score and a top-candidate
+margin. Missing, duplicated, ambiguous, foreign, or out-of-order page roles
+block the batch before any name or grading request. Page 1 is the deterministic
+group boundary and permits safe resynchronization after a structural error.
+
+For a valid group, the host creates one multipage managed-scan submission and
+retains immutable lineage to every source upload, input ordinal, page number,
+and SHA-256. That composite then follows the same preprocessing, name review,
+grading, finalization, retention, and audit path as any other submission. The
+written student name is expected on logical page 1. The first combined analysis
+chunk reads only that page's identity field while grading visible answers;
+later chunks read no identity. Name-only fallback likewise receives page 1.
+No AI model is used to pair pages or infer scanner order.
+
 The host performs bounded decoding, orientation normalization, page-order and
-quality checks, optional blank-page alignment, thumbnails, and hashes. It then
-sends all complete normalized pages in page order. It does not create name,
-answer, context, contact-sheet, or redacted-page crops.
+quality checks, optional blank-page alignment, thumbnails, and hashes. PDF
+raster working memory is limited to one decoded page at a time, while page,
+pixel, and retained-artifact totals remain locally bounded. Initial grading
+sends every normalized page in deterministic consecutive chunks as specified in
+section 11.1. It does not create name, answer, context, contact-sheet, or
+redacted-page crops.
 
 Each request manifest includes opaque page IDs, page numbers, normalized image
 hashes, dimensions, and the logical question IDs required for the task. Prompts
 tell the model to locate answers from printed labels, wording, reading order,
 and whole-page context. Private roster notes are never included.
 
+The order contract cannot prove student ownership of a later page that is in
+the correct template position. If the school cannot guarantee consecutive
+scanning for one student's complete paper, every physical page needs a visible
+identifier or the batch must be paired manually outside this automatic path.
+
 ### 4.3 Roster minimization
 
 The selected vision model locates and transcribes name/number fields from the
-complete pages without receiving the full roster. The local matcher compares
-the transcription with students and aliases.
+logical first page without receiving the full roster. In the normal path this
+is the identity component of the first grading chunk; later chunks must return
+`identity=null`. The local matcher compares the transcription with students and
+aliases. Roster changes rerank stored transcription locally and do not rerun or
+invalidate grading.
 
 If a future second-pass adjudicator is enabled, it may receive at most five local candidate display strings and opaque candidate IDs. It must not receive the entire roster.
 
@@ -211,25 +311,52 @@ All perception/grading prompts convey, in provider-appropriate language:
 - preserve Japanese script in transcription and do not convert
   hiragana/katakana to Kanji or vice versa; generated `ai_proposed` answers
   follow the form requested by the printed question;
+- read and grade each answer directly from the original page pixels in one
+  integrated inspection; the returned transcription is audit evidence, not a
+  lossy intermediate or the sole grading input;
+- preserve visible answer-line boundaries as `\n`, while treating visual line
+  wrapping, indentation, and surrounding layout whitespace as non-semantic
+  unless the teacher rubric explicitly makes formatting part of correctness;
 - report uncertainty rather than guess;
 - return exactly one result per requested question ID and no unknown IDs.
 
 ### 5.3 Grading-key extraction instruction
 
-The template task tells the model to:
+The server composes and fingerprints these code-owned fragments:
+
+```text
+orientation-gate-v1
+common-extraction-core-v1
+system-1-standard-v1 | system-2-class-placement-v1 | system-3-fill-blank-v1
+paper-name-and-grade-v1
+immutable-generation-context
+source-manifest
+request-contract
+```
+
+The immutable context contains the selected test type, subject, answer style,
+prompt system, page range, STEP set/variation, deterministic suffix, split and
+naming policy versions, prompt/schema versions, and source hashes. The web
+client cannot supply the prompt system and the model cannot override it.
+
+Every template request begins by inspecting every supplied page. It returns
+only quarter turns `0`, `90`, `180`, or `270`, where the value is the clockwise
+rotation the host must apply to the currently supplied page. If any page needs
+rotation, `action` is `rotate`, extraction fields are empty, and the host
+rotates a derived copy locally. The same immutable profile and prompt/schema
+are sent once more with a new request key and corrected media hashes. If the
+second response asks for rotation, processing stops; there is no third
+automatic call. If all pages are upright, `action` is `extract` and extraction
+continues in that same response.
+
+After the gate, the selected system tells the model to:
 
 - enumerate printed questions in visual reading order;
 - retain Japanese numbering such as `一`, `（1）`, `問1`;
 - transcribe question text;
-- when source role is blank, solve/propose expected answers with confidence and a concise rationale for the teacher;
-- when source role says model answers are included, transcribe those answers as authoritative, preserve their script, and never replace them with a solved proposal;
-- when source role is `contains_non_model_answers`, ignore visible written
-  answers as a source of truth, independently solve the printed questions, and
-  return `ai_proposed` answers with no answer-source provenance;
-- when a non-model answered paper is paired with an authoritative source, use
-  the matched authoritative answer while still excluding the non-model writing
-  from question text and answer authority;
-- return any disagreement between supplied answer and independent solution as a blocking comparison warning;
+- use visible model answers when present and preserve their script/provenance;
+- otherwise solve/propose expected answers as non-authoritative
+  `ai_proposed` content with confidence and a concise teacher-facing reason;
 - identify question type and printed label;
 - propose accepted variants conservatively;
 - avoid creating an answer when the source lacks enough information;
@@ -239,6 +366,9 @@ The template task tells the model to:
 - set `requires_teacher_answer` for teacher-only/material-dependent questions;
 - infer points only when printed or obvious; otherwise use a configurable default and warn;
 - propose, but never decide, non-Kanji policy;
+- return the visibly printed paper name and explicit grade in the same response;
+- never append a STEP suffix, use filename evidence, infer grade from difficulty,
+  or return test type, subject, answer style, split, or variation classifications;
 - never return or request name, question, or answer coordinates.
 
 ### 5.4 Grading instruction
@@ -251,10 +381,16 @@ The grading task contains a compact, canonical rubric generated from the publish
 - exact normalization rules;
 - maximum points and allowed increments;
 - Kanji policy and explicit phonetic exceptions;
+- whether every answer component is required for any credit;
+- whether explicitly separated components may appear in any order;
 - rubric elements;
 - whether the result requires review regardless of confidence.
 
-The model transcribes first, then proposes an outcome. The application evaluates deterministic rules independently and can reject the proposal.
+The model transcribes first, then proposes an outcome. For a page chunk it must
+return an observation only when the answer is visible in that chunk and mark
+the other supplied question IDs missing; the host resolves observations across
+all chunks. The application evaluates deterministic rules independently and
+can reject the proposal.
 
 ## 6. Structured output
 
@@ -264,90 +400,103 @@ Illustrative shape; the checked-in JSON Schema is the authority:
 
 ```json
 {
-  "schema_version": "template_extract_v3",
+  "schema_version": "template_extract_v5",
   "request_key": "template_01J...",
+  "action": "extract",
+  "orientation": {
+    "pages": [
+      {
+        "page_id": "opaque-page-1",
+        "clockwise_degrees_to_upright": 0,
+        "confidence": 0.99
+      }
+    ]
+  },
   "metadata": {
-    "title": "中学1年 社会 地理",
-    "subject": "社会",
-    "category": "地理",
-    "grade_label": "中学1年",
-    "course": null,
-    "confidence": 0.96,
+    "printed_test_name": "STEP算数 第4回",
+    "printed_grade_label": "小学4年",
+    "grade_confidence": 0.98,
     "warnings": []
   },
   "pages": [
     {
-      "source_id": "question-paper",
+      "source_id": "opaque-source-id",
       "page_number": 1,
-      "name_region": {"x": 720, "y": 20, "width": 240, "height": 90},
-      "student_number_region": null,
-      "questions": [
-        {
-          "source_key": "page1-q1",
-          "display_label": "問1",
-          "question_text": "次の漢字の読みを書きなさい。",
-          "question_type": "exact_short_text",
-          "question_region": {"x": 50, "y": 140, "width": 900, "height": 120},
-          "answer_region": {"x": 620, "y": 220, "width": 300, "height": 90},
-          "expected_answer": "おおきい",
-          "answer_provenance": "provided_model_answer",
-          "answer_source": {
-            "source_id": "model-answer-paper",
-            "page_number": 1,
-            "region": {"x": 620, "y": 220, "width": 300, "height": 90}
-          },
-          "accepted_variants": [],
-          "suggested_points_milli": 1000,
-          "allow_non_kanji_suggestion": true,
-          "requires_teacher_answer": false,
-          "confidence": 0.91,
-          "warnings": []
-        }
-      ]
+      "detected_answer_slot_count": 10,
+      "questions": []
     }
-  ],
-  "global_warnings": []
+  ]
 }
 ```
 
-Validation:
+When correction is required, the same schema instead returns:
+
+```json
+{
+  "schema_version": "template_extract_v5",
+  "request_key": "template_01J...",
+  "action": "rotate",
+  "orientation": {
+    "pages": [
+      {
+        "page_id": "opaque-page-1",
+        "clockwise_degrees_to_upright": 90,
+        "confidence": 0.98
+      }
+    ]
+  },
+  "metadata": null,
+  "pages": []
+}
+```
+
+Validation applies `additionalProperties: false` to every object and enforces:
 
 - exact schema version;
-- all required fields;
-- unique source keys;
-- finite coordinates within 0–1,000;
-- positive regions;
-- page exists;
+- exact request key and every supplied page ID exactly once;
+- enum-only action and degrees;
+- a `rotate` response contains at least one non-zero turn, null metadata, and
+  no extraction pages;
+- an `extract` response contains only zero turns, non-null metadata, and
+  extraction coverage for every supplied page;
+- metadata contains only printed test name, printed grade, grade confidence,
+  and warnings—never subject, category, test type, answer style, split, or
+  variation output;
+- unique source keys and valid source/page references;
+- physical answer-slot and question counts agree;
 - score integer within configured range;
 - strings within length limits;
-- enum-only types;
-- no additional properties;
-- output does not publish directly.
-- `provided_model_answer` provenance must reference a source explicitly marked
-  `contains_model_answers` or `separate_answer_key`; a
-  `contains_non_model_answers` source is rejected as answer authority;
-- an AI-solved comparison can never overwrite `expected_answer` when provenance is `provided_model_answer`.
+- established answer-provenance, repeated-label, placeholder, and review
+  invariants still pass;
+- output can create only a canonical draft and never publish directly.
+
+Provider JSON Schema conditionals are not trusted for cross-field behavior;
+the host performs these semantic checks. Rotation content and extraction
+content are never accepted together.
 
 ### 6.2 Grading schema shape
 
 ```json
 {
-  "schema_version": "answer_transcribe_grade_v1",
+  "schema_version": "submission_analysis_v2",
   "request_key": "grade_01J7ABC...",
+  "identity": {
+    "transcribed_name": "大木 太郎",
+    "transcribed_student_number": "A0123",
+    "legibility": "clear",
+    "confidence": 0.96,
+    "unexpected_content": false
+  },
   "results": [
     {
       "question_id": "01J7Q...",
+      "evidence_media_index": 0,
       "transcription": "かんじ",
-      "script_observed": ["hiragana"],
       "legibility": "clear",
       "blank": false,
       "proposed_outcome": "incorrect",
       "proposed_points_milli": 0,
-      "kanji_observation": "required_kanji_absent",
-      "reason_code": "kanji_required_not_met",
-      "confidence": 0.97,
-      "review_recommended": false,
-      "bounded_explanation": "The response is phonetic while this item requires Kanji."
+      "confidence": 0.97
     }
   ],
   "missing_question_ids": [],
@@ -376,40 +525,56 @@ Application acceptance requires:
 - provider safety/result state is acceptable;
 - response size below limit.
 
-Invalid output is retried once with a repair request only when safe and cost-effective. Otherwise it enters review; free-form JSON repair by accepting guessed fields is prohibited.
+For answer grading, invalid output is retried once with a repair request only
+when safe and cost-effective. Template generation does not use that repair
+path: its only automatic second call is the corrected-media call after a valid
+`rotate` response. Otherwise it fails safely; free-form JSON repair by accepting
+guessed fields is prohibited.
 
 ## 7. Automatic grading-key generation workflow
 
-1. Teacher drops blank pages, model-answer pages, non-model answered pages,
-   and/or a separate answer key into one upload surface.
-2. Upload starts immediately. Local filename evidence proposes metadata and
-   source roles during a short, visible override window. Each file shows the
-   four teacher-facing choices, including
-   `記入済み答案（AIが正答を作成）`; an uncertain filled paper is never silently
-   promoted to an authoritative model answer.
-3. After the override window, each `(source hash, source role)` pair is compared
-   with published template versions; only the same files with the same answer-
-   authority classifications are an exact match and reusable by default.
-4. Local preprocessing validates and normalizes pages.
-5. Economy generation starts automatically when an approved profile is available; manual editing is the fallback.
-6. Provider adapter sends the normalized source pages required for extraction, with explicit source roles.
-7. Structured response is parsed into a separate `generation_proposal`.
-8. Validator flags missing answers, source-mapping conflicts,
-   supplied-vs-solved disagreements, non-model answers incorrectly carrying
-   authoritative provenance, suspicious point totals, unsupported types, and
-   low confidence.
-9. The editor opens on blocking exceptions. The teacher can atomically verify all non-blocking proposals, while unsafe proposals remain untouched.
-10. Publish validation requires teacher verification for every question and one explicit publication action.
-11. Published version gets a canonical content hash.
-12. Provider working files and raw responses are removed under their retention classes.
+1. Teacher selects test type and subject. `その他` additionally requires
+   `通常` or `穴埋め`; grade is not requested yet.
+2. The UI enables upload and accepts one source PDF. The host verifies the
+   finalized upload, MIME type, hash, and page count.
+3. The local planner rejects invalid STEP counts before cost reservation, then
+   persists one immutable unit per HOP page, two-page STEP variation, or
+   whole-document class-placement/Other test.
+4. The plan and expected unit count are shown to the teacher. Generation queues
+   one durable `gemini_template_generation_unit` job per unit.
+5. Each job creates a bounded derived source, builds the server-selected prompt,
+   and makes one orientation-gated extraction call.
+6. An upright result extracts immediately. A valid rotation-only result is
+   applied locally and receives exactly one corrected-media call. A second
+   rotation request or invalid cross-field response fails the unit.
+7. The host validates question structure and answer provenance and parses
+   filename grade locally. It reconciles filename and printed-grade evidence,
+   then requires a resolved grade before computing the immutable HOP, STEP, or
+   class-placement name from trusted subject and split metadata. The AI-read
+   printed name is provenance/reference only for these types. Other alone uses
+   its normalized printed name as an editable proposed final name. The host
+   stores only a canonical draft plus provenance—not chain-of-thought or
+   unrestricted provider prose.
+8. All units must succeed before the batch reaches final check. No partial HOP
+   or STEP pack is committed.
+9. The teacher resolves missing/conflicting grade evidence first. HOP, STEP,
+   and class-placement names are then displayed read-only; the printed title is
+   reference evidence only. Only Other permits resolving or editing the final
+   name, including duplicate-name conflicts. Test type, subject, answer style,
+   page range, prompt system, HOP unit sequence, STEP set/variation, and every
+   known-type name remain immutable.
+10. One idempotent transaction creates an independent draft template/version,
+    question IDs, accepted answers, source attachment, and profile/provenance
+    snapshot for every unit.
+11. The normal editor opens for question-level verification. Publication still
+    requires the established explicit teacher action and immutable content hash.
+12. Provider working files and raw responses are removed under their retention
+    classes; source/derived hashes and safe audit fields remain.
 
-For blank and `contains_non_model_answers` sources, extraction may propose a
-solved answer and the UI says “AI proposal—verify before publishing.” For a
-non-model answered source, the prompt and validator additionally ensure the
-written response is not copied as authority. For sources marked as containing
-model answers, the UI says “Source answer—verify transcription,” shows source
-provenance, and never relabels an independent solution as supplied. A bulk
-“approve all” action requires confirmation and is audited.
+The call-count invariant is one extraction request per unit when upright and
+exactly two only when the first valid response requests local quarter-turn
+correction. There is no preflight task, AI split correction, AI STEP-variation
+detection, separate naming request, or separate grade request.
 
 ## 8. Japanese normalization and Kanji policy
 
@@ -443,7 +608,24 @@ It MUST NOT by default:
 
 Each relaxation is explicit in the accepted answer/rubric.
 
-### 8.2 Kanji detection
+### 8.2 Complete and order-insensitive answers
+
+For `requires_complete_answer = true`, a structurally valid partial result is
+coerced locally to zero points and `incorrect`; the review recommendation is
+retained. Unreadable, cropped, or ambiguous evidence remains review-required
+instead of being converted to an ordinary incorrect result. This postcondition
+applies to deterministic rubric aggregation and AI-rubric proposals, so a
+provider cannot award partial credit contrary to the published template.
+
+For `answer_order_insensitive = true`, the local rule engine splits the
+teacher's accepted answer and transcription only at explicit separators:
+`、`, comma (including full-width), slash (including full-width), semicolon
+(including full-width), `・`, or newline. It normalizes each component with the
+ordinary Japanese comparison rules, preserves duplicate counts, and compares
+the resulting multisets. Ordinary spaces do not create components. The flag
+does not relax missing, extra, or misspelled components.
+
+### 8.3 Kanji detection
 
 The rule engine detects Han-script code points in canonical and submitted transcription, while considering Japanese iteration marks and configured accepted strings. The image model also reports observed script because OCR transcription can itself be uncertain.
 
@@ -459,7 +641,7 @@ The model's statement that “the meaning is correct” cannot override `not_met
 
 For `allow_non_kanji = true`, the absence of Kanji is not itself an error. The response must still match an accepted phonetic variant or rubric; the checkbox does not make every non-Kanji synonym correct.
 
-### 8.3 Numbers and symbols
+### 8.4 Numbers and symbols
 
 Numeric graders use an explicit question configuration:
 
@@ -537,16 +719,25 @@ Before the school-specific validation set reaches the required sample and precis
 
 ### 10.1 Method selection
 
-| Question type | Preferred method | AI role |
+The normal editor default for every supported question type is `ai_rubric`.
+This keeps initial setup to one understandable choice: Gemini reads the answer
+and proposes the judgment. A teacher can opt an individual question into a
+stricter local preset when its answer format supports it:
+
+| Teacher-facing preset | Stored method | Typical use |
 |---|---|---|
-| Multiple choice/bubble | local mark detection + rule | adjudicate unclear marks only |
-| Boolean | local mark/text comparison | transcription fallback |
-| Numeric | AI transcription + local numeric parser | transcribe handwriting |
-| Exact short text | AI transcription + local variant/Kanji rule | transcribe |
-| Semantic short text | AI transcription and rubric proposal + local constraints | evaluate meaning |
-| Multi-part | separate configured sub-results | transcribe/evaluate each |
-| Subjective/essay | manual | optional summary, never auto-final |
-| Unsupported layout | manual | none |
+| `AIで判定（おすすめ）` | `ai_rubric` | default for choice, numeric, short-answer, multi-part, and descriptive questions |
+| `完全一致・登録した別表記で判定` | `transcribe_then_rules` + exact-text type | fixed words, Kanji, and allowlisted variants |
+| `数値として判定` | `transcribe_then_rules` + numeric type | numeric answers with an explicit policy |
+| `選択肢として判定` | `transcribe_then_rules` + choice type | fixed option labels |
+| `先生が採点` | `manual` | unsupported or deliberately manual questions |
+
+AI-rubric results still pass local score/point-policy checks. Clear valid results
+at or above the confidence threshold can proceed to finalization review without
+per-question intervention. Partial, ambiguous, unreadable, conflicting,
+low-confidence, or explicitly always-review results enter the question-review
+queue. The teacher still performs the final submission finalization; the system
+never auto-finalizes a paper.
 
 ### 10.2 Deterministic evaluator precedence
 
@@ -600,7 +791,52 @@ A model or prompt change disables auto-finalization until regression validation 
 
 ## 11. Provider dispatch and batching
 
-### 11.1 Direct Gemini Batch API aggregation
+### 11.1 Current initial-grading page chunks
+
+Pipeline `gemini-submission-analysis-page-chunks-v5` orders normalized
+submission pages by their durable ordinal, then packs consecutive pages into
+deterministic chunks. The first chunk uses `submission_analysis_v2` to return
+the page-1 identity component and grading results in one response. Later chunks
+must return `identity=null`. For every question in a chunk, Gemini reads the
+original page pixels and returns the visible transcription, proposed outcome,
+and points together; there is no second provider call that grades a serialized
+OCR result. The host narrowly reconciles a false `incorrect` proposal when a
+clear AI-rubric transcription and accepted answer differ only by CR/LF visual
+wrapping, without broadening ordinary spaces or order-insensitive component
+rules. Each chunk contains no more than 32 media parts.
+Its raw media bytes are bounded by the smallest of:
+
+- the worker/profile-configured media limit;
+- 12 MiB; and
+- the dynamic raw budget obtained after subtracting the UTF-8 system
+  instruction, user instruction, response schema, and a 1 MiB JSON envelope
+  reserve from the Gemini client's 18 MiB serialized-request ceiling, then
+  accounting for base64 expansion.
+
+The host also rejects more than 300 questions, a system instruction over 20,000
+characters, a generated user instruction over 100,000 characters, an overhead
+that exhausts the serialized budget, or a single normalized page that cannot
+fit the effective chunk limit. These checks occur locally before page bytes are
+read for provider dispatch, so an oversized paper cannot become an accidental
+partial grading request.
+
+Each chunk has its own immutable manifest hash and durable `AiRequest`. Direct,
+retry, and retained legacy Batch/expedite continuations reuse completed chunks
+idempotently. The host creates exactly one `GradingRun` only after every chunk
+has a validated terminal result, and aggregates ordered request IDs, hashes,
+tokens, and cost once. A question missing from a chunk is neutral because its
+answer may appear elsewhere. Exactly one observation across all chunks is used;
+two or more observations become a zero-point manual-review proposal with reason
+`ai_chunk_observation_conflict`, never a last-response-wins decision.
+
+The identity component is independently validated and locally roster-matched.
+It is never allowed to taint a valid grading component, and a valid identity is
+retained when grading validation fails. An unassigned completed run is stored
+as non-current `awaiting_identity`; teacher assignment/unidentified activation
+does not repeat the provider request. Name-only v1 requests and v1 grading
+responses remain readable for legacy/fallback work.
+
+### 11.2 Direct Gemini Batch API aggregation
 
 Direct Gemini economy requests wait for the earliest of:
 
@@ -622,16 +858,18 @@ Compatibility key includes:
 
 The direct Gemini assembler uses JSONL file input for multimodal production batches. Every line has a globally unique stable request key. Referenced media is uploaded immediately before batch creation so the 48-hour Files API lifetime is not wasted.
 
-### 11.2 Direct Gemini size guardrails
+### 11.3 Direct Gemini size guardrails
 
 - Inline batches may be used only for small text-only synthetic tests under 20 MB.
 - JSONL input stays below 2 GB with a lower application limit, recommended 1 GB.
-- Individual PDFs stay below 50 MB/1,000 pages; Ooki Grader normally uses smaller crops.
+- Legacy individual PDFs stay below their provider limit; current initial
+  grading instead uses the stricter normalized-page chunk bounds in section
+  11.1 and does not create answer crops.
 - Track total provider file usage and reserve at least 20% of the documented 20 GB project limit.
 - Stop assembling when output-size/token estimates approach schema/model limits.
 - Split large sessions into several batches so one error does not block all work.
 
-### 11.3 Direct Gemini non-idempotent batch creation
+### 11.4 Direct Gemini non-idempotent batch creation
 
 Google documentation states that creating a Gemini batch is not idempotent. The crash window is managed as follows:
 
@@ -648,7 +886,7 @@ Google documentation states that creating a Gemini batch is not idempotent. The 
 
 The provider operation ID is the authoritative remote identity once known.
 
-### 11.4 Direct Gemini polling and completion
+### 11.5 Direct Gemini polling and completion
 
 Recommended polling:
 
@@ -671,7 +909,7 @@ On terminal success:
 - explicitly delete provider media, JSONL, and output resources when permitted;
 - record cleanup result and rely on provider expiry only as fallback.
 
-### 11.5 OpenRouter queued dispatch
+### 11.6 OpenRouter queued dispatch
 
 As of the verification date, OpenRouter's official documentation does not expose a general discounted asynchronous batch endpoint for multimodal chat completions. Ooki Grader therefore uses individual non-streaming requests managed by its durable queue.
 
@@ -702,12 +940,13 @@ The dispatcher:
 
 OpenRouter model discovery and endpoint data may populate choices and current price estimates, but the user can activate only a model that passes the Ooki accuracy suite.
 
-### 11.6 Current dispatch priority
+### 11.7 Current dispatch priority
 
 The current UI exposes no expedite, priority, economy, or Batch choice. Every
-request enters the same bounded durable queue, uses the active evaluated task
-profile, remains subject to rate/budget limits, and never bypasses teacher
-review policy.
+request enters the same bounded durable queue, uses the active eligible task
+profile (exact-current `capability_passed` Gemini or separately evaluated
+advanced profile), remains subject to rate/budget limits, and never bypasses
+teacher review policy.
 
 ## 12. Retries, circuit breaking, and error classes
 
@@ -719,6 +958,8 @@ review policy.
 | Provider transient | 429, 5xx, timeout | bounded exponential retry with idempotent local settlement; no automatic provider switch |
 | Safety blocked | provider safety finish | teacher review/manual grade; no prompt weakening automatically |
 | Output invalid | malformed/missing IDs, points outside range | one bounded repair/retry then review |
+| Template orientation correction | valid first `rotate` action | rotate a derived copy locally and make one corrected-media request |
+| Template orientation retry exhausted | second `rotate` action | block; teacher corrects or re-uploads source; no third call |
 | File expired | direct Gemini file gone before use | re-upload from local retained artifact if still permitted |
 | Budget blocked | daily/monthly cap | durable blocked state until reset/override |
 
@@ -752,16 +993,26 @@ This is not a quote. Actual visual tokens, prompt size, thinking tokens, retries
 
 ### 13.3 Cost controls
 
-- use only an explicitly active standard-request profile that meets the accuracy gate;
+- use only an explicitly active standard-request profile: the exact-current
+  `capability_passed` Gemini revision selected by the release gate, or a
+  separately evaluated advanced revision;
 - for OpenRouter, select the least expensive profile that has already met the accuracy gate;
-- send normalized complete pages and internally generated detail views; require no teacher-drawn boxes or privacy crops;
+- send only the normalized complete pages in the host-planned unit; require no
+  teacher-drawn boxes, privacy crops, or reconciliation detail-view calls;
 - compact canonical rubric;
-- one grading request per submission where accuracy permits;
+- one or more deterministic page-chunk requests per submission, never one
+  provider request per question and never one unbounded whole-paper request;
 - deterministic local evaluation;
 - no web grounding/tools;
 - bounded output schema and explanation length;
 - no blind retries;
 - deduplicate identical work by input manifest hash;
+- split HOP/STEP locally before provider work and reserve only the planned unit
+  count;
+- use one template-extraction call per upright unit and at most one additional
+  corrected-media call after a valid rotation response;
+- combine orientation, printed name, printed grade, and extraction in the v5
+  contract; never issue separate classification/preflight requests;
 - warning/hard budgets;
 - cost dashboard by provider, model, task, session, and strategy;
 - optional non-student template caching only after measured benefit; never cache student content explicitly in v1.
@@ -786,9 +1037,22 @@ Rules:
 - no provider tools, web grounding, model tuning, or stateful conversation API;
 - raw provider responses follow a seven-day encrypted diagnostic retention by default and are minimized; accepted structured fields live in domain records.
 
+Local managed-scan retention is separate from provider cleanup. Its age/quota
+manifest covers ordered source-page PDFs, the assembled submission PDF,
+normalized pages, thumbnails, and grading image evidence. On completion the
+host releases their live file references and records `scan_deleted`, but keeps
+ordered page ordinals and hashes, accepted structured transcriptions, grading
+runs/results/revisions, exact totals, audit history, and generated reports.
+Content-addressed bytes shared by a still-live reference are retained until the
+last reference becomes eligible.
+
 ## 15. Evaluation and model-change gate
 
-A provider, model, model alias target, OpenRouter routing policy, prompt, schema, preprocessing, normalization, or threshold change creates a new pipeline candidate. It cannot become production-active until:
+Formal release qualification remains separate from routine Gemini credential
+setup. A provider, model, model alias target, OpenRouter routing policy, prompt,
+schema, preprocessing, normalization, or threshold change creates a release
+pipeline candidate. Before shipping that candidate as a checked-in default or
+selecting it through the advanced/manual path:
 
 1. capability tests pass;
 2. golden-set regression runs offline or in an authorized paid test project;
@@ -797,9 +1061,24 @@ A provider, model, model alias target, OpenRouter routing policy, prompt, schema
 5. teacher reviewers assess a sample blind to model version;
 6. safety/prompt-injection tests pass;
 7. an administrator/developer signs the evaluation record;
-8. auto-finalization is disabled until the new version is explicitly promoted.
+8. auto-finalization remains disabled.
 
-Rollback switches new jobs to the previous approved configuration. Existing jobs remain tied to their original configuration unless cancelled/requeued with an audit event.
+For the checked-in Gemini default, the school administrator does not repeat
+golden-set entry, pilot approval, or four manual activations. Full candidate-key
+capability success atomically enables only advisory work on the exact current
+bundle. Template publication, student assignment, and result finalization stay
+teacher-gated. Startup, and a successful manual connection test, reconcile
+active Gemini profiles after prompt/schema/hash bumps. The v2/v5
+template-extraction bundle is a breaking profile change for release evidence, so former
+v1/v4 evaluation is not inherited; the release suite is rerun before shipping.
+
+Rollback first disables new template generation while keeping durable batches
+and source files intact. Existing jobs remain tied to their immutable profile.
+A previous prompt profile is not compatible with the new creation path;
+binary/schema rollback uses the verified pre-migration backup, not an in-place
+downgrade or deletion of additive records. OpenRouter and backward-compatible
+records retain the advanced/manual evaluation, approval, activation, and
+rollback semantics.
 
 ## 16. Known limitations presented to users
 
@@ -808,6 +1087,10 @@ Rollback switches new jobs to the previous approved configuration. Existing jobs
 - Answer-key generation can solve a question incorrectly.
 - Semantic equivalence is subjective.
 - A Japanese name may have uncommon readings/spellings.
+- Scanner order is authoritative for ordered intake. A later page from another
+  student is undetectable when it occupies the correct template role and has no
+  visible identifier; every student's pages must therefore be scanned
+  consecutively.
 - Standard provider turnaround depends on the active model, quota, route, and queue depth.
 - OpenRouter queued processing has no claimed Batch API discount and depends on the chosen endpoint's rate/availability.
 - An external provider processes the configured image/context input.

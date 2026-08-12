@@ -114,6 +114,7 @@ internal static class ResultReportSourceLoader
             submission.AssignedStudent.DisplayName,
             submission.AssignedStudent.StudentNumber,
             submission.TestSession.TitleOverride
+                ?? submission.TestSession.TemplateTitleSnapshot
                 ?? version.TestTemplate.Title,
             submission.TestSession.TestDate,
             version.VersionNumber,

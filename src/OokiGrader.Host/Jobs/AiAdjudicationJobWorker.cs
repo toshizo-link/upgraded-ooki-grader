@@ -9,6 +9,7 @@ using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Grading;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Domain.Grading;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using DomainQuestionDefinition =
@@ -27,7 +28,7 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
     public const string JobType = "gemini_answer_adjudication";
     public const int JobSchemaVersion = 1;
     public const string ModelId = AiProviderRuntime.GeminiModel;
-    public const string PipelineVersion = "gemini-answer-adjudication-full-page-v2";
+    public const string PipelineVersion = "gemini-answer-adjudication-full-page-v3";
 
     private const int MaximumStoredResponseCharacters = 100_000;
     private static readonly JsonSerializerOptions PayloadSerializerOptions =
@@ -1086,9 +1087,11 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
     {
         if (profile.TaskType != AiTaskTypes.Adjudication
             || !profile.Active
-            || profile.ApprovalState is not (
-                "pilot_approved" or "production_approved")
-            || string.IsNullOrWhiteSpace(profile.AccuracyEvaluationId)
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
+            || (profile.ApprovalState is
+                    "pilot_approved" or "production_approved"
+                && string.IsNullOrWhiteSpace(profile.AccuracyEvaluationId))
             || !AiProviderCatalog.IsSupportedProvider(
                 profile.AiConnection.Provider)
             || profile.ModelId != profile.AiConnection.ModelId
@@ -1177,6 +1180,8 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
             question.MaxPointsMilli,
             question.PointIncrementMilli,
             question.AllowNonKanji,
+            question.RequiresCompleteAnswer,
+            question.AnswerOrderInsensitive,
             question.RubricText,
             question.AcceptedAnswers
                 .OrderBy(item => item.Id, StringComparer.Ordinal)
@@ -1290,7 +1295,13 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
             student identity. Do not assume the first grader was correct; it is
             intentionally omitted. Transcribe exactly, preserving Japanese script,
             and grade only against the teacher-supplied rubric. Return this one
-            question either once in results or once in missing_question_ids.
+            question either once in results or once in missing_question_ids. When
+            requires_complete_answer is true, award either zero or the full
+            maximum; do not turn genuine unreadable or ambiguous evidence into an
+            incorrect result. When answer_order_insensitive is true, compare the
+            complete multiset separated by Japanese/ASCII commas, slashes,
+            semicolons, middle dots, or line breaks. Duplicate counts matter and
+            no component may be omitted.
 
             """
             + JsonSerializer.Serialize(new
@@ -1320,6 +1331,10 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
                             point_increment_milli =
                                 question.PointIncrementMilli,
                             allow_non_kanji = question.AllowNonKanji,
+                            requires_complete_answer =
+                                question.RequiresCompleteAnswer,
+                            answer_order_insensitive =
+                                question.AnswerOrderInsensitive,
                             rubric_text = question.RubricText,
                             accepted_answers = question.AcceptedAnswers,
                         },
@@ -1887,6 +1902,8 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
         long MaximumPointsMilli,
         long PointIncrementMilli,
         bool AllowNonKanji,
+        bool RequiresCompleteAnswer,
+        bool AnswerOrderInsensitive,
         string? RubricText,
         IReadOnlyList<string> AcceptedAnswers,
         DomainQuestionDefinition Definition);
