@@ -39,3 +39,7 @@ tmp/handwritten-exam-fixtures/*.txt
 tmp/handwritten-exam-fixtures/*.csv
 tmp/japanese-handwriting-fixtures/*.jpg
 tmp/japanese-handwriting-fixtures/*.json
+
+# Locally generated Windows host installation media archives exceed GitHub's file limit.
+output/windows/host-install-media/**/*.zip
+output/windows/host-install-media/**/*.msi
