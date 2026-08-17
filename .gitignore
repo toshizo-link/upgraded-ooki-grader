@@ -27,6 +27,7 @@
 .env.*
 !.env.example
 .playwright-cli/
+.tools/
 
 # Operating system
 .DS_Store

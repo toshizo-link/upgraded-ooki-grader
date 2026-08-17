@@ -404,6 +404,26 @@ public sealed class WindowsInstallerScriptTests
     }
 
     [Fact]
+    public void PreflightAllowsFirmwareReservedMemoryOnSixteenGibHosts()
+    {
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+
+        Assert.Contains(
+            "Get-CimInstance Win32_PhysicalMemory",
+            preflight,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$installedMemoryBytes -ge 16GB",
+            preflight,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$computer.TotalPhysicalMemory -ge 16GB",
+            preflight,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UpgradeRequiresBackupAndDoesNotRestoreLiveData()
     {
         var script = ReadInstallerFile("Upgrade-OokiGrader.ps1");

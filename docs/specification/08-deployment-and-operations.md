@@ -41,7 +41,7 @@ Containers, WSL, Kubernetes, public cloud hosting, and peer database clients are
 |---|---|---|
 | OS | Windows 11 Pro, current supported release | Windows 11 Pro |
 | CPU | 8 modern physical cores / 16 threads | 4 cores / 8 threads |
-| RAM | 32 GB | 16 GB |
+| RAM | 32 GiB installed | 16 GiB installed; firmware-reserved memory is allowed |
 | Application/system SSD | 256 GB+ NVMe | 128 GB free-enough system disk |
 | Data SSD | 512 GB+ enterprise/quality NVMe or SATA SSD | 256 GB with verified capacity model |
 | Managed scan quota | 150 GiB | 150 GiB fixed |
