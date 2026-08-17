@@ -81,18 +81,55 @@ try {
     $certificate.Dispose()
 }
 
-$safeDnsName = $DnsName -replace '[^A-Za-z0-9.-]', '-'
-if ($safeDnsName.Length -gt 64) {
-    $safeDnsName = $safeDnsName.Substring(0, 64)
+function Get-OokiPeerPackageTextSha256 {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Value
+    )
+
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Value)
+        return ([BitConverter]::ToString(
+            $algorithm.ComputeHash($bytes))).Replace(
+                '-', '').ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
 }
-$safeHostAddress = $HostIpAddress.Replace('.', '-')
-$packageName = 'OokiGrader-Client-Setup-{0}-{1}-p{2}-{3}' -f `
-    $safeDnsName,
-    $safeHostAddress,
-    $Endpoint.Port,
-    $normalizedExpected.Substring(0, 12).ToLowerInvariant()
-$packagePath = Join-Path $output $packageName
+
+$trustScriptSource = Join-Path $PSScriptRoot `
+    'Install-OokiGraderPeerTrust.ps1'
+$moduleSource = Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1'
+foreach ($requiredSource in @($trustScriptSource, $moduleSource)) {
+    if (-not [IO.File]::Exists($requiredSource)) {
+        throw 'A required peer trust installer component is missing.'
+    }
+}
+$trustScriptSha256 = (Get-FileHash -LiteralPath $trustScriptSource `
+    -Algorithm SHA256).Hash.ToLowerInvariant()
+$moduleSha256 = (Get-FileHash -LiteralPath $moduleSource `
+    -Algorithm SHA256).Hash.ToLowerInvariant()
+$installerSourceIdentity = @(
+    "Install-OokiGraderPeerTrust.ps1=$trustScriptSha256",
+    "OokiGrader.Windows.psm1=$moduleSha256"
+) -join "`n"
+$installerSourceSha256 = Get-OokiPeerPackageTextSha256 -Value (
+    $installerSourceIdentity + "`n")
+
 $canonicalEndpoint = $Endpoint.GetLeftPart([UriPartial]::Authority) + '/'
+$packageIdentity = @(
+    'schema=ooki-peer-trust-package-identity/v1',
+    "dnsName=$($DnsName.ToLowerInvariant())",
+    "hostIpAddress=$($parsedHostAddress.ToString())",
+    "endpoint=$($canonicalEndpoint.ToLowerInvariant())",
+    "caThumbprint=$normalizedExpected",
+    "installerSourceSha256=$installerSourceSha256"
+) -join "`n"
+$packageIdentitySha256 = Get-OokiPeerPackageTextSha256 -Value (
+    $packageIdentity + "`n")
+$packageName = "OokiGrader-Client-Setup-$packageIdentitySha256"
+$packagePath = Join-Path $output $packageName
 if ([IO.File]::Exists($packagePath)) {
     throw 'The peer trust package target is occupied by a file.'
 }
@@ -121,6 +158,12 @@ if ([IO.Directory]::Exists($packagePath)) {
             [StringComparison]::Ordinal) -or
         -not ([string] $existingMetadata.endpoint).Equals(
             $canonicalEndpoint,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string] $existingMetadata.installerSourceSha256).Equals(
+            $installerSourceSha256,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string] $existingMetadata.packageIdentitySha256).Equals(
+            $packageIdentitySha256,
             [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The existing immutable peer trust package does not match this installation.'
     }
@@ -131,19 +174,12 @@ if ([IO.Directory]::Exists($packagePath)) {
         readinessUri = [string] $existingMetadata.readinessUri
         caThumbprint = $normalizedExpected
         hostIpAddress = $HostIpAddress
+        installerSourceSha256 = $installerSourceSha256
+        packageIdentitySha256 = $packageIdentitySha256
         containsPrivateKey = $false
         classroomEntryPoint = 'Install-On-This-PC.cmd'
     } | ConvertTo-Json -Depth 6
     return
-}
-
-$trustScriptSource = Join-Path $PSScriptRoot `
-    'Install-OokiGraderPeerTrust.ps1'
-$moduleSource = Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1'
-foreach ($requiredSource in @($trustScriptSource, $moduleSource)) {
-    if (-not [IO.File]::Exists($requiredSource)) {
-        throw 'A required peer trust installer component is missing.'
-    }
 }
 
 if (-not $PSCmdlet.ShouldProcess(
@@ -154,6 +190,8 @@ if (-not $PSCmdlet.ShouldProcess(
         packagePath = $packagePath
         endpoint = $Endpoint.AbsoluteUri
         caThumbprint = $normalizedExpected
+        installerSourceSha256 = $installerSourceSha256
+        packageIdentitySha256 = $packageIdentitySha256
         containsPrivateKey = $false
     } | ConvertTo-Json -Depth 5
     return
@@ -174,6 +212,20 @@ try {
         $moduleSource,
         (Join-Path $staging 'OokiGrader.Windows.psm1'),
         $false)
+    $packagedTrustScriptSha256 = (Get-FileHash -LiteralPath (
+        Join-Path $staging 'Install-OokiGraderPeerTrust.ps1') `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $packagedModuleSha256 = (Get-FileHash -LiteralPath (
+        Join-Path $staging 'OokiGrader.Windows.psm1') `
+        -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not $packagedTrustScriptSha256.Equals(
+        $trustScriptSha256,
+        [StringComparison]::OrdinalIgnoreCase) -or
+        -not $packagedModuleSha256.Equals(
+            $moduleSha256,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'A peer trust installer source changed while the immutable package was being created.'
+    }
 
     $readyUri = [Uri]::new(
         [Uri] $canonicalEndpoint,
@@ -190,6 +242,12 @@ try {
         caCertificateSha256 = (
             Get-FileHash -LiteralPath $packagedCaPath `
                 -Algorithm SHA256).Hash.ToLowerInvariant()
+        installerSourceSha256 = $installerSourceSha256
+        installerSources = [ordered]@{
+            installPeerTrustSha256 = $packagedTrustScriptSha256
+            windowsModuleSha256 = $packagedModuleSha256
+        }
+        packageIdentitySha256 = $packageIdentitySha256
         containsPrivateKey = $false
         hostsEntryManaged = $true
         createdAt = [DateTimeOffset]::UtcNow.ToString('O')
@@ -207,7 +265,7 @@ if errorlevel 1 (
   pause
   exit /b 5
 )
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0Install-OokiGraderPeerTrust.ps1" -PackageMode -CreateDesktopShortcut -Confirm:$false
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "%~dp0Install-OokiGraderPeerTrust.ps1" -PackageMode -CreateDesktopShortcut
 if errorlevel 1 (
   echo.
   echo インストールまたは HTTPS 接続確認に失敗しました。表示された内容を技術担当者へお知らせください。
@@ -260,6 +318,8 @@ This folder contains no private key. Never bypass a browser certificate warning.
         readinessUri = $readyUri
         caThumbprint = $normalizedExpected
         hostIpAddress = $HostIpAddress
+        installerSourceSha256 = $installerSourceSha256
+        packageIdentitySha256 = $packageIdentitySha256
         containsPrivateKey = $false
         classroomEntryPoint = 'Install-On-This-PC.cmd'
     } | ConvertTo-Json -Depth 6

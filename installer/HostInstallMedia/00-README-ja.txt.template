@@ -1,0 +1,59 @@
+Ooki Grader @@OOKI_VERSION@@ WindowsホストPC用インストールメディア
+========================================================
+
+このフォルダーを、管理されたUSBメモリーなどでWindowsホストPCへ
+フォルダーごとコピーしてください。
+
+【必須条件】
+1. ネイティブx64の64-bit Windows
+2. ローカル管理者権限
+3. ローカルNTFSのデータ保存先
+4. 使用可能なHTTPSポート、固定IPまたはDHCP予約
+5. 正しい配布物と安全な証明書・パス構成
+
+【推奨構成（満たさなくてもインストールは続行します）】
+- 現行のWindows 11 Pro
+- 16 GiB以上の搭載RAM（32 GiBなら余裕があります）
+- データ保存先に165 GiB以上の空き容量
+
+PowerShell 7.4以降（x64）がない場合、古い場合、またはx86/ARM64版しか
+見つからない場合は、同梱のMicrosoft公式PowerShell @@POWERSHELL_VERSION@@ x64 MSIを
+署名とSHA-256で検証してからインストールまたは更新します。
+
+【インストール開始】
+1. 01-Install-OokiGrader-Host.cmd を右クリックします。
+2. 「管理者として実行」を選びます。
+3. ZIPとPowerShell MSIのSHA-256検査が完了するまで待ちます。
+4. バックアップ保存先を入力します。用意できていない場合はEnterだけを押します。
+5. 画面に表示されるIP、校内CIDR、データ保存先、バックアップ先を確認します。
+6. 内容を確認できた場合だけ、求められた確認語を入力します。
+
+確認語:
+  PRIVATE   信頼できる校内LANである
+  ENCRYPTED バックアップ先が暗号化済みである
+  UNSIGNED  管理された媒体から直接受領した配布物である
+  RESERVED  ホストIPが固定またはDHCP予約済みである
+  INSTALL   表示された全設定でインストールする
+
+【再実行について】
+展開後に中断しても、次回は同じZIPと完全一致する既存パッケージだけを
+安全に再利用します。内容が違う既存フォルダーは上書きしません。
+
+【診断ログ】
+実行ごとのログと成功・失敗結果は次へ保存されます。
+  C:\OokiGrader-Setup\logs\host-install-<版>-<実行ID>.log
+  C:\OokiGrader-Setup\logs\host-install-<版>-<実行ID>.result.json
+PowerShell MSIを実行した場合は、詳細ログも同じ場所へ保存されます。
+  C:\OokiGrader-Setup\logs\host-install-<版>-<実行ID>-powershell-msi.log
+失敗時はこれらのファイルと画面の終了コードを設置担当者へ渡してください。
+
+【正常終了の目印】
+最終結果に次が表示されます。
+  "state": "installed-and-verified"
+
+【注意】
+- 証明書警告を無視して続行しないでください。
+- ZIP、MSI、checksums.txt、media-inventory.jsonを編集しないでください。
+- DLLをZIPから個別に削除しないでください。
+- このメディアが未署名の場合は、管理された媒体での対面設置専用です。
+- 失敗時はファイルを個別修復せず、表示されたエラーを保存してください。

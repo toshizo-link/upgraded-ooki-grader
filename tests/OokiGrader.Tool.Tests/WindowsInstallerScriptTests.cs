@@ -158,7 +158,7 @@ public sealed class WindowsInstallerScriptTests
             module,
             StringComparison.Ordinal);
         Assert.Contains(
-            "-Profile Private",
+            "-Profile $FirewallProfile",
             module,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -404,7 +404,7 @@ public sealed class WindowsInstallerScriptTests
     }
 
     [Fact]
-    public void PreflightAllowsFirmwareReservedMemoryOnSixteenGibHosts()
+    public void PreflightTreatsHostSizingAsNonBlockingRecommendations()
     {
         var preflight = ReadInstallerFile(
             "Test-OokiGraderPreflight.ps1");
@@ -420,6 +420,176 @@ public sealed class WindowsInstallerScriptTests
         Assert.DoesNotContain(
             "$computer.TotalPhysicalMemory -ge 16GB",
             preflight,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "classification = if ($Blocking) { 'requirement' } "
+            + "else { 'recommendation' }",
+            NormalizeScriptWhitespace(preflight),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "recommendationFailures = $recommendationFailures",
+            NormalizeScriptWhitespace(preflight),
+            StringComparison.Ordinal);
+
+        AssertNonBlockingRecommendation(
+            preflight,
+            "windows-supported",
+            "$isWindows11Pro $false");
+        AssertNonBlockingRecommendation(
+            preflight,
+            "memory",
+            "($installedMemoryBytes -ge 16GB) $false");
+        AssertNonBlockingRecommendation(
+            preflight,
+            "data-capacity",
+            "$null -ne $volume -and "
+            + "$volume.SizeRemaining -ge 165GB) $false");
+    }
+
+    [Fact]
+    public void PreflightKeepsRuntimeStorageAndIntegrityChecksBlocking()
+    {
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+
+        AssertBlockingPreflightCheck(
+            preflight,
+            "x64-process",
+            "[Runtime.InteropServices.RuntimeInformation]::"
+            + "ProcessArchitecture -eq "
+            + "[Runtime.InteropServices.Architecture]::X64) $true");
+        Assert.Contains(
+            "[Runtime.InteropServices.RuntimeInformation]::"
+            + "OSArchitecture -eq",
+            preflight,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "[Environment]::Is64BitOperatingSystem",
+            preflight,
+            StringComparison.Ordinal);
+        AssertBlockingPreflightCheck(
+            preflight,
+            "data-volume-ntfs",
+            "$volume.FileSystem -eq 'NTFS') $true");
+        AssertBlockingPreflightCheck(
+            preflight,
+            "data-emergency-reserve",
+            "$volume.SizeRemaining -ge 5GB) $true");
+        AssertBlockingPreflightCheck(
+            preflight,
+            "release-package-integrity",
+            "$packageEvidence.FileCount -gt 0) $true");
+    }
+
+    [Fact]
+    public void OnSiteNetworkDefaultsFollowTheSelectedAdapterAndDomainProfile()
+    {
+        var onSite = ReadInstallerFile(
+            "Install-OokiGraderOnSite.ps1");
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+
+        Assert.Contains(
+            "-Address ([string] $boundHostAddress.IPAddress)",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-PrefixLength ([int] $boundHostAddress.PrefixLength)",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ConvertTo-NetworkCidr -Address $detectedAddress.IPAddress",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$networkProfile.NetworkCategory -notin "
+            + "@( 'Private', 'DomainAuthenticated' )",
+            NormalizeScriptWhitespace(onSite),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if ($networkProfileRequiresPrivateChange) { "
+            + "Set-NetConnectionProfile -InterfaceIndex "
+            + "$boundHostAddress.InterfaceIndex "
+            + "-NetworkCategory Private }",
+            NormalizeScriptWhitespace(onSite),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$networkProfile.NetworkCategory -eq "
+            + "'DomainAuthenticated' ) { 'Domain' } else { 'Private' }",
+            NormalizeScriptWhitespace(onSite),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FirewallProfile = $firewallProfile",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[string] $FirewallProfile = 'Private'",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-FirewallProfile $FirewallProfile",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-Profile $FirewallProfile",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "@('Private', 'DomainAuthenticated')",
+            preflight,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MissingDefenderCmdletRemainsARecommendation()
+    {
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+
+        Assert.Contains(
+            "Get-Command Get-MpComputerStatus",
+            preflight,
+            StringComparison.Ordinal);
+        AssertNonBlockingRecommendation(
+            preflight,
+            "defender-health",
+            "$defender.AntivirusEnabled) $false");
+    }
+
+    [Fact]
+    public void RecommendationFailuresAreReportedWithoutAbortingInstallation()
+    {
+        var preflight = ReadInstallerFile(
+            "Test-OokiGraderPreflight.ps1");
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+        var onSite = ReadInstallerFile(
+            "Install-OokiGraderOnSite.ps1");
+
+        Assert.Contains(
+            "if ($blockingFailures -ne 0)",
+            preflight,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "if ($recommendationFailures -ne 0)",
+            preflight,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if ($preflight.blockingFailures -ne 0)",
+            install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if ($preflight.blockingFailures -ne 0)",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$failedRecommendations",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "インストールは続行します。",
+            onSite,
             StringComparison.Ordinal);
     }
 
@@ -672,7 +842,35 @@ public sealed class WindowsInstallerScriptTests
             setup,
             StringComparison.Ordinal);
         Assert.Contains(
+            "MinVersion=10.0",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
             "MinVersion=10.0.22000",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "GetWindowsVersionEx(WindowsVersion);",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if WindowsVersion.Build < 22000 then",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Windows 11 Pro の現行サポート対象ビルドを推奨します。",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "現在の Windows でもセットアップは続行できます",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "mbInformation, MB_OK",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ArchitecturesAllowed=x64compatible",
             setup,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -835,6 +1033,61 @@ public sealed class WindowsInstallerScriptTests
             RepositoryRoot,
             "installer",
             fileName));
+
+    private static void AssertNonBlockingRecommendation(
+        string preflight,
+        string checkName,
+        string expectedInvocation)
+    {
+        var check = ReadPreflightCheck(preflight, checkName);
+
+        Assert.Contains(
+            expectedInvocation,
+            NormalizeScriptWhitespace(check),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "recommend",
+            check,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AssertBlockingPreflightCheck(
+        string preflight,
+        string checkName,
+        string expectedInvocation)
+    {
+        Assert.Contains(
+            expectedInvocation,
+            NormalizeScriptWhitespace(
+                ReadPreflightCheck(preflight, checkName)),
+            StringComparison.Ordinal);
+    }
+
+    private static string ReadPreflightCheck(
+        string preflight,
+        string checkName)
+    {
+        var marker = $"Add-PreflightCheck '{checkName}'";
+        var start = preflight.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Preflight check '{checkName}' is missing.");
+
+        var end = preflight.IndexOf(
+            "Add-PreflightCheck '",
+            start + marker.Length,
+            StringComparison.Ordinal);
+        return end < 0
+            ? preflight[start..]
+            : preflight[start..end];
+    }
+
+    private static string NormalizeScriptWhitespace(string script) =>
+        string.Join(
+            ' ',
+            script
+                .Replace("`", string.Empty, StringComparison.Ordinal)
+                .Split(
+                    (char[]?) null,
+                    StringSplitOptions.RemoveEmptyEntries));
 
     private static string FindRepositoryRoot()
     {

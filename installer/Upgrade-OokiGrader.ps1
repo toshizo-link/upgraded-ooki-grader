@@ -111,6 +111,14 @@ $configurationPath = Resolve-OokiExactPath `
     -Path ([string] $installation.configurationPath) `
     -Purpose 'Persistent production configuration' `
     -MustExist -PathType File
+$firewallProfile = if (
+    $null -ne $installation.PSObject.Properties['firewallProfile'] -and
+    [string] $installation.firewallProfile -in @('Private', 'Domain')
+) {
+    [string] $installation.firewallProfile
+} else {
+    'Private'
+}
 $content = Join-Path $data 'objects'
 $database = Join-Path $data 'ooki-grader.db'
 $currentTool = Join-Path $currentVersion 'OokiGrader.Tool.exe'
@@ -264,6 +272,7 @@ if ($PSCmdlet.ShouldProcess(
             -HttpsPort ([int] $installation.httpsPort) `
             -CertificatePath ([string] $installation.certificatePath) `
             -ConfigurationPath $configurationPath `
+            -FirewallProfile $firewallProfile `
             -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
             -Confirm:$false | Out-Null
         [pscustomobject]@{

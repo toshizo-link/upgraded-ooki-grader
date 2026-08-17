@@ -22,7 +22,9 @@
 
 ## 1. Deployment objective
 
-A technician installs one dependable Windows 11 host. After commissioning:
+A technician installs one dependable x64 Windows host. A current Windows 11
+Pro release is the recommended host profile, not an installation gate. After
+commissioning:
 
 - staff open one HTTPS URL from any authorized peer;
 - the service starts without an interactive Windows login;
@@ -37,24 +39,30 @@ Containers, WSL, Kubernetes, public cloud hosting, and peer database clients are
 
 ### 2.1 Recommended host
 
-| Component | Recommended | Minimum pilot |
+| Component | Recommended profile | Planning note |
 |---|---|---|
-| OS | Windows 11 Pro, current supported release | Windows 11 Pro |
-| CPU | 8 modern physical cores / 16 threads | 4 cores / 8 threads |
-| RAM | 32 GiB installed | 16 GiB installed; firmware-reserved memory is allowed |
-| Application/system SSD | 256 GB+ NVMe | 128 GB free-enough system disk |
-| Data SSD | 512 GB+ enterprise/quality NVMe or SATA SSD | 256 GB with verified capacity model |
-| Managed scan quota | 150 GiB | 150 GiB fixed |
-| Backup | separate encrypted 512 GB+ destination | separate encrypted destination |
-| Network | wired 1 Gbps | wired 100 Mbps |
-| Power | UPS with USB shutdown support | surge protection |
+| OS | Windows 11 Pro, current supported release | Another supported Windows 10-or-later version or edition does not fail the advisory check; the packaged runtime still requires x64 Windows |
+| CPU | 8 modern physical cores / 16 threads | Fewer cores reduce throughput but do not block installation |
+| RAM | 32 GiB installed; 16 GiB is the recommended baseline | Installation continues below 16 GiB; reduce concurrency and validate the expected workload |
+| Application/system SSD | 256 GB+ NVMe | Size and media class are planning guidance |
+| Data SSD | 512 GB+ enterprise/quality NVMe or SATA SSD, with 165 GiB free | Installation continues below 165 GiB free; monitor capacity and limit intake until adequate space is available |
+| Managed scan quota | 150 GiB | The quota does not guarantee that the physical disk has enough free space |
+| Backup | separate encrypted 512 GB+ destination | Separation and encryption remain security requirements when a backup destination is configured |
+| Network | wired 1 Gbps | A slower link affects throughput but is not a machine-admission gate |
+| Power | UPS with USB shutdown support | Lack of a UPS is recorded as an operational risk |
+
+The Windows 11 Pro profile, 16 GiB RAM baseline, and 165 GiB free-space target
+are recommendations. A failed check for any of those three conditions is
+reported to the technician but does not stop installation. The x64 runtime,
+an NTFS `DataRoot`, an available configured HTTPS port, valid package evidence,
+and the certificate, path, and security invariants remain required.
 
 Why the data disk is larger than 150 GiB:
 
 - originals plus derived images temporarily coexist;
 - the database, templates, reports, temporary work, and logs are outside the managed scan quota;
 - Windows and SQLite need free space;
-- a 5 GiB emergency reserve is mandatory;
+- the 165 GiB recommendation includes a 5 GiB emergency reserve;
 - SSD performance and reliability degrade when nearly full.
 
 RAID is not a backup. If the host uses a single disk, daily verified backup is essential.
@@ -125,7 +133,9 @@ The guided script detects the active private IPv4 address and subnet and asks
 the technician to confirm the data path, a fixed or DHCP-reserved host address,
 the Windows Private network profile, optional encrypted backup path, unsigned
 package custody when applicable, and the final plan. It performs blocking
-release and machine preflight before changing certificates or the service.
+execution, package-integrity, path, port, and security checks plus advisory
+machine-profile checks before changing certificates or the service. Failed
+advisory checks are shown but do not abort installation.
 
 Installs:
 
@@ -198,15 +208,18 @@ The installer checks and records:
 
 Blocking:
 
-- unsupported Windows;
+- Windows older than the executable/runtime baseline, non-x64 Windows, or a non-x64 PowerShell process, because the release payload is x64;
 - non-NTFS data root;
 - data root inside a profile/temp/synchronized cloud folder;
-- insufficient capacity;
+- invalid or unverifiable release-package, signature, or certificate evidence;
 - unresolved prior migration/restore;
 - port conflict without technician resolution.
 
 Warnings:
 
+- Windows version or edition differs from the recommended current Windows 11 Pro profile;
+- less than 16 GiB installed RAM;
+- less than 165 GiB free on the NTFS data volume;
 - no BitLocker;
 - Wi-Fi-only host;
 - no UPS;
@@ -625,7 +638,7 @@ Bundle is encrypted or stored in an administrator-selected protected location an
 
 ## 16. Commissioning acceptance checklist
 
-- [ ] Host meets capacity and has stable LAN identity.
+- [ ] Host recommendations were reviewed, any OS/RAM/capacity warnings were recorded, and LAN identity is stable.
 - [ ] Data root is NTFS, protected, and not shared.
 - [ ] Service starts after reboot without login.
 - [ ] Peer certificate/DNS/browser access works.

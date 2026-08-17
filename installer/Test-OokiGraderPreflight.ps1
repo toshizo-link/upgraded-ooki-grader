@@ -64,6 +64,11 @@ function Add-PreflightCheck {
         name = $Name
         passed = $Passed
         blocking = $Blocking
+        classification = if ($Blocking) {
+            'requirement'
+        } else {
+            'recommendation'
+        }
         detail = $Detail
     })
 }
@@ -79,14 +84,16 @@ if ($null -eq $installedMemoryBytes -or $installedMemoryBytes -le 0) {
 }
 $isWindows11Pro = [Environment]::OSVersion.Version.Build -ge 22000 -and
     $os.Caption -match 'Windows 11 Pro'
-Add-PreflightCheck 'windows-supported' $isWindows11Pro $true `
-    'A supported Windows 11 Pro build is required.'
+Add-PreflightCheck 'windows-supported' $isWindows11Pro $false `
+    'A current, supported Windows 11 Pro build is recommended.'
 Add-PreflightCheck 'x64-process' (
-    [Environment]::Is64BitOperatingSystem -and
-    [Environment]::Is64BitProcess) $true `
-    'A 64-bit Windows installation and PowerShell process are required.'
-Add-PreflightCheck 'memory' ($installedMemoryBytes -ge 16GB) $true `
-    'At least 16 GiB installed RAM is required; firmware-reserved memory is allowed, and 32 GiB is recommended.'
+    [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq
+        [Runtime.InteropServices.Architecture]::X64 -and
+    [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq
+        [Runtime.InteropServices.Architecture]::X64) $true `
+    'An x64 Windows installation and x64 PowerShell process are required.'
+Add-PreflightCheck 'memory' ($installedMemoryBytes -ge 16GB) $false `
+    'At least 16 GiB installed RAM is recommended; firmware-reserved memory is allowed, and 32 GiB is preferred.'
 Add-PreflightCheck 'cpu' ($computer.NumberOfLogicalProcessors -ge 8) $false `
     'Eight logical processors are the pilot minimum.'
 Add-PreflightCheck 'time-service' ($null -ne (Get-Service W32Time `
@@ -100,8 +107,11 @@ Add-PreflightCheck 'data-volume-ntfs' (
     $null -ne $volume -and $volume.FileSystem -eq 'NTFS') $true `
     'The data root must be on NTFS.'
 Add-PreflightCheck 'data-capacity' (
-    $null -ne $volume -and $volume.SizeRemaining -ge 165GB) $true `
-    'At least 165 GiB free is required for the managed quota and reserve.'
+    $null -ne $volume -and $volume.SizeRemaining -ge 165GB) $false `
+    'At least 165 GiB free is recommended for the managed quota and reserve.'
+Add-PreflightCheck 'data-emergency-reserve' (
+    $null -ne $volume -and $volume.SizeRemaining -ge 5GB) $true `
+    'At least 5 GiB free is required for the runtime emergency reserve.'
 
 $bitLocker = Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue
 $bitLockerEnabled = $false
@@ -127,10 +137,10 @@ Add-PreflightCheck 'https-port-available' (
     $foreignListener.Count -eq 0) $true `
     'The HTTPS port must not be owned by another process.'
 $privateProfile = Get-NetConnectionProfile -ErrorAction SilentlyContinue |
-    Where-Object NetworkCategory -eq 'Private' |
+    Where-Object NetworkCategory -in @('Private', 'DomainAuthenticated') |
     Select-Object -First 1
 Add-PreflightCheck 'private-network-profile' ($null -ne $privateProfile) $false `
-    'At least one active network profile should be Private.'
+    'At least one active network profile should be Private or DomainAuthenticated.'
 $privateAddress = Get-NetIPAddress -AddressFamily IPv4 `
     -AddressState Preferred -ErrorAction SilentlyContinue |
     Where-Object {
@@ -174,19 +184,29 @@ if (-not [string]::IsNullOrWhiteSpace($BackupRoot)) {
         'The backup destination must be separate from live data.'
 }
 
-$defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
+$defenderCommand = Get-Command Get-MpComputerStatus `
+    -ErrorAction SilentlyContinue
+$defender = if ($null -eq $defenderCommand) {
+    $null
+} else {
+    Get-MpComputerStatus -ErrorAction SilentlyContinue
+}
 Add-PreflightCheck 'defender-health' (
     $null -ne $defender -and $defender.AntivirusEnabled) $false `
-    'Microsoft Defender or an approved replacement should be active.'
+    'Microsoft Defender or an approved replacement is recommended.'
 
 $blockingFailures = @($checks | Where-Object {
     $_.blocking -and -not $_.passed
+}).Count
+$recommendationFailures = @($checks | Where-Object {
+    -not $_.blocking -and -not $_.passed
 }).Count
 $result = [pscustomobject]@{
     state = if ($blockingFailures -eq 0) { 'ready' } else { 'blocked' }
     checkedAt = [DateTimeOffset]::UtcNow
     osCaption = $os.Caption
     blockingFailures = $blockingFailures
+    recommendationFailures = $recommendationFailures
     checks = $checks
     externalGates = @(
         'Release signing must be completed by the controlled build pipeline.',

@@ -161,13 +161,6 @@ $defaultAddress = if ($null -eq $detectedAddress) {
 } else {
     [string] $detectedAddress.IPAddress
 }
-$defaultSubnet = if ($null -eq $detectedAddress) {
-    $null
-} else {
-    ConvertTo-NetworkCidr -Address $detectedAddress.IPAddress `
-        -PrefixLength $detectedAddress.PrefixLength
-}
-
 if ([string]::IsNullOrWhiteSpace($DataRoot)) {
     $defaultDataRoot = if (Test-Path 'D:\') {
         'D:\OokiGraderData'
@@ -212,7 +205,12 @@ $networkProfile = Get-NetConnectionProfile `
 if ($null -eq $networkProfile) {
     throw 'The active school LAN connection profile could not be identified.'
 }
-if ($networkProfile.NetworkCategory -ne 'Private' -and
+$networkProfileRequiresPrivateChange =
+    $networkProfile.NetworkCategory -notin @(
+        'Private',
+        'DomainAuthenticated'
+    )
+if ($networkProfileRequiresPrivateChange -and
     -not $SchoolNetworkPrivateConfirmed -and
     -not $WhatIfPreference) {
     if ($NonInteractive) {
@@ -225,6 +223,16 @@ if ($networkProfile.NetworkCategory -ne 'Private' -and
         throw 'The school LAN was not confirmed as a trusted Private network.'
     }
     $SchoolNetworkPrivateConfirmed = $true
+}
+$defaultSubnet = ConvertTo-NetworkCidr `
+    -Address ([string] $boundHostAddress.IPAddress) `
+    -PrefixLength ([int] $boundHostAddress.PrefixLength)
+$firewallProfile = if (
+    $networkProfile.NetworkCategory -eq 'DomainAuthenticated'
+) {
+    'Domain'
+} else {
+    'Private'
 }
 if ($null -eq $SchoolSubnet -or $SchoolSubnet.Count -eq 0) {
     if ($NonInteractive -and [string]::IsNullOrWhiteSpace($defaultSubnet)) {
@@ -311,13 +319,19 @@ $origin = if ($HttpsPort -eq 443) {
 } else {
     "https://${DnsName}:${HttpsPort}/"
 }
+$networkSummary = if ($networkProfileRequiresPrivateChange) {
+    "$($networkProfile.NetworkCategory) -> Private"
+} else {
+    [string] $networkProfile.NetworkCategory
+}
 Write-Host ''
 Write-Host 'Ooki Grader 現地セットアップ'
 Write-Host "  Version:       $version"
 Write-Host "  URL:           $origin"
 Write-Host "  Host IP:       $HostIpAddress"
 Write-Host "  Firewall:      $($SchoolSubnet -join ', ')"
-Write-Host "  Network:       $(if ($networkProfile.NetworkCategory -eq 'Private') { 'Private' } else { "$($networkProfile.NetworkCategory) -> Private" })"
+Write-Host "  FW profile:    $firewallProfile"
+Write-Host "  Network:       $networkSummary"
 Write-Host "  Data:          $data"
 Write-Host "  Backup:        $(if ($null -eq $backup) { 'disabled (configure later)' } else { $backup })"
 Write-Host "  Client setup:  $peerOutput"
@@ -344,6 +358,7 @@ if (-not $PSCmdlet.ShouldProcess(
         endpoint = $origin
         hostIpAddress = $HostIpAddress
         schoolSubnet = $SchoolSubnet
+        firewallProfile = $firewallProfile
         dataRoot = $data
         backupRoot = $backup
         peerTrustOutputRoot = $peerOutput
@@ -374,6 +389,15 @@ if ($null -ne $backup) {
 }
 $preflight = & (Join-Path $package `
     'Test-OokiGraderPreflight.ps1') @preflightArguments
+$failedRecommendations = @($preflight.checks | Where-Object {
+    -not $_.blocking -and -not $_.passed
+})
+if ($failedRecommendations.Count -ne 0) {
+    Write-Warning '推奨構成を満たしていない項目があります。インストールは続行します。'
+    foreach ($recommendation in $failedRecommendations) {
+        Write-Warning "$($recommendation.name): $($recommendation.detail)"
+    }
+}
 if ($preflight.blockingFailures -ne 0) {
     $failedChecks = @($preflight.checks | Where-Object {
         $_.blocking -and -not $_.passed
@@ -382,7 +406,7 @@ if ($preflight.blockingFailures -ne 0) {
 }
 Set-OokiManagedHostsEntry -DnsName $DnsName `
     -IpAddress '127.0.0.1' -WhatIf -Confirm:$false | Out-Null
-if ($networkProfile.NetworkCategory -ne 'Private') {
+if ($networkProfileRequiresPrivateChange) {
     Set-NetConnectionProfile -InterfaceIndex `
         $boundHostAddress.InterfaceIndex -NetworkCategory Private
 }
@@ -419,6 +443,7 @@ $installArguments = @{
         $certificateMetadata.hostCertificatePath
     DnsName = $DnsName
     SchoolSubnet = $SchoolSubnet
+    FirewallProfile = $firewallProfile
     InstallRoot = $install
     HttpsPort = $HttpsPort
     ExpectedSignerThumbprint = $ExpectedSignerThumbprint
@@ -497,6 +522,7 @@ $hostShortcut = @(
     hostIpAddress = $HostIpAddress
     hostHostsEntry = $hostHostsEntry
     schoolSubnet = $SchoolSubnet
+    firewallProfile = $firewallProfile
     dataRoot = $data
     backup = if ($null -eq $backup) { 'disabled' } else { 'enabled' }
     backupRoot = $backup

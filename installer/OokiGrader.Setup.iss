@@ -40,7 +40,7 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0.22000
+MinVersion=10.0
 SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
@@ -139,10 +139,12 @@ end;
 
 function GetExecutionPolicy: string;
 begin
-  if AllowUnsignedDevelopmentBuild = 1 then
-    Result := 'Bypass'
-  else
-    Result := 'AllSigned';
+  { The signed Setup container protects the extracted script bytes, and the
+    script revalidates the complete payload and approved signer before any
+    mutation. AllSigned is intentionally not used here: on a clean machine it
+    prompts for an otherwise valid but not-yet-classified publisher, while the
+    installer invokes PowerShell noninteractively. }
+  Result := 'Bypass';
 end;
 
 function GetCommonPowerShellParameters: string;
@@ -236,12 +238,19 @@ procedure InitializeWizard;
 var
   ExistingValue: string;
   DefaultDataRoot: string;
+  WindowsVersion: TWindowsVersion;
 begin
+  GetWindowsVersionEx(WindowsVersion);
+  if WindowsVersion.Build < 22000 then
+    MsgBox(
+      'Windows 11 Pro の現行サポート対象ビルドを推奨します。現在の Windows でもセットアップは続行できますが、性能、安定性、サポート状況を確認してください。',
+      mbInformation, MB_OK);
+
   DataPage := CreateInputDirPage(
     wpSelectDir,
     'データ保存先',
     '生徒情報・答案・AI認証情報を保存する専用フォルダーを指定してください。',
-    'アプリ本体とは別のローカル NTFS ドライブを推奨します。アンインストールしてもこのデータは削除されません。',
+    'ローカル NTFS は必須です。Windows 11 Pro、16 GiB RAM、165 GiB 以上の空きは推奨であり、満たさなくてもセットアップは続行します。アンインストールしてもデータは削除されません。',
     False,
     'OokiGraderData');
   if RegQueryStringValue(HKLM, ProductRegistryKey, 'DataRoot', ExistingValue) then

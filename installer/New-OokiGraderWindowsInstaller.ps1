@@ -68,8 +68,9 @@ if ([string]::IsNullOrWhiteSpace($compilerCandidate)) {
 $compiler = Resolve-OokiExactPath -Path $compilerCandidate `
     -Purpose 'Inno Setup compiler' -MustExist -PathType File
 $compilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler)
-if ($compilerVersion.FileMajorPart -ne 6) {
-    throw 'The Windows installer must be compiled with Inno Setup 6.'
+if ($compilerVersion.FileMajorPart -ne 6 -or
+    $compilerVersion.FileMinorPart -lt 3) {
+    throw 'The Windows installer must be compiled with Inno Setup 6.3 or later because its x64compatible architecture mode is required.'
 }
 $compilerSignature = Get-AuthenticodeSignature -LiteralPath $compiler
 if (-not $AllowUnsignedDevelopmentBuild -and

@@ -46,17 +46,26 @@ flowchart LR
 
 ### 3.1 Host computer
 
-The host MUST be a managed Windows 11 Pro machine with:
+The host MUST be a managed x64 Windows machine supported by the packaged
+runtime. A current supported Windows 11 Pro release is recommended, but its
+edition and build are not an installation gate. The host deployment profile
+includes:
 
 - wired Ethernet and a DHCP reservation or static address;
 - a stable local DNS name, recommended `ooki-grader.<school-lan-domain>`;
 - automatic Windows time synchronization;
 - BitLocker enabled;
-- a dedicated data volume or directory with at least 200 GB usable capacity, plus backup capacity;
-- a UPS strongly recommended;
+- a local NTFS data volume or directory, plus separate backup capacity;
 - Windows Defender and normal security updates;
 - outbound TCP 443 to required Google API endpoints;
 - inbound TCP 443 from approved private subnets only.
+
+The recommended machine profile is Windows 11 Pro, at least 16 GiB installed
+RAM (32 GiB preferred), a dedicated data volume, and at least 165 GiB free on
+that volume. OS edition/build, installed RAM, and free-capacity mismatches are
+reported as advisory findings and MUST NOT abort installation. Lower-capacity
+hosts require workload validation and closer storage monitoring. A UPS remains
+strongly recommended.
 
 The application does not require that a staff user remain logged into Windows.
 

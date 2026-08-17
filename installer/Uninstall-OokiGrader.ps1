@@ -81,8 +81,8 @@ if ($PSCmdlet.ShouldProcess(
                 $recovery,
                 '/inheritance:r',
                 '/grant:r',
-                'SYSTEM:(OI)(CI)F',
-                'BUILTIN\Administrators:(OI)(CI)F'
+                '*S-1-5-18:(OI)(CI)F',
+                '*S-1-5-32-544:(OI)(CI)F'
             )
         if ([IO.Directory]::Exists($archivePath)) {
             throw 'The generated recovery archive path already exists.'
@@ -101,8 +101,25 @@ if ($PSCmdlet.ShouldProcess(
     }
 
     if ($null -ne $service) {
+        $service.Dispose()
         Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
             -ArgumentList @('delete', $ServiceName)
+        $deleteDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+        do {
+            $remainingService = Get-Service -Name $ServiceName `
+                -ErrorAction SilentlyContinue
+            if ($null -eq $remainingService) {
+                break
+            }
+            $remainingService.Dispose()
+            Start-Sleep -Milliseconds 500
+        } while ([DateTimeOffset]::UtcNow -lt $deleteDeadline)
+        $remainingService = Get-Service -Name $ServiceName `
+            -ErrorAction SilentlyContinue
+        if ($null -ne $remainingService) {
+            $remainingService.Dispose()
+            throw 'The service is still marked for deletion after 30 seconds. Close Service Manager and other service handles, then reboot before reinstalling.'
+        }
     }
     $firewall = $existingFirewall
     if ($null -ne $firewall) {

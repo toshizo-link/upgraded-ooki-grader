@@ -565,9 +565,9 @@ function Set-OokiInstallAcl {
                 $root,
                 '/inheritance:r',
                 '/grant:r',
-                'SYSTEM:(OI)(CI)F',
-                'BUILTIN\Administrators:(OI)(CI)F',
-                'BUILTIN\Users:(OI)(CI)RX',
+                '*S-1-5-18:(OI)(CI)F',
+                '*S-1-5-32-544:(OI)(CI)F',
+                '*S-1-5-32-545:(OI)(CI)RX',
                 "NT SERVICE\${ServiceName}:(OI)(CI)RX",
                 '/T',
                 '/C'
@@ -606,8 +606,8 @@ function Set-OokiDataAcl {
                     $directory,
                     '/inheritance:r',
                     '/grant:r',
-                    'SYSTEM:(OI)(CI)F',
-                    'BUILTIN\Administrators:(OI)(CI)F',
+                    '*S-1-5-18:(OI)(CI)F',
+                    '*S-1-5-32-544:(OI)(CI)F',
                     "${serviceAccount}:(OI)(CI)M"
                 )
         }
@@ -714,8 +714,8 @@ function Set-OokiCertificateAcl {
                 $path,
                 '/inheritance:r',
                 '/grant:r',
-                'SYSTEM:F',
-                'BUILTIN\Administrators:F',
+                '*S-1-5-18:F',
+                '*S-1-5-32-544:F',
                 "NT SERVICE\${ServiceName}:R"
             )
     }
@@ -756,26 +756,27 @@ function Set-OokiWindowsService {
                     $binaryCommand,
                     'start=',
                     'delayed-auto',
-                    'obj=',
-                    "NT SERVICE\$ServiceName",
-                    'DisplayName=',
-                    'Ooki Grader'
-                )
-        } else {
-            Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
-                -ArgumentList @(
-                    'config',
-                    $ServiceName,
-                    'binPath=',
-                    $binaryCommand,
-                    'start=',
-                    'delayed-auto',
-                    'obj=',
-                    "NT SERVICE\$ServiceName",
                     'DisplayName=',
                     'Ooki Grader'
                 )
         }
+
+        # Configure the virtual account only after SCM has created the service
+        # identity. The service is never started in the temporary LocalSystem
+        # configuration.
+        Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
+            -ArgumentList @(
+                'config',
+                $ServiceName,
+                'binPath=',
+                $binaryCommand,
+                'start=',
+                'delayed-auto',
+                'obj=',
+                "NT SERVICE\$ServiceName",
+                'DisplayName=',
+                'Ooki Grader'
+            )
 
         Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
             -ArgumentList @(
@@ -809,6 +810,9 @@ function Set-OokiFirewallRule {
         [Parameter(Mandatory)]
         [string[]] $RemoteAddress,
 
+        [ValidateSet('Private', 'Domain')]
+        [string] $FirewallProfile = 'Private',
+
         [string] $RuleName = 'Ooki Grader HTTPS'
     )
 
@@ -816,15 +820,18 @@ function Set-OokiFirewallRule {
 
     $existing = Get-NetFirewallRule -DisplayName $RuleName `
         -ErrorAction SilentlyContinue
-    if ($PSCmdlet.ShouldProcess($RuleName, 'Create or update private HTTPS firewall rule')) {
+    if ($PSCmdlet.ShouldProcess(
+        $RuleName,
+        'Create or update scoped HTTPS firewall rule')) {
         if ($null -eq $existing) {
             New-NetFirewallRule -DisplayName $RuleName `
                 -Direction Inbound -Action Allow -Enabled True `
-                -Profile Private -Protocol TCP -LocalPort $Port `
+                -Profile $FirewallProfile -Protocol TCP -LocalPort $Port `
                 -RemoteAddress $RemoteAddress | Out-Null
         } else {
             $existing | Set-NetFirewallRule -Direction Inbound `
-                -Action Allow -Enabled True -Profile Private | Out-Null
+                -Action Allow -Enabled True `
+                -Profile $FirewallProfile | Out-Null
             $existing | Set-NetFirewallPortFilter -Protocol TCP `
                 -LocalPort $Port | Out-Null
             $existing | Set-NetFirewallAddressFilter `
@@ -1040,6 +1047,9 @@ function Write-OokiInstallationManifest {
         [Parameter(Mandatory)]
         [string] $ConfigurationPath,
 
+        [ValidateSet('Private', 'Domain')]
+        [string] $FirewallProfile = 'Private',
+
         [string] $ExpectedSignerThumbprint
     )
 
@@ -1055,6 +1065,7 @@ function Write-OokiInstallationManifest {
         serviceName = $ServiceName
         dnsName = $DnsName
         httpsPort = $HttpsPort
+        firewallProfile = $FirewallProfile
         certificatePath = $CertificatePath
         configurationPath = $ConfigurationPath
         expectedSignerThumbprint = $ExpectedSignerThumbprint
@@ -1183,6 +1194,9 @@ function Test-OokiReadyEndpoint {
                 }
             }
         } catch {
+            # Retry until the bounded deadline below.
+        }
+        if ([DateTimeOffset]::UtcNow -lt $deadline) {
             Start-Sleep -Seconds 2
         }
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
@@ -1211,11 +1225,55 @@ function Write-OokiWindowsEvent {
     if ($PSCmdlet.ShouldProcess(
         'Windows Application event log',
         "Write Ooki Grader event $EventId")) {
-        if (-not [Diagnostics.EventLog]::SourceExists($Source)) {
-            New-EventLog -LogName Application -Source $Source
+        # New-EventLog and Write-EventLog are Windows PowerShell cmdlets, not
+        # PowerShell 7 cmdlets. Run the complete operation in the built-in
+        # Windows PowerShell process and keep audit logging best-effort: an
+        # event-log failure must never turn a completed restore into a failure.
+        try {
+            $windowsPowerShell = Join-Path $env:SystemRoot `
+                'System32\WindowsPowerShell\v1.0\powershell.exe'
+            if (-not [IO.File]::Exists($windowsPowerShell)) {
+                Write-Warning 'The Windows event could not be written because Windows PowerShell 5.1 is unavailable.'
+                return
+            }
+            $request = [ordered]@{
+                eventId = $EventId
+                entryType = $EntryType
+                message = $Message
+                source = $Source
+            }
+            $requestBase64 = [Convert]::ToBase64String(
+                [Text.Encoding]::UTF8.GetBytes(
+                    ($request | ConvertTo-Json -Compress)))
+            $worker = @"
+`$ErrorActionPreference = 'Stop'
+`$json = [Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String('$requestBase64'))
+`$request = `$json | ConvertFrom-Json
+if (-not [Diagnostics.EventLog]::SourceExists([string] `$request.source)) {
+    New-EventLog -LogName Application -Source ([string] `$request.source)
+}
+Write-EventLog -LogName Application `
+    -Source ([string] `$request.source) `
+    -EventId ([int] `$request.eventId) `
+    -EntryType ([string] `$request.entryType) `
+    -Message ([string] `$request.message)
+"@
+            $encodedWorker = [Convert]::ToBase64String(
+                [Text.Encoding]::Unicode.GetBytes($worker))
+            $workerOutput = & $windowsPowerShell -NoLogo -NoProfile `
+                -NonInteractive -EncodedCommand $encodedWorker 2>&1
+            $workerExitCode = $LASTEXITCODE
+            if ($workerExitCode -ne 0) {
+                Write-Warning (
+                    'The Windows event could not be written. ' +
+                    (($workerOutput | Out-String).Trim()))
+            }
+        } catch {
+            Write-Warning (
+                'The Windows event could not be written: ' +
+                $_.Exception.Message)
         }
-        Write-EventLog -LogName Application -Source $Source `
-            -EventId $EventId -EntryType $EntryType -Message $Message
     }
 }
 

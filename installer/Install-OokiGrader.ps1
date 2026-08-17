@@ -20,6 +20,9 @@ param(
     [Parameter(Mandatory)]
     [string[]] $SchoolSubnet,
 
+    [ValidateSet('Private', 'Domain')]
+    [string] $FirewallProfile = 'Private',
+
     [string] $InstallRoot = "$env:ProgramFiles\Ooki Grader",
 
     [string] $BackupRoot,
@@ -98,6 +101,8 @@ $origin = if ($HttpsPort -eq 443) {
 } else {
     "https://${DnsName}:${HttpsPort}"
 }
+$null = Set-OokiManagedHostsEntry -DnsName $DnsName `
+    -IpAddress '127.0.0.1' -WhatIf -Confirm:$false
 $configurationPath = Join-Path (
     Join-Path $data 'configuration') 'appsettings.Production.json'
 
@@ -245,10 +250,14 @@ if ($PSCmdlet.ShouldProcess(
         -DnsName $DnsName -HttpsPort $HttpsPort `
         -CertificatePath $installedCertificate `
         -ConfigurationPath $configurationPath `
+        -FirewallProfile $FirewallProfile `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
         -Confirm:$false | Out-Null
     Set-OokiFirewallRule -Port $HttpsPort `
-        -RemoteAddress $SchoolSubnet -Confirm:$false
+        -RemoteAddress $SchoolSubnet `
+        -FirewallProfile $FirewallProfile -Confirm:$false
+    $hostHostsEntry = Set-OokiManagedHostsEntry -DnsName $DnsName `
+        -IpAddress '127.0.0.1' -Confirm:$false
 
     if ((Get-Service -Name $ServiceName).Status -ne 'Running') {
         Start-Service -Name $ServiceName
@@ -267,6 +276,8 @@ if ($PSCmdlet.ShouldProcess(
         version = $Version
         serviceName = $ServiceName
         endpoint = "${origin}/"
+        firewallProfile = $FirewallProfile
+        hostHostsEntry = $hostHostsEntry
         dataPreserved = $true
         hostSignature = $hostSignature.ExternalGate
         toolSignature = $toolSignature.ExternalGate

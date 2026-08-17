@@ -149,6 +149,14 @@ try {
     $certificate.Dispose()
 }
 
+# The immutable package, its metadata, and its public certificate have now been
+# verified. Suppress only PackageMode's script-level High-impact confirmation so
+# the Windows PowerShell 5.1 launcher does not need an explicit Boolean switch
+# value through -File. Manual mode preserves normal confirmation behavior.
+if ($PackageMode) {
+    $ConfirmPreference = 'None'
+}
+
 $hostsResult = $null
 if ($PackageMode) {
     $hostsResult = Set-OokiManagedHostsEntry -DnsName $dnsName `

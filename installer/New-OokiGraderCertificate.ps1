@@ -1,6 +1,9 @@
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+[CmdletBinding(
+    SupportsShouldProcess,
+    ConfirmImpact = 'High',
+    DefaultParameterSetName = 'External')]
 param(
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'External')]
     [ValidatePattern('^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')]
     [string] $PrimaryDnsName,
 
@@ -8,7 +11,7 @@ param(
 
     [string[]] $IpAddress = @(),
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'External')]
     [string] $OutputDirectory,
 
     [string] $CaCertificateThumbprint,
@@ -25,7 +28,19 @@ param(
     [ValidateRange(365, 3650)]
     [int] $CaValidityDays = 1825,
 
-    [string] $ServiceName = 'OokiGrader.Host'
+    [string] $ServiceName = 'OokiGrader.Host',
+
+    [Parameter(Mandatory, ParameterSetName = 'WindowsPowerShellWorker',
+        DontShow)]
+    [switch] $WindowsPowerShellWorker,
+
+    [Parameter(Mandatory, ParameterSetName = 'WindowsPowerShellWorker',
+        DontShow)]
+    [string] $WorkerRequestPath,
+
+    [Parameter(Mandatory, ParameterSetName = 'WindowsPowerShellWorker',
+        DontShow)]
+    [string] $WorkerResponsePath
 )
 
 Set-StrictMode -Version Latest
@@ -34,6 +49,184 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+
+function Write-CertificateResult {
+    param(
+        [Parameter(Mandatory)]
+        [object] $Value
+    )
+
+    $json = $Value | ConvertTo-Json -Depth 6
+    if ($WindowsPowerShellWorker) {
+        [IO.File]::WriteAllText(
+            $WorkerResponsePath,
+            $json + "`r`n",
+            [Text.UTF8Encoding]::new($false))
+    } else {
+        $json
+    }
+}
+
+if ($WindowsPowerShellWorker) {
+    if ($PSVersionTable.PSEdition -ne 'Desktop' -or
+        $PSVersionTable.PSVersion.Major -ne 5) {
+        throw 'The private certificate worker requires Windows PowerShell 5.1.'
+    }
+
+    $requestPath = Resolve-OokiExactPath -Path $WorkerRequestPath `
+        -Purpose 'Certificate worker request' -MustExist -PathType File
+    $responsePath = Resolve-OokiExactPath -Path $WorkerResponsePath `
+        -Purpose 'Certificate worker response'
+    $requestParent = [IO.Path]::GetDirectoryName($requestPath)
+    $responseParent = [IO.Path]::GetDirectoryName($responsePath)
+    if (-not $requestParent.Equals(
+        $responseParent,
+        [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.File]::Exists($responsePath)) {
+        throw 'The certificate worker response must be a new file beside its request.'
+    }
+    $WorkerResponsePath = $responsePath
+
+    try {
+        $request = Get-Content -LiteralPath $requestPath -Raw |
+            ConvertFrom-Json
+    } catch {
+        throw 'The certificate worker request is not valid JSON.'
+    }
+    if ($request.schema -ne 'ooki-certificate-worker/v1' -or
+        $request.primaryDnsName -isnot [string] -or
+        $request.outputDirectory -isnot [string] -or
+        $request.serviceName -isnot [string] -or
+        $request.createLocalCa -isnot [bool] -or
+        $request.acknowledgeLocalCaPrivateKeyRisk -isnot [bool] -or
+        $request.renew -isnot [bool]) {
+        throw 'The certificate worker request has an unsupported shape.'
+    }
+
+    $PrimaryDnsName = [string] $request.primaryDnsName
+    $AdditionalDnsName = [string[]] @($request.additionalDnsName)
+    $IpAddress = [string[]] @($request.ipAddress)
+    $OutputDirectory = [string] $request.outputDirectory
+    $CaCertificateThumbprint = if (
+        $null -eq $request.caCertificateThumbprint
+    ) {
+        ''
+    } else {
+        [string] $request.caCertificateThumbprint
+    }
+    $CreateLocalCa = [bool] $request.createLocalCa
+    $AcknowledgeLocalCaPrivateKeyRisk =
+        [bool] $request.acknowledgeLocalCaPrivateKeyRisk
+    $Renew = [bool] $request.renew
+    try {
+        $HostValidityDays = [int] $request.hostValidityDays
+        $CaValidityDays = [int] $request.caValidityDays
+    } catch {
+        throw 'The certificate worker validity periods must be integers.'
+    }
+    if ($HostValidityDays -lt 30 -or $HostValidityDays -gt 825 -or
+        $CaValidityDays -lt 365 -or $CaValidityDays -gt 3650) {
+        throw 'The certificate worker validity periods are outside the supported range.'
+    }
+    $ServiceName = [string] $request.serviceName
+
+    # The outer PowerShell 7 process performs the user-facing ShouldProcess
+    # decision. The worker must not prompt a second time in -NonInteractive mode.
+    $ConfirmPreference = 'None'
+} elseif ($PSVersionTable.PSEdition -eq 'Core') {
+    if (-not $PSCmdlet.ShouldProcess(
+        $PrimaryDnsName,
+        'Run the complete live PKI operation in Windows PowerShell 5.1')) {
+        return
+    }
+
+    $windowsPowerShell = Join-Path $env:SystemRoot `
+        'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not [IO.File]::Exists($windowsPowerShell)) {
+        throw 'Windows PowerShell 5.1 is required for the Windows PKI certificate worker.'
+    }
+
+    $workerRoot = Join-Path ([IO.Path]::GetTempPath()) (
+        'ooki-certificate-worker-' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($workerRoot) | Out-Null
+    $requestPath = Join-Path $workerRoot 'request.json'
+    $responsePath = Join-Path $workerRoot 'response.json'
+    try {
+        $request = [ordered]@{
+            schema = 'ooki-certificate-worker/v1'
+            primaryDnsName = $PrimaryDnsName
+            additionalDnsName = [string[]] @($AdditionalDnsName)
+            ipAddress = [string[]] @($IpAddress)
+            outputDirectory = $OutputDirectory
+            caCertificateThumbprint = if (
+                [string]::IsNullOrWhiteSpace($CaCertificateThumbprint)
+            ) { $null } else { $CaCertificateThumbprint }
+            createLocalCa = [bool] $CreateLocalCa
+            acknowledgeLocalCaPrivateKeyRisk =
+                [bool] $AcknowledgeLocalCaPrivateKeyRisk
+            renew = [bool] $Renew
+            hostValidityDays = [int] $HostValidityDays
+            caValidityDays = [int] $CaValidityDays
+            serviceName = $ServiceName
+        }
+        $requestJson = $request | ConvertTo-Json -Depth 4 -Compress
+        [IO.File]::WriteAllText(
+            $requestPath,
+            $requestJson,
+            [Text.UTF8Encoding]::new($false))
+
+        # Bypass applies only to this already-running, verified script's private
+        # worker. All PKI objects stay live inside this single Desktop process.
+        $workerArguments = @(
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $PSCommandPath,
+            '-WindowsPowerShellWorker',
+            '-WorkerRequestPath',
+            $requestPath,
+            '-WorkerResponsePath',
+            $responsePath
+        )
+        $workerDiagnostics = & $windowsPowerShell @workerArguments 2>&1 |
+            Out-String
+        $workerExitCode = $LASTEXITCODE
+        if ($workerExitCode -ne 0) {
+            $detail = $workerDiagnostics.Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) {
+                $detail = 'No diagnostic output was returned.'
+            }
+            throw "Windows PowerShell certificate worker failed with exit code $workerExitCode. $detail"
+        }
+        if (-not [IO.File]::Exists($responsePath)) {
+            throw 'Windows PowerShell certificate worker returned no response.'
+        }
+        try {
+            $responseJson = [IO.File]::ReadAllText($responsePath)
+            $response = $responseJson | ConvertFrom-Json
+        } catch {
+            throw 'Windows PowerShell certificate worker returned invalid JSON.'
+        }
+        if ($response.state -notin @('issued', 'renewed', 'already-current') -or
+            $response.primaryDnsName -ne $PrimaryDnsName -or
+            [string]::IsNullOrWhiteSpace(
+                [string] $response.hostCertificatePath) -or
+            [string]::IsNullOrWhiteSpace(
+                [string] $response.caPublicCertificatePath)) {
+            throw 'Windows PowerShell certificate worker returned an invalid result.'
+        }
+        $responseJson
+        return
+    } finally {
+        if ([IO.Directory]::Exists($workerRoot)) {
+            [IO.Directory]::Delete($workerRoot, $true)
+        }
+    }
+}
+
 $outputRoot = Resolve-OokiExactPath -Path $OutputDirectory `
     -Purpose 'Certificate output directory'
 $dnsNames = @($PrimaryDnsName) + @($AdditionalDnsName) |
@@ -101,7 +294,7 @@ if ($null -ne $existingMetadata -and -not $Renew) {
             -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
     }
 
-    [pscustomobject]@{
+    Write-CertificateResult -Value ([pscustomobject]@{
         state = 'already-current'
         primaryDnsName = $existingMetadata.primaryDnsName
         hostCertificatePath = $existingMetadata.hostCertificatePath
@@ -113,7 +306,7 @@ if ($null -ne $existingMetadata -and -not $Renew) {
         ipSans = $actualIp
         peerTrustExternalGate = $existingMetadata.peerTrustExternalGate
         codeSigningExternalGate = $existingMetadata.codeSigningExternalGate
-    } | ConvertTo-Json -Depth 6
+    })
     return
 }
 
@@ -199,8 +392,8 @@ if ($PSCmdlet.ShouldProcess(
             $outputRoot,
             '/inheritance:r',
             '/grant:r',
-            'SYSTEM:(OI)(CI)F',
-            'BUILTIN\Administrators:(OI)(CI)F'
+            '*S-1-5-18:(OI)(CI)F',
+            '*S-1-5-32-544:(OI)(CI)F'
         )
     $emptyPassword = [Security.SecureString]::new()
     $pfxPath = Join-Path $outputRoot (
@@ -248,5 +441,5 @@ if ($PSCmdlet.ShouldProcess(
     }
     Write-OokiJsonFile -Path $metadataPath -Value $metadata `
         -Confirm:$false
-    $metadata | ConvertTo-Json -Depth 6
+    Write-CertificateResult -Value $metadata
 }

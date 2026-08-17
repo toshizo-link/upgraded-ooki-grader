@@ -3,7 +3,7 @@
 **対象:** 大木スクールのシステム管理者、Windows 技術担当者、バックアップ担当者  
 **文書スナップショット:** 2026-08-11\
 **対象モデル:** `gemini-3.5-flash-lite`  
-**対象構成:** Windows 11 Pro x64 ホスト 1 台 + 校内 LAN 上の Edge / Chrome
+**推奨構成:** 現行 Windows 11 Pro x64 ホスト 1 台 + 校内 LAN 上の Edge / Chrome
 
 > **重要:** この文書は、現在のリポジトリにある実装と技術担当者用スクリプトを説明するものです。現時点の実装を「無人運用可能」と宣言するものではありません。現地でのチェックサム検査、実機 Windows での一連の復旧訓練、学校の正解付き評価データによる精度承認が完了するまでは、無人の自動確定や学校記録の唯一の保管先として使用しないでください。
 
@@ -11,7 +11,7 @@
 
 ## 1. 最初に理解すること
 
-Ooki Grader は、次の最小構成で動作します。
+Ooki Grader は、次の基本構成で動作します。
 
 - Windows ホスト上の `OokiGrader.Host` Windows Service が、Web アプリ、API、SQLite データベース、画像・帳票ファイル、バックグラウンド処理を担当します。
 - 先生は、校内 LAN の Edge または Chrome から、ホストの正式な HTTPS URL だけを開きます。
@@ -36,7 +36,7 @@ Ooki Grader は、次の最小構成で動作します。
 
 作業前に、以下を紙または学校の承認済み台帳へ記録します。API キーや初期設定トークンそのものは記録しません。
 
-| 項目 | 記入例 | 必須確認 |
+| 項目 | 記入例 | 確認内容 |
 | --- | --- | --- |
 | リリース版 | `0.1.0` | 承認済み版と一致 |
 | 配布物 SHA-256 | 管理された配布台帳の値 | 受領物と一致 |
@@ -46,7 +46,7 @@ Ooki Grader は、次の最小構成で動作します。
 | 許可する校内網 | `192.168.10.0/24` | `Any` / `Internet` / `LocalSubnet` は不可 |
 | HTTPS ポート | `443` | 他プロセスが未使用 |
 | `InstallRoot` | `C:\Program Files\Ooki Grader` | ローカル、`Program Files` 配下 |
-| `DataRoot` | `D:\OokiGraderData` | ローカル NTFS、165 GiB 以上の空き |
+| `DataRoot` | `D:\OokiGraderData` | ローカル NTFS は必須、165 GiB 以上の空きは推奨 |
 | `BackupRoot` | `E:\OokiGraderBackup` | DataRoot と別、暗号化済み |
 | バックアップへ画像を含めるか | はい／いいえ | 復旧要件と一致 |
 | 管理者責任者 | 氏名・連絡方法 | 主担当と副担当 |
@@ -54,19 +54,21 @@ Ooki Grader は、次の最小構成で動作します。
 | 保守時間帯 | 例: 日曜 18:00–20:00 | 先生へ事前通知 |
 | RPO / RTO | 学校承認値 | 復元訓練で実測 |
 
-### 3.1 ホストの最低条件
+### 3.1 ホストの必須条件と推奨構成
 
 技術担当者用の事前検査は、次を確認します。
 
-- Windows 11 Pro x64 の現行サポート対象ビルド
-- 16 GiB 搭載 RAM 以上（ファームウェアや内蔵 GPU の予約領域は許容、32 GiB 推奨）
+- x64 Windows（現行サポート対象の Windows 11 Pro を推奨）
+- 16 GiB 搭載 RAM を推奨基準とし、32 GiB を余裕のある構成とする
 - 8 論理プロセッサをパイロット目安とする
-- `DataRoot` の NTFS ボリュームに 165 GiB 以上の空き
+- `DataRoot` はローカル NTFS ボリュームを必須とし、165 GiB 以上の空きを推奨する
 - BitLocker または学校承認の同等暗号化
 - 校内プライベート IPv4、Windows のネットワークプロファイル `Private`
 - Windows Time の同期、Microsoft Defender または承認済み代替製品
 - 安定した電源、UPS、ホストの自動起動と再起動後点検手順
 - 校内 DNS、固定アドレス、HTTPS 443、構成した外部 AI 宛ての送信 HTTPS / DNS
+
+Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容量は推奨項目です。いずれかを満たさなくても事前検査は非ブロッキングの警告として記録し、インストールを続行します。性能低下や保存可能量の減少を見込み、実際の答案量で確認してください。一方、x64 実行環境、NTFS、使用可能な HTTPS ポート、配布物の完全性、証明書と安全なパス構成は必須であり、満たさない場合は停止します。
 
 `InstallRoot`、`DataRoot`、`BackupRoot` は相互に包含しない別パスにします。`DataRoot` を Windows フォルダー、ユーザープロファイル、一時フォルダー、OneDrive 等の同期フォルダー、UNC 共有へ置かないでください。
 
@@ -219,7 +221,7 @@ pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1 `
 2. `Get-FileHash -Algorithm SHA256` と `Get-AuthenticodeSignature` で、ハッシュ、`Valid`、発行者拇印、タイムスタンプを確認します。
 3. Windows PowerShell ではなく、64-bit PowerShell 7.4 以降の `pwsh.exe` がインストール済みであることを確認します。セットアップも開始前に検査し、不足時は停止します。
 4. EXE を管理者として実行します。データ保存先、正式 DNS 名、HTTPS ポート、許可する校内 CIDR、秘密鍵付きホスト証明書 PFX/P12 を入力します。
-5. セットアップ内の事前検査が、パッケージの全チェックサムと署名、版、OS、NTFS、容量、ポート、パス分離を確認します。失敗時は表示内容を直してから再実行します。
+5. セットアップ内の事前検査が、パッケージの全チェックサムと署名、版、OS、NTFS、容量、ポート、パス分離を確認します。Windows 11 Pro、16 GiB RAM、165 GiB 空き容量の不一致は推奨警告として表示されますが、セットアップは続行します。x64、NTFS、ポート、パス、パッケージ／署名／証明書の必須検査に失敗した場合だけ、表示内容を直してから再実行します。
 6. 成功後、スタートメニューの `Ooki Grader を開く` と `状態を確認` を使用し、正式 URL と readiness を確認します。
 
 セットアップ EXE はバックアップ先を構成しません。バックアップ先は管理画面から変更できないため、今回の設置では `Install-OokiGraderOnSite.ps1 -BackupRoot` を使います。別バージョンが既に入っている場合、セットアップは上書き更新せず、検証済みバックアップを伴う `Upgrade-OokiGrader.ps1` を案内します。アンインストールはアプリを回復領域へ退避し、`DataRoot` は削除しません。
@@ -244,7 +246,7 @@ pwsh -File "$PackageRoot\Test-OokiGraderPreflight.ps1" `
   -ExpectedSignerThumbprint $SignerThumbprint
 ```
 
-`state` が `ready` で、`blockingFailures` が `0` であることを確認します。CPU、BitLocker、ネットワークプロファイル、時刻同期、Defender 等の非ブロッキング警告も、理由と承認者を記録せずに無視しないでください。
+`state` が `ready` で、`blockingFailures` が `0` であることを確認します。Windows 11 Pro、16 GiB RAM、165 GiB 空き容量を含む推奨項目は、不一致でも `blockingFailures` を増やさずインストールを止めません。`recommendationFailures` と各検査の `classification: recommendation` を確認し、CPU、BitLocker、ネットワークプロファイル、時刻同期、Defender 等と合わせて警告内容と運用上の影響を記録してください。
 
 `-AllowUnsignedDevelopmentBuild` は隔離された開発試験専用です。本番・パイロット配布の署名不足を回避する用途には使いません。
 
@@ -782,7 +784,7 @@ Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='Ooki Grade
 ### リリースとホスト
 
 - [ ] リリース版、物理的な配布元、全件チェックサム検査結果を記録した
-- [ ] クリーンな Windows 11 Pro x64 実機でインストールした
+- [ ] x64 Windows 実機でインストールし、Windows 11 Pro の推奨を満たさない場合は理由と検証結果を記録した
 - [ ] `InstallRoot`、`DataRoot`、`BackupRoot` が別で、NTFS / BitLocker / ACL が正しい
 - [ ] Windows Firewall が承認済み校内 CIDR だけを許可する
 - [ ] 再起動後にサービスが自動起動し、`/health/live` と `/health/ready` が成功する
@@ -836,7 +838,7 @@ Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='Ooki Grade
 
 1. **精度:** 日本語の難しい穴埋め用紙 1 種に対する複数回の実画像検証は通過していますが、科目・学年・複数ページ・多様な筆跡を網羅した統計的承認ではありません。記述採点は特に教師確認が必要です。詳細は [穴埋めひな形精度レポート](../../output/accuracy/fill-in-template-generation-report-2026-08-05.md) と [採点修正検証レポート](../../output/accuracy/grading-fix-verification-report-2026-08-05.md) を参照してください。
 2. **自動化の境界:** AI は下書きと採点提案を自動化しますが、公開・確定の責任は先生にあります。自動確定と自動生徒割当は無効のままです。
-3. **Windows 証跡:** クリーン Windows 11 Pro x64 で、インストール、再起動、更新、失敗時ロールバック、修復、隔離復元、アンインストールを一続きで完走する外部ゲートが残っています。
+3. **Windows 証跡:** 推奨参照環境であるクリーン Windows 11 Pro x64 で、インストール、再起動、更新、失敗時ロールバック、修復、隔離復元、アンインストールを一続きで完走する外部ゲートが残っています。これは他の x64 Windows 環境へのインストールを止める条件ではありません。
 4. **配布物の信頼:** 今回は Authenticode を購入せず、設置担当者が直接管理する媒体と全件チェックサム検査を信頼境界にします。メールや不明な共有リンクから取得した未署名ファイルへ、この例外を広げません。
 5. **復元終結:** 復元スクリプトは安全のためサービス停止・操作マーカー・ロールバックスナップショットを残します。承認済みの復元終結ランブックが未検証です。
 6. **画像バックアップ:** 既定では管理対象答案画像をバックアップへ含めません。学校の復旧要件に合わせた明示設定と容量検証が必要です。

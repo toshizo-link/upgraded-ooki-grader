@@ -19,6 +19,9 @@ param(
     [ValidateRange(1, 65535)]
     [int] $HttpsPort = 443,
 
+    [ValidateSet('Private', 'Domain')]
+    [string] $FirewallProfile,
+
     [string] $ServiceName = 'OokiGrader.Host',
 
     [ValidateScript({
@@ -59,6 +62,16 @@ if ($null -eq $installation -or
             $ExpectedSignerThumbprint,
             [StringComparison]::OrdinalIgnoreCase))) {
     throw 'Repair requires the persistent installation manifest and its immutable service identity.'
+}
+$effectiveFirewallProfile = if (
+    $PSBoundParameters.ContainsKey('FirewallProfile')
+) {
+    $FirewallProfile
+} elseif ($null -ne $installation.PSObject.Properties['firewallProfile'] -and
+    [string] $installation.firewallProfile -in @('Private', 'Domain')) {
+    [string] $installation.firewallProfile
+} else {
+    'Private'
 }
 $expectedVersionRoot = Join-Path (
     Join-Path ([string] $installation.installRoot) 'versions') (
@@ -144,10 +157,12 @@ if ($PSCmdlet.ShouldProcess(
         -ServiceName $ServiceName -DnsName $DnsName `
         -HttpsPort $HttpsPort -CertificatePath $installedCertificate `
         -ConfigurationPath $configurationPath `
+        -FirewallProfile $effectiveFirewallProfile `
         -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
         -Confirm:$false | Out-Null
     Set-OokiFirewallRule -Port $HttpsPort `
-        -RemoteAddress $SchoolSubnet -Confirm:$false
+        -RemoteAddress $SchoolSubnet `
+        -FirewallProfile $effectiveFirewallProfile -Confirm:$false
 
     Start-Service -Name $ServiceName
     Wait-OokiService -ServiceName $ServiceName -TimeoutSeconds 90
@@ -168,6 +183,7 @@ if ($PSCmdlet.ShouldProcess(
             $health.state -eq 'healthy' -and $ready
         ) { 'repaired' } else { 'attention-required' }
         serviceName = $ServiceName
+        firewallProfile = $effectiveFirewallProfile
         hostSignature = $hostSignature.ExternalGate
         toolSignature = $toolSignature.ExternalGate
         packageTrustMode = if ($AllowChecksumVerifiedOnSitePackage) {

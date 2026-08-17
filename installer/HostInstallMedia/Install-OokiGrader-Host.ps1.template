@@ -1,0 +1,459 @@
+#requires -Version 5.1
+#requires -RunAsAdministrator
+
+[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$version = '@@OOKI_VERSION@@'
+$archiveName = "OokiGrader-$version-win-x64.zip"
+$expectedArchiveSha256 = '@@PACKAGE_ZIP_SHA256@@'
+$mediaRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$archivePath = Join-Path $mediaRoot $archiveName
+$archiveChecksumPath = "$archivePath.sha256"
+$stagingRoot = 'C:\OokiGrader-Setup'
+$packageName = "OokiGrader-$version-win-x64"
+$packageRoot = Join-Path $stagingRoot $packageName
+$powerShellVersion = '@@POWERSHELL_VERSION@@'
+$powerShellInstallerName =
+    "PowerShell-$powerShellVersion-win-x64.msi"
+$expectedPowerShellInstallerSha256 = '@@POWERSHELL_MSI_SHA256@@'
+$powerShellInstaller = Join-Path (
+    Join-Path $mediaRoot 'Prerequisites') $powerShellInstallerName
+$powerShellInstallerChecksum = "$powerShellInstaller.sha256"
+$runId = [DateTimeOffset]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' +
+    [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$runStartedAt = [DateTimeOffset]::UtcNow
+$diagnosticRoot = Join-Path $stagingRoot 'logs'
+$transcriptPath = Join-Path $diagnosticRoot (
+    "host-install-$version-$runId.log")
+$resultPath = Join-Path $diagnosticRoot (
+    "host-install-$version-$runId.result.json")
+$msiLogPath = Join-Path $diagnosticRoot (
+    "host-install-$version-$runId-powershell-msi.log")
+$transcriptStarted = $false
+$pwsh = $null
+
+function Get-Sha256 {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Assert-ChecksumSidecar {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $ExpectedHash,
+
+        [Parameter(Mandatory)]
+        [string] $ExpectedFileName
+    )
+
+    if (-not [IO.File]::Exists($Path)) {
+        throw "必要なSHA-256ファイルがありません: $Path"
+    }
+    $text = (Get-Content -LiteralPath $Path -Raw).Trim()
+    if ($text -notmatch '^(?<hash>[A-Fa-f0-9]{64})  (?<name>[^\r\n]+)$' -or
+        -not $Matches.hash.Equals(
+            $ExpectedHash,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not $Matches.name.Equals(
+            $ExpectedFileName,
+            [StringComparison]::Ordinal)) {
+        throw "SHA-256ファイルが固定済みの配布情報と一致しません: $Path"
+    }
+}
+
+function Test-CompatiblePowerShell7 {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    if (-not [IO.File]::Exists($Path)) {
+        return $false
+    }
+    try {
+        $status = & $Path -NoLogo -NoProfile -NonInteractive `
+            -Command '[pscustomobject]@{Version=$PSVersionTable.PSVersion.ToString();IsX64=([Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq [Runtime.InteropServices.Architecture]::X64)}|ConvertTo-Json -Compress' `
+            2>$null
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            return $false
+        }
+        $info = ($status | Out-String) | ConvertFrom-Json
+        return [version] $info.Version -ge [version] '7.4' -and
+            [bool] $info.IsX64
+    } catch {
+        return $false
+    }
+}
+
+function Find-CompatiblePowerShell7 {
+    $candidates = @()
+    $standardPath = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+    $candidates += $standardPath
+    $commands = @(Get-Command pwsh.exe -CommandType Application -All `
+        -ErrorAction SilentlyContinue)
+    $candidates += @($commands | ForEach-Object { $_.Source })
+
+    $seen = @{}
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        $key = [IO.Path]::GetFullPath($candidate).ToUpperInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+        $seen[$key] = $true
+        if (Test-CompatiblePowerShell7 -Path $candidate) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+    return $null
+}
+
+function Get-DirectoryFileMap {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [string[]] $ExcludedRelativePaths = @()
+    )
+
+    $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $prefix = $fullRoot + '\'
+    $result = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $fullRoot `
+        -File -Force -Recurse) {
+        $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
+        if ($relative -in $ExcludedRelativePaths) {
+            continue
+        }
+        $result[$relative] = Get-Sha256 -Path $file.FullName
+    }
+    return $result
+}
+
+function Assert-ReleasePackageIntegrity {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root,
+
+        [Parameter(Mandatory)]
+        [string] $ExpectedVersion
+    )
+
+    $inventoryPath = Join-Path $Root 'release-inventory.json'
+    $checksumPath = Join-Path $Root 'checksums.txt'
+    if (-not [IO.File]::Exists($inventoryPath) -or
+        -not [IO.File]::Exists($checksumPath)) {
+        throw '展開したパッケージにinventoryまたはchecksums.txtがありません。'
+    }
+    try {
+        $inventory = Get-Content -LiteralPath $inventoryPath -Raw |
+            ConvertFrom-Json
+    } catch {
+        throw '展開したrelease-inventory.jsonが正しいJSONではありません。'
+    }
+    if ($inventory.schema -ne 'ooki-release-inventory/v1' -or
+        $inventory.product -ne 'Ooki Grader' -or
+        $inventory.version -ne $ExpectedVersion -or
+        $inventory.runtime -ne 'win-x64' -or
+        -not [bool] $inventory.selfContained) {
+        throw '展開したパッケージの製品、版、ランタイムが一致しません。'
+    }
+
+    $expectedFiles = @{}
+    foreach ($line in Get-Content -LiteralPath $checksumPath) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        if ($line -notmatch '^([A-Fa-f0-9]{64})  ([^\r\n]+)$') {
+            throw '展開したパッケージのchecksums.txt形式が正しくありません。'
+        }
+        $expectedHash = $Matches[1].ToLowerInvariant()
+        $relative = $Matches[2]
+        $segments = @($relative -split '/')
+        if ([IO.Path]::IsPathRooted($relative) -or
+            $relative.Contains('\') -or
+            $segments -contains '..' -or
+            $segments -contains '.' -or
+            $expectedFiles.ContainsKey($relative)) {
+            throw '展開したパッケージのchecksums.txtに安全でないパスがあります。'
+        }
+        $target = Join-Path $Root ($relative.Replace('/', '\'))
+        if (-not [IO.File]::Exists($target) -or
+            -not (Get-Sha256 -Path $target).Equals(
+                $expectedHash,
+                [StringComparison]::Ordinal)) {
+            throw "展開したパッケージのSHA-256が一致しません: $relative"
+        }
+        $expectedFiles[$relative] = $true
+    }
+
+    $actualFiles = Get-DirectoryFileMap -Root $Root `
+        -ExcludedRelativePaths @('checksums.txt')
+    if ($actualFiles.Count -ne $expectedFiles.Count) {
+        throw '展開したパッケージに不足または余分なファイルがあります。'
+    }
+    foreach ($relative in $actualFiles.Keys) {
+        if (-not $expectedFiles.ContainsKey($relative)) {
+            throw "展開したパッケージに一覧外のファイルがあります: $relative"
+        }
+    }
+}
+
+function Test-ExactDirectoryMatch {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Left,
+
+        [Parameter(Mandatory)]
+        [string] $Right
+    )
+
+    $leftFiles = Get-DirectoryFileMap -Root $Left
+    $rightFiles = Get-DirectoryFileMap -Root $Right
+    if ($leftFiles.Count -ne $rightFiles.Count) {
+        return $false
+    }
+    foreach ($relative in $leftFiles.Keys) {
+        if (-not $rightFiles.ContainsKey($relative) -or
+            -not ([string] $leftFiles[$relative]).Equals(
+                [string] $rightFiles[$relative],
+                [StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Assert-NoReparsePoints {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Root
+    )
+
+    $rootItem = Get-Item -LiteralPath $Root -Force
+    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "再利用するパッケージルートは再解析ポイントにできません: $Root"
+    }
+    $reparsePoint = Get-ChildItem -LiteralPath $Root -Force -Recurse |
+        Where-Object {
+            ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        } |
+        Select-Object -First 1
+    if ($null -ne $reparsePoint) {
+        throw "再利用するパッケージに再解析ポイントがあります: $($reparsePoint.FullName)"
+    }
+}
+
+function Write-DiagnosticResult {
+    param(
+        [Parameter(Mandatory)]
+        [string] $State,
+
+        [string] $ErrorMessage
+    )
+
+    $result = [ordered]@{
+        schema = 'ooki-host-install-run/v1'
+        state = $State
+        version = $version
+        startedAt = $runStartedAt.ToString('O')
+        completedAt = [DateTimeOffset]::UtcNow.ToString('O')
+        mediaRoot = $mediaRoot
+        packageRoot = $packageRoot
+        powerShellPath = $pwsh
+        transcriptPath = $transcriptPath
+        powerShellMsiLogPath = $msiLogPath
+        error = if ([string]::IsNullOrWhiteSpace($ErrorMessage)) {
+            $null
+        } else {
+            $ErrorMessage
+        }
+    }
+    $json = $result | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText(
+        $resultPath,
+        $json + "`r`n",
+        [Text.UTF8Encoding]::new($true))
+    return $json
+}
+
+trap {
+    $failureMessage = $_.Exception.Message
+    try {
+        Write-DiagnosticResult -State 'failed' `
+            -ErrorMessage $failureMessage | Out-Null
+    } catch {
+        [Console]::Error.WriteLine(
+            "診断結果を書き込めませんでした: $($_.Exception.Message)")
+    }
+    if ($transcriptStarted) {
+        try {
+            Stop-Transcript | Out-Null
+        } catch {
+            [Console]::Error.WriteLine(
+                "診断ログを終了できませんでした: $($_.Exception.Message)")
+        }
+    }
+    [Console]::Error.WriteLine("インストール失敗: $failureMessage")
+    [Console]::Error.WriteLine("診断結果: $resultPath")
+    [Console]::Error.WriteLine("診断ログ: $transcriptPath")
+    exit 1
+}
+
+[IO.Directory]::CreateDirectory($diagnosticRoot) | Out-Null
+try {
+    Start-Transcript -Path $transcriptPath -Force | Out-Null
+    $transcriptStarted = $true
+} catch {
+    Write-Warning "診断ログを開始できませんでした: $($_.Exception.Message)"
+}
+
+foreach ($requiredFile in @(
+    $archivePath,
+    $archiveChecksumPath,
+    $powerShellInstaller,
+    $powerShellInstallerChecksum
+)) {
+    if (-not [IO.File]::Exists($requiredFile)) {
+        throw "必要なインストールメディアがありません: $requiredFile"
+    }
+}
+
+Write-Host '1/4 インストールメディアのSHA-256を確認しています…'
+Assert-ChecksumSidecar -Path $archiveChecksumPath `
+    -ExpectedHash $expectedArchiveSha256 -ExpectedFileName $archiveName
+if (-not (Get-Sha256 -Path $archivePath).Equals(
+    $expectedArchiveSha256,
+    [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Ooki Grader ZIPのSHA-256が一致しません。コピーし直してください。'
+}
+Assert-ChecksumSidecar -Path $powerShellInstallerChecksum `
+    -ExpectedHash $expectedPowerShellInstallerSha256 `
+    -ExpectedFileName $powerShellInstallerName
+if (-not (Get-Sha256 -Path $powerShellInstaller).Equals(
+    $expectedPowerShellInstallerSha256,
+    [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'PowerShell x64 MSIのSHA-256が一致しません。実行を中止します。'
+}
+$installerSignature = Get-AuthenticodeSignature `
+    -LiteralPath $powerShellInstaller
+if ($installerSignature.Status -ne 'Valid' -or
+    $null -eq $installerSignature.SignerCertificate -or
+    $installerSignature.SignerCertificate.Subject -notmatch
+        '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+    throw 'PowerShell x64 MSIのMicrosoftデジタル署名を確認できません。'
+}
+
+Write-Host '2/4 x64 PowerShell 7.4以降を確認しています…'
+$pwsh = Find-CompatiblePowerShell7
+if ($null -eq $pwsh) {
+    Write-Host "Microsoft公式PowerShell $powerShellVersion x64へインストールまたは更新します。"
+    $msiProcess = Start-Process `
+        -FilePath "$env:SystemRoot\System32\msiexec.exe" `
+        -ArgumentList @(
+            '/i',
+            "`"$powerShellInstaller`"",
+            '/passive',
+            '/norestart',
+            '/l*v',
+            "`"$msiLogPath`"",
+            'ADD_PATH=1'
+        ) `
+        -Wait -PassThru
+    if ($msiProcess.ExitCode -notin @(0, 3010)) {
+        throw "PowerShell 7のインストールが終了コード $($msiProcess.ExitCode) で停止しました。MSIログ: $msiLogPath"
+    }
+    $pwsh = Find-CompatiblePowerShell7
+    if ($null -eq $pwsh) {
+        if ($msiProcess.ExitCode -eq 3010) {
+            throw 'PowerShellの更新にはWindows再起動が必要です。再起動後、同じCMDをもう一度実行してください。'
+        }
+        throw "更新後もx64 PowerShell 7.4以降を確認できません。MSIログを保存してください: $msiLogPath"
+    }
+    if ($msiProcess.ExitCode -eq 3010) {
+        Write-Warning 'PowerShellの更新は完了しました。設置完了後にWindowsを再起動してください。'
+    }
+}
+
+Write-Host '3/4 Ooki Graderの完全パッケージを安全に展開しています…'
+[IO.Directory]::CreateDirectory($stagingRoot) | Out-Null
+$extractRoot = Join-Path $stagingRoot (
+    ".staging-$packageName-" + [Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($extractRoot) | Out-Null
+try {
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot
+    $stagedPackageRoot = Join-Path $extractRoot $packageName
+    if (-not [IO.Directory]::Exists($stagedPackageRoot)) {
+        throw 'ZIPに正しい最上位パッケージフォルダーがありません。'
+    }
+    $unexpectedItem = Get-ChildItem -LiteralPath $extractRoot -Force |
+        Where-Object { $_.FullName -ne $stagedPackageRoot } |
+        Select-Object -First 1
+    if ($null -ne $unexpectedItem) {
+        throw 'ZIPの最上位に一覧外のファイルまたはフォルダーがあります。'
+    }
+    Assert-ReleasePackageIntegrity -Root $stagedPackageRoot `
+        -ExpectedVersion $version
+    Assert-NoReparsePoints -Root $stagedPackageRoot
+
+    if ([IO.Directory]::Exists($packageRoot)) {
+        Assert-NoReparsePoints -Root $packageRoot
+        if (-not (Test-ExactDirectoryMatch `
+            -Left $stagedPackageRoot -Right $packageRoot)) {
+            throw "$packageRoot は存在しますが、検証済みZIPと完全一致しません。既存内容を上書きしません。"
+        }
+        Write-Host '検証済みZIPと完全一致する既存パッケージを再利用します。'
+    } elseif ([IO.File]::Exists($packageRoot)) {
+        throw "$packageRoot はフォルダーではありません。既存内容を上書きしません。"
+    } else {
+        [IO.Directory]::Move($stagedPackageRoot, $packageRoot)
+    }
+} finally {
+    if ([IO.Directory]::Exists($extractRoot)) {
+        [IO.Directory]::Delete($extractRoot, $true)
+    }
+}
+
+Write-Host '4/4 対話式のホストPCセットアップを開始します…'
+Write-Host '推奨構成の警告だけでは停止しません。必須項目と表示値を確認してください。'
+$backupRoot = Read-Host `
+    '暗号化済みバックアップ保存先（例 E:\OokiGraderBackup、後で設定する場合はEnter）'
+$onSiteArguments = @(
+    '-NoLogo',
+    '-NoProfile',
+    '-File',
+    (Join-Path $packageRoot 'Install-OokiGraderOnSite.ps1'),
+    '-PackageRoot',
+    $packageRoot
+)
+if (-not [string]::IsNullOrWhiteSpace($backupRoot)) {
+    $onSiteArguments += @('-BackupRoot', $backupRoot.Trim())
+}
+& $pwsh @onSiteArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "Ooki Graderセットアップが終了コード $LASTEXITCODE で停止しました。"
+}
+
+$successJson = Write-DiagnosticResult -State 'installed-and-verified'
+if ($transcriptStarted) {
+    Stop-Transcript | Out-Null
+    $transcriptStarted = $false
+}
+Write-Host 'Ooki GraderのホストPCセットアップが正常に完了しました。'
+Write-Host "診断結果: $resultPath"
+Write-Host "診断ログ: $transcriptPath"
+$successJson
