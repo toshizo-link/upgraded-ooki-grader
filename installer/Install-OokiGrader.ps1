@@ -52,18 +52,17 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
-Assert-OokiAdministrator
+if (-not $WhatIfPreference) {
+    Assert-OokiAdministrator
+}
 if ($AllowChecksumVerifiedOnSitePackage -and
     $AllowUnsignedDevelopmentBuild) {
     throw 'Choose either the physically controlled on-site package mode or the isolated development override, not both.'
 }
 $allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
     $AllowUnsignedDevelopmentBuild
-$packageEvidence = Assert-OokiReleasePackage -PackageRoot $PackageRoot `
-    -ExpectedVersion $Version `
-    -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$allowUnsignedPackage
-$package = $packageEvidence.Root
+$package = Resolve-OokiExactPath -Path $PackageRoot `
+    -Purpose 'Release package root' -MustExist -PathType Directory
 $install = Assert-OokiInstallRoot -InstallRoot $InstallRoot
 $data = Assert-OokiDataRoot -DataRoot $DataRoot
 $topology = Assert-OokiDisjointPaths -Paths @{
@@ -89,7 +88,7 @@ $toolSignature = Assert-OokiAuthenticodeSignature -FilePath $toolSource `
 
 if (-not [string]::IsNullOrWhiteSpace($BackupRoot) -and
     -not $BackupDestinationEncryptionConfirmed) {
-    throw 'A configured backup root requires explicit encryption confirmation.'
+    Write-Warning 'The backup volume is not confirmed as encrypted. BitLocker is recommended.'
 }
 $backup = if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
     $null
@@ -163,9 +162,30 @@ if ($null -ne $existingService -and $null -eq $existingManifest) {
 }
 
 $versionRoot = Join-Path (Join-Path $install 'versions') $Version
+$installationCompletePath = Join-Path (
+    Join-Path $data 'operations') 'installation-complete.json'
 if ($PSCmdlet.ShouldProcess(
     "$install with data at $data",
     'Install Ooki Grader Windows Service')) {
+    if ([IO.Directory]::Exists($versionRoot)) {
+        if ($null -ne $existingService -and
+            $existingService.Status -ne 'Stopped') {
+            Stop-Service -Name $ServiceName -Force
+            $existingService.WaitForStatus(
+                [System.ServiceProcess.ServiceControllerStatus]::Stopped,
+                [TimeSpan]::FromSeconds(60))
+        }
+        $recoveryRoot = Join-Path (Split-Path -Parent $versionRoot) (
+            'previous-incomplete-' + $Version + '-' +
+            [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmss'))
+        Move-Item -LiteralPath $versionRoot -Destination $recoveryRoot
+        $repairKind = if ([IO.File]::Exists($installationCompletePath)) {
+            'completed same-version payload'
+        } else {
+            'incomplete prior installation payload'
+        }
+        Write-Warning "Moved the $repairKind to $recoveryRoot. The service will be repaired with the verified package."
+    }
     Install-OokiVersionPayload -PackageRoot $package `
         -VersionRoot $versionRoot -Confirm:$false | Out-Null
     $hostExecutable = Join-Path $versionRoot 'OokiGrader.Host.exe'
@@ -198,6 +218,10 @@ if ($PSCmdlet.ShouldProcess(
         -ServiceName $ServiceName -Confirm:$false
     Set-OokiDataAcl -DataRoot $data -ServiceName $ServiceName `
         -Confirm:$false
+    if ($null -ne $backup) {
+        Set-OokiBackupAcl -BackupRoot $backup -ServiceName $ServiceName `
+            -Confirm:$false | Out-Null
+    }
     $installedCertificate = Install-OokiHostCertificate `
         -SourcePath $certificate -DataRoot $data -DnsName $DnsName `
         -ServiceName $ServiceName -Confirm:$false
@@ -245,14 +269,6 @@ if ($PSCmdlet.ShouldProcess(
     }
     Write-OokiJsonFile -Path $configurationPath `
         -Value $settings -Confirm:$false
-    Write-OokiInstallationManifest -DataRoot $data -Version $Version `
-        -InstallRoot $install -ServiceName $ServiceName `
-        -DnsName $DnsName -HttpsPort $HttpsPort `
-        -CertificatePath $installedCertificate `
-        -ConfigurationPath $configurationPath `
-        -FirewallProfile $FirewallProfile `
-        -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-        -Confirm:$false | Out-Null
     Set-OokiFirewallRule -Port $HttpsPort `
         -RemoteAddress $SchoolSubnet `
         -FirewallProfile $FirewallProfile -Confirm:$false
@@ -263,13 +279,45 @@ if ($PSCmdlet.ShouldProcess(
         Start-Service -Name $ServiceName
     }
     Wait-OokiService -ServiceName $ServiceName -TimeoutSeconds 90
-    $ready = Test-OokiReadyEndpoint `
-        -Uri ([Uri] "${origin}/health/ready") `
-        -TimeoutSeconds 90
-    if (-not $ready) {
+    try {
+        $health = & (Join-Path $PSScriptRoot `
+            'Test-OokiGraderHealth.ps1') `
+            -ToolPath (Join-Path $versionRoot 'OokiGrader.Tool.exe') `
+            -DatabasePath (Join-Path $data 'ooki-grader.db') `
+            -DataRoot $data `
+            -ContentRoot (Join-Path $data 'objects') `
+            -ReadyUri ([Uri] "${origin}/health/ready") `
+            -ServiceName $ServiceName `
+            -AllowPhysicalReserveDegraded `
+            -TimeoutSeconds 90 `
+            -PassThru
+    } catch {
         Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        throw 'The service did not pass its HTTPS readiness check. It was stopped; staged files and data were preserved for repair.'
+        throw
     }
+    if ($health.state -notin @(
+            'healthy',
+            'physical-reserve-degraded')) {
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+        throw 'The service failed its database, storage, TLS, or HTTPS health check. It was stopped; staged files and data were preserved for repair.'
+    }
+
+    Write-OokiInstallationManifest -DataRoot $data -Version $Version `
+        -InstallRoot $install -ServiceName $ServiceName `
+        -DnsName $DnsName -HttpsPort $HttpsPort `
+        -CertificatePath $installedCertificate `
+        -ConfigurationPath $configurationPath `
+        -FirewallProfile $FirewallProfile `
+        -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
+        -Confirm:$false | Out-Null
+    Write-OokiJsonFile -Path $installationCompletePath -Value ([ordered]@{
+        schema = 'ooki-installation-complete/v1'
+        product = 'Ooki Grader'
+        version = $Version
+        serviceName = $ServiceName
+        verifiedAt = [DateTimeOffset]::UtcNow.ToString('O')
+        healthState = $health.state
+    }) -Confirm:$false
 
     [pscustomobject]@{
         state = 'installed'
@@ -279,6 +327,8 @@ if ($PSCmdlet.ShouldProcess(
         firewallProfile = $FirewallProfile
         hostHostsEntry = $hostHostsEntry
         dataPreserved = $true
+        healthState = $health.state
+        uploadsAvailable = [bool] $health.uploadsAvailable
         hostSignature = $hostSignature.ExternalGate
         toolSignature = $toolSignature.ExternalGate
         packageTrustMode = if ($AllowChecksumVerifiedOnSitePackage) {

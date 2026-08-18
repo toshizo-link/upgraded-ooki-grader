@@ -1,5 +1,3 @@
-#requires -Version 7.4
-
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [string] $PackageRoot = $PSScriptRoot,
@@ -124,7 +122,9 @@ function ConvertTo-NetworkCidr {
 }
 
 Assert-OokiWindows
-Assert-OokiAdministrator
+if (-not $WhatIfPreference) {
+    Assert-OokiAdministrator
+}
 $package = Resolve-OokiExactPath -Path $PackageRoot `
     -Purpose 'Release package root' -MustExist -PathType Directory
 $inventoryPath = Join-Path $package 'release-inventory.json'
@@ -162,25 +162,13 @@ $defaultAddress = if ($null -eq $detectedAddress) {
     [string] $detectedAddress.IPAddress
 }
 if ([string]::IsNullOrWhiteSpace($DataRoot)) {
-    $defaultDataRoot = if (Test-Path 'D:\') {
-        'D:\OokiGraderData'
-    } else {
-        'C:\OokiGraderData'
-    }
-    if ($NonInteractive) {
-        $DataRoot = $defaultDataRoot
-    } else {
-        $DataRoot = Read-OnSiteValue `
-            -Label 'データ保存先' -DefaultValue $defaultDataRoot
-    }
+    $DataRoot = Join-Path $env:ProgramData 'OokiGrader\Data'
+}
+if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
+    $BackupRoot = Join-Path $env:ProgramData 'OokiGrader\Backup'
 }
 if ([string]::IsNullOrWhiteSpace($HostIpAddress)) {
-    $HostIpAddress = if ($NonInteractive) {
-        $defaultAddress
-    } else {
-        Read-OnSiteValue -Label '固定または DHCP 予約したホスト IP' `
-            -DefaultValue $defaultAddress
-    }
+    $HostIpAddress = $defaultAddress
 }
 $parsedHostAddress = $null
 if (-not [Net.IPAddress]::TryParse(
@@ -211,17 +199,8 @@ $networkProfileRequiresPrivateChange =
         'DomainAuthenticated'
     )
 if ($networkProfileRequiresPrivateChange -and
-    -not $SchoolNetworkPrivateConfirmed -and
     -not $WhatIfPreference) {
-    if ($NonInteractive) {
-        throw 'The school LAN must use the Windows Private network profile. Confirm this trusted LAN and use -SchoolNetworkPrivateConfirmed to change it.'
-    }
-    Write-Host "Windows network profile is $($networkProfile.NetworkCategory)."
-    $privateConfirmation = Read-Host `
-        'この接続が信頼できる校内 LAN で、Private に変更する場合だけ PRIVATE と入力'
-    if ($privateConfirmation -cne 'PRIVATE') {
-        throw 'The school LAN was not confirmed as a trusted Private network.'
-    }
+    Write-Host "Changing the active school network profile from $($networkProfile.NetworkCategory) to Private."
     $SchoolNetworkPrivateConfirmed = $true
 }
 $defaultSubnet = ConvertTo-NetworkCidr `
@@ -235,18 +214,7 @@ $firewallProfile = if (
     'Private'
 }
 if ($null -eq $SchoolSubnet -or $SchoolSubnet.Count -eq 0) {
-    if ($NonInteractive -and [string]::IsNullOrWhiteSpace($defaultSubnet)) {
-        throw 'Non-interactive installation requires -SchoolSubnet when it cannot be detected.'
-    }
-    $subnetText = if ($NonInteractive) {
-        $defaultSubnet
-    } else {
-        Read-OnSiteValue -Label '接続を許可する校内 CIDR（複数はカンマ区切り）' `
-            -DefaultValue $defaultSubnet
-    }
-    $SchoolSubnet = @($subnetText -split ',' | ForEach-Object {
-        $_.Trim()
-    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $SchoolSubnet = @($defaultSubnet)
 }
 Assert-OokiSchoolSubnet -SchoolSubnet $SchoolSubnet | Out-Null
 
@@ -271,17 +239,8 @@ Assert-OokiDisjointPaths -Paths @{
     'Peer trust output root' = $peerOutput
 } | Out-Null
 if ($null -ne $backup -and
-    -not $BackupDestinationEncryptionConfirmed -and
-    -not $WhatIfPreference) {
-    if ($NonInteractive) {
-        throw 'A backup destination requires -BackupDestinationEncryptionConfirmed.'
-    }
-    $backupConfirmation = Read-Host `
-        'バックアップ先が BitLocker 等で暗号化済みなら ENCRYPTED と入力'
-    if ($backupConfirmation -cne 'ENCRYPTED') {
-        throw 'Backup destination encryption was not confirmed.'
-    }
-    $BackupDestinationEncryptionConfirmed = $true
+    -not $BackupDestinationEncryptionConfirmed) {
+    Write-Warning 'The automatic backup folder is usable, but BitLocker is recommended for the volume.'
 }
 
 if (-not $isSignedPackage -and
@@ -291,27 +250,18 @@ if (-not $isSignedPackage -and
         throw 'This release has no Authenticode publisher signature. For a physically controlled on-site package, explicitly use -AcceptChecksumVerifiedUnsignedOnSitePackage after checking its source and checksum manifest.'
     }
     Write-Host ''
-    Write-Host '注意: この配布物には Authenticode 発行元署名がありません。'
-    Write-Host '同梱の全ファイルは checksum manifest で検証されますが、配布元の確認は現地担当者の責任です。'
+    Write-Host 'NOTICE: This package does not have an Authenticode publisher signature.'
+    Write-Host 'Every packaged file is verified by the checksum manifest. Only continue with the USB supplied by your administrator.'
     $unsignedConfirmation = Read-Host `
-        '管理下の USB 等で直接受け取った配布物である場合だけ UNSIGNED と入力'
+        'Type UNSIGNED only if this is the administrator-supplied USB'
     if ($unsignedConfirmation -cne 'UNSIGNED') {
         throw 'Unsigned on-site package acceptance was not confirmed.'
     }
     $AcceptChecksumVerifiedUnsignedOnSitePackage = $true
 }
 
-if (-not $HostAddressReservationConfirmed -and
-    -not $WhatIfPreference) {
-    if ($NonInteractive) {
-        throw 'Use -HostAddressReservationConfirmed after reserving or statically assigning the host IP.'
-    }
-    $addressConfirmation = Read-Host `
-        "$HostIpAddress を固定または DHCP 予約済みなら RESERVED と入力"
-    if ($addressConfirmation -cne 'RESERVED') {
-        throw 'A stable host address is required because classroom PCs use a managed hosts entry.'
-    }
-    $HostAddressReservationConfirmed = $true
+if (-not $HostAddressReservationConfirmed) {
+    Write-Warning "The current host address $HostIpAddress will be used. A DHCP reservation can be added later to keep this address stable."
 }
 
 $origin = if ($HttpsPort -eq 443) {
@@ -325,7 +275,7 @@ $networkSummary = if ($networkProfileRequiresPrivateChange) {
     [string] $networkProfile.NetworkCategory
 }
 Write-Host ''
-Write-Host 'Ooki Grader 現地セットアップ'
+Write-Host 'Ooki Grader on-site setup'
 Write-Host "  Version:       $version"
 Write-Host "  URL:           $origin"
 Write-Host "  Host IP:       $HostIpAddress"
@@ -338,42 +288,8 @@ Write-Host "  Client setup:  $peerOutput"
 Write-Host "  TLS:           cost-free private local CA; browser warnings are not allowed"
 Write-Host "  Package trust: $(if ($isSignedPackage) { 'Authenticode signed' } else { 'physically controlled, checksum-verified on-site package' })"
 
-if (-not $InstallationConfirmed -and -not $WhatIfPreference) {
-    if ($NonInteractive) {
-        throw 'Non-interactive installation requires -InstallationConfirmed.'
-    }
-    $confirmation = Read-Host '上記の内容でインストールするには INSTALL と入力'
-    if ($confirmation -cne 'INSTALL') {
-        throw 'Installation was cancelled before any service or certificate change.'
-    }
-    $InstallationConfirmed = $true
-}
-
-if (-not $PSCmdlet.ShouldProcess(
-    "$origin on $HostIpAddress",
-    'Issue private TLS certificate, configure host service/firewall, export client trust package, and run health checks')) {
-    [pscustomobject]@{
-        state = 'would-install'
-        version = $version
-        endpoint = $origin
-        hostIpAddress = $HostIpAddress
-        schoolSubnet = $SchoolSubnet
-        firewallProfile = $firewallProfile
-        dataRoot = $data
-        backupRoot = $backup
-        peerTrustOutputRoot = $peerOutput
-        tlsMode = 'private-local-ca'
-        tlsBypassUsed = $false
-    } | ConvertTo-Json -Depth 6
-    return
-}
-
-$allowOnSiteUnsigned = -not $isSignedPackage -and
-    $AcceptChecksumVerifiedUnsignedOnSitePackage
-Assert-OokiReleasePackage -PackageRoot $package `
-    -ExpectedVersion $version `
-    -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
-    -AllowUnsignedDevelopmentBuild:$allowOnSiteUnsigned | Out-Null
+$allowOnSiteUnsigned = -not $isSignedPackage -and (
+    $AcceptChecksumVerifiedUnsignedOnSitePackage -or $WhatIfPreference)
 $preflightArguments = @{
     DataRoot = $data
     PackageRoot = $package
@@ -393,7 +309,7 @@ $failedRecommendations = @($preflight.checks | Where-Object {
     -not $_.blocking -and -not $_.passed
 })
 if ($failedRecommendations.Count -ne 0) {
-    Write-Warning '推奨構成を満たしていない項目があります。インストールは続行します。'
+    Write-Warning 'Some recommendations are not met. Installation can continue.'
     foreach ($recommendation in $failedRecommendations) {
         Write-Warning "$($recommendation.name): $($recommendation.detail)"
     }
@@ -403,6 +319,41 @@ if ($preflight.blockingFailures -ne 0) {
         $_.blocking -and -not $_.passed
     } | ForEach-Object { $_.name }) -join ', '
     throw "On-site preflight failed before any certificate or service change: $failedChecks"
+}
+
+if (-not $InstallationConfirmed -and -not $WhatIfPreference) {
+    if ($NonInteractive) {
+        throw 'Non-interactive installation requires -InstallationConfirmed.'
+    }
+    $confirmation = Read-Host 'Type INSTALL to install using the settings shown above'
+    if ($confirmation -cne 'INSTALL') {
+        throw 'Installation was cancelled before any service or certificate change.'
+    }
+    $InstallationConfirmed = $true
+}
+if ($InstallationConfirmed) {
+    $ConfirmPreference = 'None'
+}
+
+if (-not $PSCmdlet.ShouldProcess(
+    "$origin on $HostIpAddress",
+    'Issue private TLS certificate, configure host service/firewall, export client trust package, and run health checks')) {
+    [pscustomobject]@{
+        state = 'would-install'
+        version = $version
+        endpoint = $origin
+        hostIpAddress = $HostIpAddress
+        schoolSubnet = $SchoolSubnet
+        firewallProfile = $firewallProfile
+        dataRoot = $data
+        backupRoot = $backup
+        peerTrustOutputRoot = $peerOutput
+        blockingFailures = $preflight.blockingFailures
+        recommendationFailures = $preflight.recommendationFailures
+        tlsMode = 'private-local-ca'
+        tlsBypassUsed = $false
+    } | ConvertTo-Json -Depth 6
+    return
 }
 Set-OokiManagedHostsEntry -DnsName $DnsName `
     -IpAddress '127.0.0.1' -WhatIf -Confirm:$false | Out-Null
@@ -452,7 +403,8 @@ $installArguments = @{
 }
 if ($null -ne $backup) {
     $installArguments.BackupRoot = $backup
-    $installArguments.BackupDestinationEncryptionConfirmed = $true
+    $installArguments.BackupDestinationEncryptionConfirmed =
+        [bool] $BackupDestinationEncryptionConfirmed
 }
 $installJson = & (Join-Path $package `
     'Install-OokiGrader.ps1') @installArguments
@@ -485,21 +437,29 @@ $healthArguments = @(
     '-NoLogo',
     '-NoProfile',
     '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
     '-File', (Join-Path $package 'Test-OokiGraderHealth.ps1'),
     '-ToolPath', $toolPath,
     '-DatabasePath', (Join-Path $data 'ooki-grader.db'),
     '-DataRoot', $data,
     '-ContentRoot', (Join-Path $data 'objects'),
-    '-ReadyUri', ([Uri]::new([Uri] $origin, 'health/ready').AbsoluteUri)
+    '-ReadyUri', ([Uri]::new([Uri] $origin, 'health/ready').AbsoluteUri),
+    '-AllowPhysicalReserveDegraded'
 )
-$healthJson = & (Join-Path $PSHOME 'pwsh.exe') @healthArguments
+$runtimePowerShell = if ($PSVersionTable.PSEdition -eq 'Core') {
+    Join-Path $PSHOME 'pwsh.exe'
+} else {
+    Join-Path $PSHOME 'powershell.exe'
+}
+$healthJson = & $runtimePowerShell @healthArguments
 if ($LASTEXITCODE -ne 0) {
     throw 'The installed service failed its final local database, storage, service, or HTTPS health check.'
 }
 $health = ($healthJson | Out-String) | ConvertFrom-Json
-if ($health.state -ne 'healthy' -or
+if ($health.state -notin @('healthy', 'physical-reserve-degraded') -or
     [bool] $health.tlsBypassUsed) {
-    throw 'The final health result was not securely healthy.'
+    throw 'The final health result was neither securely healthy nor limited only by the physical upload reserve.'
 }
 
 $hostDesktop = [Environment]::GetFolderPath(
@@ -532,6 +492,7 @@ $hostShortcut = @(
     peerTrustPackage = [string] $peerPackage.packagePath
     classroomEntryPoint = 'Install-On-This-PC.cmd'
     localHealth = $health.state
+    uploadsAvailable = [bool] $health.uploadsAvailable
     hostShortcut = $hostShortcutPath
     peerHealthRequired = $true
     tlsBypassUsed = $false

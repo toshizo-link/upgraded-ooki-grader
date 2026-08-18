@@ -73,80 +73,48 @@ public sealed class HostInstallMediaBuilderTests
     }
 
     [Fact]
-    public void BuilderPinsAndCopiesTheMicrosoftPowerShellMsi()
+    public void BuilderAddsNoHostRuntimePrerequisite()
     {
         var builder = ReadInstallerFile(
             "New-OokiGraderHostInstallMedia.ps1");
 
+        Assert.Contains("bundledPrerequisites = @()", builder);
+        Assert.Contains("$requiredHostInstallerFiles", builder);
+        Assert.Contains("'Install-OokiGraderPeerTrust.ps1'", builder);
         Assert.Contains(
-            "$pinnedPowerShellVersion = '7.6.4'",
+            "releaseInventory.hostInstallEntryPoint",
             builder,
             StringComparison.Ordinal);
         Assert.Contains(
-            "d11942df52fd12470169797abfa4781d9480efdc81000ba4fa55a5b921ed8dd0",
-            builder,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            "Get-AuthenticodeSignature",
+            "releaseInventory.minimumTechnicianPowerShell",
             builder,
             StringComparison.Ordinal);
         Assert.Contains(
-            "O=Microsoft Corporation",
+            "requiredApplicationPowerShell = '5.1 (included with Windows)'",
             builder,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "[IO.File]::Copy($powerShellMsi, $stagedPowerShellMsi, $false)",
-            builder,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Prerequisites/$pinnedPowerShellMsiName",
-            builder,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("PowerShellMsiPath", builder);
+        Assert.DoesNotContain("pinnedPowerShell", builder);
+        Assert.DoesNotContain("Prerequisites/", builder);
     }
 
     [Fact]
-    public void BootstrapUpgradesAbsentOldOrNonX64PowerShell()
+    public void BootstrapUsesBuiltInWindowsPowerShell()
     {
         var bootstrap = ReadMediaTemplate(
             "Install-OokiGrader-Host.ps1.template");
 
+        Assert.StartsWith("#requires -Version 5.1", bootstrap);
         Assert.Contains(
-            "function Test-CompatiblePowerShell7",
+            "System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             bootstrap,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "[version] $info.Version -ge [version] '7.4'",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "[Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture"
-                + " -eq [Runtime.InteropServices.Architecture]::X64",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "[bool] $info.IsX64",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "$pwsh = Find-CompatiblePowerShell7",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "if ($null -eq $pwsh)",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "'/passive'",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "'/norestart'",
-            bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "$msiProcess.ExitCode -notin @(0, 3010)",
-            bootstrap,
-            StringComparison.Ordinal);
+        Assert.Contains("& $runtimePowerShell @onSiteArguments", bootstrap);
+        Assert.Contains("'-ExecutionPolicy'", bootstrap);
+        Assert.Contains("'Bypass'", bootstrap);
+        Assert.DoesNotContain("pwsh.exe", bootstrap);
+        Assert.DoesNotContain("msiexec.exe", bootstrap);
+        Assert.DoesNotContain("Prerequisites", bootstrap);
     }
 
     [Fact]
@@ -172,19 +140,15 @@ public sealed class HostInstallMediaBuilderTests
             "Write-DiagnosticResult -State 'installed-and-verified'",
             bootstrap,
             StringComparison.Ordinal);
-        Assert.Contains("'/l*v'", bootstrap, StringComparison.Ordinal);
         Assert.Contains(
-            "powerShellMsiLogPath = $msiLogPath",
+            "powerShellPath = $runtimePowerShell",
             bootstrap,
             StringComparison.Ordinal);
         Assert.Contains(
             "C:\\OokiGrader-Setup\\logs",
             readme,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "-powershell-msi.log",
-            readme,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("MSI", readme, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -235,7 +199,7 @@ public sealed class HostInstallMediaBuilderTests
             bootstrap,
             StringComparison.Ordinal);
         Assert.Contains(
-            "既存内容を上書きしません",
+            "Existing content will not be overwritten",
             bootstrap,
             StringComparison.Ordinal);
     }

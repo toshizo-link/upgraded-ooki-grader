@@ -399,6 +399,8 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseMiddleware<RequestGuardsMiddleware>();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<PasswordChangeRequiredMiddleware>();
@@ -500,8 +502,6 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi("/openapi/{documentName}.json").AllowAnonymous();
 }
 
-app.UseDefaultFiles();
-app.UseStaticFiles();
 app.MapFallbackToFile("index.html").AllowAnonymous();
 
 await app.RunAsync();

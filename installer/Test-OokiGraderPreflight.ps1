@@ -110,8 +110,8 @@ Add-PreflightCheck 'data-capacity' (
     $null -ne $volume -and $volume.SizeRemaining -ge 165GB) $false `
     'At least 165 GiB free is recommended for the managed quota and reserve.'
 Add-PreflightCheck 'data-emergency-reserve' (
-    $null -ne $volume -and $volume.SizeRemaining -ge 5GB) $true `
-    'At least 5 GiB free is required for the runtime emergency reserve.'
+    $null -ne $volume -and $volume.SizeRemaining -ge 5GB) $false `
+    'Keeping the default 5 GiB runtime reserve is recommended before accepting uploads; installation and repair may continue below it.'
 
 $bitLocker = Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue
 $bitLockerEnabled = $false

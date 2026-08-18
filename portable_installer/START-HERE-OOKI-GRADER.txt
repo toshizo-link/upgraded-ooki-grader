@@ -1,0 +1,33 @@
+Ooki Grader 0.9.2 - Portable installer
+======================================
+
+Installation
+------------
+1. Open the "OokiGrader-0.9.2-Windows-Host-Install" folder.
+2. Right-click "01-Install-OokiGrader-Host.cmd".
+3. Select "Run as administrator".
+4. The current IP, connected school network, data folder, and backup folder
+   are selected automatically. Review the displayed values and continue.
+
+Windows 11 Pro is recommended. x64 Windows and a local NTFS volume are
+required. PowerShell 7, the .NET SDK, Node.js, and a pre-created PFX are not
+required.
+
+Daily startup
+-------------
+Turn on the host PC and wait 1-2 minutes. Windows sign-in is not required;
+Ooki Grader starts automatically as a Windows service. Then open:
+
+  https://ooki-grader.test/
+
+If it does not open, run these commands in PowerShell as administrator:
+
+  Get-Service OokiGrader.Host
+  Start-Service OokiGrader.Host
+
+Distribution
+------------
+Keep the complete folder together. When transferring digitally, ZIP this
+entire portable_installer directory and communicate the outer ZIP SHA-256
+through a separate trusted channel. The installer verifies its internal
+package before use.

@@ -1,5 +1,3 @@
-#requires -Version 7.4
-
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
     [Parameter(Mandatory)]

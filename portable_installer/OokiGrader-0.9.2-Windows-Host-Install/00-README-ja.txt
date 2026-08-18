@@ -1,4 +1,4 @@
-Ooki Grader @@OOKI_VERSION@@ WindowsホストPC用インストールメディア
+﻿Ooki Grader 0.9.2 WindowsホストPC用インストールメディア
 ========================================================
 
 このフォルダーを、管理されたUSBメモリーなどでWindowsホストPCへ

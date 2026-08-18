@@ -55,3 +55,170 @@ jobs:
 
       - name: Check generated OpenAPI client drift
         run: npm --prefix src/OokiGrader.Web run api:check
+
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/OokiGrader.Web/package-lock.json
+
+      - name: Parse installer sources with PowerShell 7
+        shell: pwsh
+        run: |
+          $parseFailures = @()
+          Get-ChildItem installer -File |
+            Where-Object Extension -in @('.ps1', '.psm1') |
+            ForEach-Object {
+              $source = [IO.File]::ReadAllText(
+                $_.FullName,
+                [Text.UTF8Encoding]::new($false, $true))
+              $tokens = $null
+              $parseErrors = $null
+              [Management.Automation.Language.Parser]::ParseInput(
+                $source,
+                [ref] $tokens,
+                [ref] $parseErrors) | Out-Null
+              foreach ($parseError in @($parseErrors)) {
+                $parseFailures += "$($_.Name):$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+              }
+            }
+          if ($parseFailures.Count -ne 0) {
+            $parseFailures | Write-Error
+            throw 'PowerShell 7 installer source parsing failed.'
+          }
+
+      - name: Parse installer sources with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $parseFailures = @()
+          Get-ChildItem installer -File |
+            Where-Object Extension -in @('.ps1', '.psm1') |
+            ForEach-Object {
+              $source = [IO.File]::ReadAllText(
+                $_.FullName,
+                [Text.UTF8Encoding]::new($false, $true))
+              $tokens = $null
+              $parseErrors = $null
+              [Management.Automation.Language.Parser]::ParseInput(
+                $source,
+                [ref] $tokens,
+                [ref] $parseErrors) | Out-Null
+              foreach ($parseError in @($parseErrors)) {
+                $parseFailures += "$($_.Name):$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+              }
+            }
+          if ($parseFailures.Count -ne 0) {
+            $parseFailures | Write-Error
+            throw 'Windows PowerShell 5.1 installer source parsing failed.'
+          }
+
+      - name: Build and verify release and host media
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "0.0.0-ci.$env:GITHUB_RUN_ID.$env:GITHUB_RUN_ATTEMPT"
+          $releaseOutput = Join-Path $env:RUNNER_TEMP 'ooki-release'
+          $mediaOutput = Join-Path $env:RUNNER_TEMP 'ooki-media'
+          & ./installer/New-OokiGraderReleasePackage.ps1 `
+            -Version $version `
+            -SourceRoot $PWD `
+            -OutputRoot $releaseOutput `
+            -Confirm:$false
+          $packageRoot = Join-Path $releaseOutput `
+            "OokiGrader-$version-win-x64"
+          & ./installer/New-OokiGraderHostInstallMedia.ps1 `
+            -PackageRoot $packageRoot `
+            -Version $version `
+            -OutputRoot $mediaOutput `
+            -AllowChecksumVerifiedUnsignedOnSitePackage `
+            -Confirm:$false
+          $mediaRoot = Join-Path $mediaOutput `
+            "OokiGrader-$version-Windows-Host-Install"
+          if (-not (Test-Path -LiteralPath $packageRoot -PathType Container) -or
+              -not (Test-Path -LiteralPath $mediaRoot -PathType Container)) {
+            throw 'The release or host-media builder did not publish its verified output.'
+          }
+          $unnecessary = Get-ChildItem $packageRoot -File -Recurse |
+            Where-Object {
+              $_.Name -eq 'appsettings.Development.json' -or
+              $_.Extension -in @('.map', '.pdb')
+            }
+          if ($null -ne $unnecessary) {
+            throw 'The release package contains development-only artifacts.'
+          }
+          "OOKI_CI_VERSION=$version" >> $env:GITHUB_ENV
+          "OOKI_CI_PACKAGE_ROOT=$packageRoot" >> $env:GITHUB_ENV
+          "OOKI_CI_MEDIA_ROOT=$mediaRoot" >> $env:GITHUB_ENV
+
+      - name: Parse packaged installers with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $paths = @(
+            Get-ChildItem $env:OOKI_CI_PACKAGE_ROOT -File |
+              Where-Object Extension -in @('.ps1', '.psm1')
+            Get-Item (Join-Path $env:OOKI_CI_MEDIA_ROOT `
+              'Install-OokiGrader-Host.ps1')
+          )
+          $parseFailures = @()
+          foreach ($path in $paths) {
+            $tokens = $null
+            $parseErrors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              $path.FullName,
+              [ref] $tokens,
+              [ref] $parseErrors) | Out-Null
+            foreach ($parseError in @($parseErrors)) {
+              $parseFailures += "$($path.Name):$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+            }
+          }
+          if ($parseFailures.Count -ne 0) {
+            $parseFailures | Write-Error
+            throw 'Packaged Windows PowerShell 5.1 parsing failed.'
+          }
+          Import-Module (Join-Path $env:OOKI_CI_PACKAGE_ROOT `
+            'OokiGrader.Windows.psm1') -Force
+          $priorWhatIfPreference = $WhatIfPreference
+          try {
+            $WhatIfPreference = $true
+            $packageEvidence = Assert-OokiReleasePackage `
+              -PackageRoot $env:OOKI_CI_PACKAGE_ROOT `
+              -ExpectedVersion $env:OOKI_CI_VERSION `
+              -AllowUnsignedDevelopmentBuild
+            if ($packageEvidence.FileCount -le 0) {
+              throw 'Windows PowerShell 5.1 returned no package evidence under WhatIf.'
+            }
+          }
+          finally {
+            $WhatIfPreference = $priorWhatIfPreference
+          }
+
+      - name: Compile the optional Windows Setup EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setupOutput = Join-Path $env:RUNNER_TEMP 'ooki-setup'
+          & ./installer/New-OokiGraderWindowsInstaller.ps1 `
+            -PackageRoot $env:OOKI_CI_PACKAGE_ROOT `
+            -Version $env:OOKI_CI_VERSION `
+            -OutputRoot $setupOutput `
+            -AllowUnsignedDevelopmentBuild `
+            -Confirm:$false
+          $baseName = "OokiGrader-Setup-$env:OOKI_CI_VERSION-x64"
+          foreach ($extension in @('.exe', '.json', '.sha256')) {
+            if (-not (Test-Path -LiteralPath `
+                (Join-Path $setupOutput "$baseName$extension") `
+                -PathType Leaf)) {
+              throw "The Inno Setup build did not emit $extension output."
+            }
+          }

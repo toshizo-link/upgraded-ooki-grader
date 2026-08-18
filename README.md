@@ -39,13 +39,17 @@ UTF-8 manifest CSV.
 
 ## Prerequisites
 
-- [.NET SDK 10.0.302](global.json). A later 10.0 patch is accepted by `global.json`.
+- [.NET SDK 10.0.302](global.json). Later stable .NET 10 feature bands are also accepted; CI remains pinned to 10.0.302.
 - Node.js `^20.19`, `^22.13`, or `>=24`; Node.js 24 or newer is recommended. npm is included with Node.js.
-- A trusted ASP.NET Core development HTTPS certificate for local browser development:
+- An ASP.NET Core development HTTPS certificate for the local API:
 
   ```text
-  dotnet dev-certs https --trust
+  dotnet dev-certs https
   ```
+
+  Add `--trust` only when opening the HTTPS API directly in a browser. The
+  documented Vite development flow proxies it from `http://localhost:5173`
+  and does not require browser trust for the API certificate.
 
 The production target remains a current Windows 11 Pro x64 host with HTTPS and modern Edge or Chrome clients. The development commands also work on macOS and Linux.
 
@@ -83,11 +87,11 @@ pwsh -File installer/New-OokiGraderReleasePackage.ps1 `
 ```
 
 Copy the resulting immutable `OokiGrader-0.1.0-win-x64` folder to a
-technician-controlled USB drive. On the Windows 11 host, open PowerShell 7 as
-Administrator in that folder and run:
+technician-controlled USB drive. On the Windows host, open the built-in Windows
+PowerShell 5.1 (or PowerShell 7) as Administrator in that folder and run:
 
 ```powershell
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1
 ```
 
 The guided script defaults to `https://ooki-grader.test/`, verifies the complete
@@ -107,7 +111,7 @@ mode for a package received through an untrusted download or third party.
 
 ### Optional signed Setup EXE
 
-For broader distribution, use PowerShell 7.4 and Inno Setup 6 on a controlled
+For broader distribution, use PowerShell 7.4 and Inno Setup 6.3 or later on a controlled
 Windows x64 build host and provide an Authenticode signing hook:
 
 ```powershell
@@ -128,7 +132,9 @@ pwsh -File installer/New-OokiGraderWindowsInstaller.ps1 `
 The first command creates an immutable, fully inventoried and signed payload. The second
 re-verifies its version, complete checksum coverage, and approved publisher,
 then produces `OokiGrader-Setup-0.1.0-x64.exe` plus JSON evidence and a SHA-256
-file. Compilation and signing are Windows-only. The checked-in setup source and
+file. On the school host, the wizard creates the school-local CA and HTTPS
+certificate automatically; it does not require a pre-created PFX or
+PowerShell 7. Compilation and signing are Windows-only. The checked-in setup source and
 wrapper are reproducible, but a setup EXE is not approved for school use until
 the target-Windows, Authenticode, LAN, and disaster-recovery gates in
 [Implementation status](docs/implementation-status.md) have passed.

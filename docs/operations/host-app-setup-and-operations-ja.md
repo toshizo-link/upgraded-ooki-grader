@@ -68,7 +68,7 @@ Ooki Grader は、次の基本構成で動作します。
 - 安定した電源、UPS、ホストの自動起動と再起動後点検手順
 - 校内 DNS、固定アドレス、HTTPS 443、構成した外部 AI 宛ての送信 HTTPS / DNS
 
-Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容量は推奨項目です。いずれかを満たさなくても事前検査は非ブロッキングの警告として記録し、インストールを続行します。性能低下や保存可能量の減少を見込み、実際の答案量で確認してください。一方、x64 実行環境、NTFS、使用可能な HTTPS ポート、配布物の完全性、証明書と安全なパス構成は必須であり、満たさない場合は停止します。
+Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容量は推奨項目です。いずれかを満たさなくても事前検査は非ブロッキングの警告として記録し、インストールを続行します。性能低下や保存可能量の減少を見込み、実際の答案量で確認してください。空きが既定の物理予約 5 GiB 未満でもインストールと修復は完了できますが、空きを増やすか予約値を意図的に変更するまで答案アップロードは無効です。一方、x64 実行環境、NTFS、使用可能な HTTPS ポート、配布物の完全性、証明書と安全なパス構成は必須であり、満たさない場合は停止します。
 
 `InstallRoot`、`DataRoot`、`BackupRoot` は相互に包含しない別パスにします。`DataRoot` を Windows フォルダー、ユーザープロファイル、一時フォルダー、OneDrive 等の同期フォルダー、UNC 共有へ置かないでください。
 
@@ -103,7 +103,7 @@ Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容�
 
 次の手順は、学校が将来 Authenticode 証明書を用意する場合の任意経路です。今回の現地設置には不要です。
 
-現在の技術担当者パッケージとセットアップ EXE は、PowerShell 7.4、.NET SDK 10、Node.js 24 以降（npm を含む）、Inno Setup 6 を使用して管理された Windows x64 ビルド端末で作成します。自己完結型パッケージを受け取る学校ホストには、ビルド用 SDK や Node.js を入れません。
+現在の技術担当者パッケージとセットアップ EXE は、PowerShell 7.4、.NET SDK 10、Node.js 24 以降（npm を含む）、Inno Setup 6.3 以降を使用して管理された Windows x64 ビルド端末で作成します。自己完結型パッケージを受け取る学校ホストには、ビルド用 SDK や Node.js を入れません。
 
 ```powershell
 Set-Location C:\src\upgraded-ooki-grader
@@ -185,18 +185,18 @@ hosts ファイルに同じ名前の管理外行が既にある場合、スク�
 
 ### 6.1 現地セットアップを使う（今回の推奨）
 
-詳しい訪問手順と記録用チェックリストは [現地インストールガイド](onsite-installation-ja.md) を使用します。管理者 PowerShell 7.4 で、まず引数なしの対話実行を使います。DataRoot、ホスト IP、CIDR は検出値を確認してから確定します。
+詳しい訪問手順と記録用チェックリストは [現地インストールガイド](onsite-installation-ja.md) を使用します。ホストでは管理者 Windows PowerShell 5.1（または PowerShell 7）で、まず引数なしの対話実行を使います。DataRoot、ホスト IP、CIDR は検出値を確認してから確定します。
 
 ```powershell
 Set-Location 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64'
 
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1
 ```
 
 暗号化済みバックアップ先を初回から構成する場合は、実際に暗号化済みであることを確認して次を使います。
 
 ```powershell
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1 `
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1 `
   -BackupRoot 'E:\OokiGraderBackup' `
   -BackupDestinationEncryptionConfirmed
 ```
@@ -219,9 +219,9 @@ pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1 `
 
 1. `OokiGrader-Setup-0.1.0-x64.exe`、同名の `.sha256`、承認済み発行者の拇印を別経路で受け取ります。
 2. `Get-FileHash -Algorithm SHA256` と `Get-AuthenticodeSignature` で、ハッシュ、`Valid`、発行者拇印、タイムスタンプを確認します。
-3. Windows PowerShell ではなく、64-bit PowerShell 7.4 以降の `pwsh.exe` がインストール済みであることを確認します。セットアップも開始前に検査し、不足時は停止します。
-4. EXE を管理者として実行します。データ保存先、正式 DNS 名、HTTPS ポート、許可する校内 CIDR、秘密鍵付きホスト証明書 PFX/P12 を入力します。
-5. セットアップ内の事前検査が、パッケージの全チェックサムと署名、版、OS、NTFS、容量、ポート、パス分離を確認します。Windows 11 Pro、16 GiB RAM、165 GiB 空き容量の不一致は推奨警告として表示されますが、セットアップは続行します。x64、NTFS、ポート、パス、パッケージ／署名／証明書の必須検査に失敗した場合だけ、表示内容を直してから再実行します。
+3. Windows 標準の 64-bit Windows PowerShell 5.1 が利用可能であることを確認します。PowerShell 7、.NET SDK、Node.js は学校ホストには不要です。
+4. EXE を管理者として実行します。データ保存先、正式 DNS 名、HTTPS ポート、固定または DHCP 予約済みのホスト IPv4、許可する校内 CIDR を入力し、校内 LAN の確認項目を承認します。学校ローカル CA と HTTPS 証明書は自動作成されるため、PFX/P12 の事前作成や選択は不要です。
+5. セットアップ内の事前検査が、パッケージの全チェックサムと署名、版、OS、NTFS、容量、ポート、パス分離を確認します。ウィザードは OS の推奨外と 5 GiB の物理予約未満を明示して続行し、後者では空きを増やすまで答案アップロードが無効です。16 GiB RAM、165 GiB 空き容量などを含む推奨項目の完全な内訳は、導入後に 6.3 の事前検査を実行して記録してください。x64、NTFS、ポート、パス、パッケージ／署名／証明書の必須検査に失敗した場合だけ、表示内容を直してから再実行します。
 6. 成功後、スタートメニューの `Ooki Grader を開く` と `状態を確認` を使用し、正式 URL と readiness を確認します。
 
 セットアップ EXE はバックアップ先を構成しません。バックアップ先は管理画面から変更できないため、今回の設置では `Install-OokiGraderOnSite.ps1 -BackupRoot` を使います。別バージョンが既に入っている場合、セットアップは上書き更新せず、検証済みバックアップを伴う `Upgrade-OokiGrader.ps1` を案内します。アンインストールはアプリを回復領域へ退避し、`DataRoot` は削除しません。
@@ -237,7 +237,7 @@ $DataRoot = 'D:\OokiGraderData'
 $BackupRoot = 'E:\OokiGraderBackup'
 $SignerThumbprint = '<承認済みコード署名証明書の拇印>'
 
-pwsh -File "$PackageRoot\Test-OokiGraderPreflight.ps1" `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PackageRoot\Test-OokiGraderPreflight.ps1" `
   -PackageRoot $PackageRoot `
   -Version $Version `
   -DataRoot $DataRoot `
@@ -246,7 +246,7 @@ pwsh -File "$PackageRoot\Test-OokiGraderPreflight.ps1" `
   -ExpectedSignerThumbprint $SignerThumbprint
 ```
 
-`state` が `ready` で、`blockingFailures` が `0` であることを確認します。Windows 11 Pro、16 GiB RAM、165 GiB 空き容量を含む推奨項目は、不一致でも `blockingFailures` を増やさずインストールを止めません。`recommendationFailures` と各検査の `classification: recommendation` を確認し、CPU、BitLocker、ネットワークプロファイル、時刻同期、Defender 等と合わせて警告内容と運用上の影響を記録してください。
+`state` が `ready` で、`blockingFailures` が `0` であることを確認します。Windows 11 Pro、16 GiB RAM、165 GiB 空き容量を含む推奨項目は、不一致でも `blockingFailures` を増やさずインストールを止めません。5 GiB の物理予約を満たさない場合はインストール後も `uploadsAvailable: false` となるため、答案アップロード前に空きを回復します。`recommendationFailures` と各検査の `classification: recommendation` を確認し、CPU、BitLocker、ネットワークプロファイル、時刻同期、Defender 等と合わせて警告内容と運用上の影響を記録してください。
 
 `-AllowUnsignedDevelopmentBuild` は隔離された開発試験専用です。本番・パイロット配布の署名不足を回避する用途には使いません。
 
@@ -262,7 +262,7 @@ $DnsName = 'ooki-grader.test'
 $SchoolSubnet = @('192.168.10.0/24')
 $SignerThumbprint = '<承認済みコード署名証明書の拇印>'
 
-pwsh -File "$PackageRoot\Install-OokiGrader.ps1" `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PackageRoot\Install-OokiGrader.ps1" `
   -PackageRoot $PackageRoot `
   -Version $Version `
   -DataRoot $DataRoot `
@@ -603,7 +603,7 @@ URL を手で変更して `LIST_QUERY_INVALID` またはカーソルエラーに
 ```powershell
 Stop-Service -Name OokiGrader.Host
 
-pwsh -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Restore-OokiGrader.ps1' `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Restore-OokiGrader.ps1' `
   -VersionRoot 'C:\Program Files\Ooki Grader\versions\0.1.0' `
   -DataRoot 'D:\OokiGraderData' `
   -BackupDestination 'E:\OokiGraderBackup' `
@@ -641,7 +641,7 @@ pwsh -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Restore-OokiGrader.ps1'
 ```powershell
 $NewPackage = 'C:\OokiGrader-Releases\OokiGrader-0.2.0-win-x64'
 
-pwsh -File "$NewPackage\Upgrade-OokiGrader.ps1" `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$NewPackage\Upgrade-OokiGrader.ps1" `
   -PackageRoot $NewPackage `
   -Version '0.2.0' `
   -CurrentVersionRoot 'C:\Program Files\Ooki Grader\versions\0.1.0' `
@@ -667,7 +667,7 @@ SQLite の一部マイグレーションはテーブル再構築と非トラン�
 サービス、ACL、証明書、Firewall、Production 設定が壊れた場合は、対象版、データルート、正式 DNS、証明書、校内 CIDR を確認して `Repair-OokiGrader.ps1` を使います。修復は `restore.in-progress` または `migration.in-progress` があると中断します。その場合は、通常修復でマーカーを消そうとせず、該当する復旧手順へ進みます。
 
 ```powershell
-pwsh -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Repair-OokiGrader.ps1' `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Repair-OokiGrader.ps1' `
   -VersionRoot 'C:\Program Files\Ooki Grader\versions\0.1.0' `
   -DataRoot 'D:\OokiGraderData' `
   -HostCertificatePath 'D:\OokiGraderData\certificates\ooki-grader-host.pfx' `
@@ -684,7 +684,7 @@ pwsh -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Repair-OokiGrader.ps1' 
 アンインストールは、先生がオフラインであることを明示確認して実行します。スクリプトは Windows Service と Firewall 規則を削除し、アプリファイルを同一ボリュームの回復フォルダーへ移動します。`DataRoot`、バックアップ、クライアントの CA 信頼は保持し、データの破壊削除は行いません。
 
 ```powershell
-pwsh -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Uninstall-OokiGrader.ps1' `
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\OokiGrader-Setup\OokiGrader-0.1.0-win-x64\Uninstall-OokiGrader.ps1' `
   -InstallRoot 'C:\Program Files\Ooki Grader' `
   -DataRoot 'D:\OokiGraderData' `
   -OfflineConfirmed

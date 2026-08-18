@@ -617,7 +617,8 @@ def build() -> None:
     manual.command_box(
         c,
         "$New = 'C:\\OokiGrader-Releases\\OokiGrader-0.2.0-win-x64'\n"
-        "pwsh -File \"$New\\Upgrade-OokiGrader.ps1\" `\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File \"$New\\Upgrade-OokiGrader.ps1\" `\n"
         "  -PackageRoot $New -Version '0.2.0' `\n"
         "  -CurrentVersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
         "  -InstallRoot 'C:\\Program Files\\Ooki Grader' `\n"
@@ -661,7 +662,8 @@ def build() -> None:
     )
     manual.command_box(
         c,
-        "pwsh -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Repair-OokiGrader.ps1' `\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Repair-OokiGrader.ps1' `\n"
         "  -VersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
         "  -DataRoot 'D:\\OokiGraderData' `\n"
         "  -HostCertificatePath 'D:\\OokiGraderData\\certificates\\ooki-grader-host.pfx' `\n"
@@ -726,7 +728,8 @@ def build() -> None:
         c,
         "$Maint = 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64'\n"
         "Stop-Service OokiGrader.Host\n"
-        "pwsh -File \"$Maint\\Restore-OokiGrader.ps1\" `\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File \"$Maint\\Restore-OokiGrader.ps1\" `\n"
         "  -VersionRoot 'C:\\Program Files\\Ooki Grader\\versions\\0.1.0' `\n"
         "  -DataRoot 'D:\\OokiGraderData' `\n"
         "  -BackupDestination 'E:\\OokiGraderBackup' `\n"
@@ -780,7 +783,8 @@ def build() -> None:
     )
     manual.command_box(
         c,
-        "pwsh -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Uninstall-OokiGrader.ps1' `\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File 'C:\\OokiGrader-Setup\\OokiGrader-0.1.0-win-x64\\Uninstall-OokiGrader.ps1' `\n"
         "  -InstallRoot 'C:\\Program Files\\Ooki Grader' `\n"
         "  -DataRoot 'D:\\OokiGraderData' `\n"
         "  -OfflineConfirmed",

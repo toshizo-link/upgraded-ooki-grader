@@ -130,7 +130,7 @@ if ($WindowsPowerShellWorker) {
     }
     $ServiceName = [string] $request.serviceName
 
-    # The outer PowerShell 7 process performs the user-facing ShouldProcess
+    # The outer PowerShell process performs the user-facing ShouldProcess
     # decision. The worker must not prompt a second time in -NonInteractive mode.
     $ConfirmPreference = 'None'
 } elseif ($PSVersionTable.PSEdition -eq 'Core') {

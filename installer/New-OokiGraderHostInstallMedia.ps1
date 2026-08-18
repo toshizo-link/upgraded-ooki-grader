@@ -8,7 +8,6 @@ Builds byte-reproducible, self-checking Windows host installation media.
 pwsh -NoLogo -NoProfile -File .\installer\New-OokiGraderHostInstallMedia.ps1 `
   -PackageRoot 'C:\OokiGrader-Releases\OokiGrader-0.9.2-win-x64' `
   -Version '0.9.2' `
-  -PowerShellMsiPath 'C:\Prerequisites\PowerShell-7.6.4-win-x64.msi' `
   -OutputRoot 'C:\OokiGrader-Releases\host-install-media' `
   -AllowChecksumVerifiedUnsignedOnSitePackage
 #>
@@ -21,9 +20,6 @@ param(
     [Parameter(Mandatory)]
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')]
     [string] $Version,
-
-    [Parameter(Mandatory)]
-    [string] $PowerShellMsiPath,
 
     [Parameter(Mandatory)]
     [string] $OutputRoot,
@@ -41,13 +37,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
-# This LTS prerequisite is release material. Update it only for a new, separately
-# versioned media release; never replace the bytes in already-published media.
-$pinnedPowerShellVersion = '7.6.4'
-$pinnedPowerShellMsiName =
-    "PowerShell-$pinnedPowerShellVersion-win-x64.msi"
-$pinnedPowerShellMsiSha256 =
-    'd11942df52fd12470169797abfa4781d9480efdc81000ba4fa55a5b921ed8dd0'
 $packageName = "OokiGrader-$Version-win-x64"
 $mediaName = "OokiGrader-$Version-Windows-Host-Install"
 $fixedArchiveTimestamp = [DateTimeOffset]::new(
@@ -283,6 +272,30 @@ if (-not $AllowChecksumVerifiedUnsignedOnSitePackage -and
     throw 'A signed media build requires a production-signed release package.'
 }
 $package = $packageEvidence.Root
+$releaseInventory = Get-Content -LiteralPath (
+    Join-Path $package 'release-inventory.json') -Raw | ConvertFrom-Json
+if ([string] $releaseInventory.hostInstallEntryPoint -ne
+        'Install-OokiGraderOnSite.ps1' -or
+    [string] $releaseInventory.minimumTechnicianPowerShell -ne '5.1' -or
+    [string] $releaseInventory.technicianScriptEncoding -ne 'utf-8-bom') {
+    throw 'The release package does not declare a Windows PowerShell 5.1-compatible host installer.'
+}
+$requiredHostInstallerFiles = @(
+    'Install-OokiGraderOnSite.ps1',
+    'Install-OokiGrader.ps1',
+    'Test-OokiGraderPreflight.ps1',
+    'Test-OokiGraderHealth.ps1',
+    'New-OokiGraderCertificate.ps1',
+    'New-OokiGraderPeerTrustPackage.ps1',
+    'Install-OokiGraderPeerTrust.ps1',
+    'OokiGrader.Windows.psm1'
+)
+foreach ($requiredHostInstallerFile in $requiredHostInstallerFiles) {
+    if (-not [IO.File]::Exists((
+            Join-Path $package $requiredHostInstallerFile))) {
+        throw "The release package is missing the host installer file $requiredHostInstallerFile."
+    }
+}
 $packageChecksumPath = Join-Path $package 'checksums.txt'
 $allPackagePayloadFiles = @(Get-ChildItem -LiteralPath $package `
     -File -Force -Recurse | Where-Object {
@@ -299,23 +312,6 @@ $reparsePoint = Get-ChildItem -LiteralPath $package -Force -Recurse |
     Select-Object -First 1
 if ($null -ne $reparsePoint) {
     throw 'The release package may not contain reparse points or symbolic links.'
-}
-
-$powerShellMsi = Resolve-OokiExactPath -Path $PowerShellMsiPath `
-    -Purpose 'Pinned PowerShell x64 MSI' -MustExist -PathType File
-$powerShellMsiHash = (Get-FileHash -LiteralPath $powerShellMsi `
-    -Algorithm SHA256).Hash.ToLowerInvariant()
-if (-not $powerShellMsiHash.Equals(
-    $pinnedPowerShellMsiSha256,
-    [StringComparison]::Ordinal)) {
-    throw "The PowerShell $pinnedPowerShellVersion x64 MSI does not match the pinned Microsoft SHA-256."
-}
-$powerShellSignature = Get-AuthenticodeSignature -LiteralPath $powerShellMsi
-if ($powerShellSignature.Status -ne 'Valid' -or
-    $null -eq $powerShellSignature.SignerCertificate -or
-    $powerShellSignature.SignerCertificate.Subject -notmatch
-        '(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
-    throw 'The pinned PowerShell x64 MSI does not have a valid Microsoft Authenticode signature.'
 }
 
 $output = Resolve-OokiExactPath -Path $OutputRoot `
@@ -349,33 +345,12 @@ if ($PSCmdlet.ShouldProcess(
         Write-MediaTextFile -Path "$archivePath.sha256" `
             -Content "$archiveHash  $archiveName`n" -Encoding Ascii
 
-        $prerequisiteRoot = Join-Path $staging 'Prerequisites'
-        [IO.Directory]::CreateDirectory($prerequisiteRoot) | Out-Null
-        $stagedPowerShellMsi = Join-Path $prerequisiteRoot `
-            $pinnedPowerShellMsiName
-        [IO.File]::Copy($powerShellMsi, $stagedPowerShellMsi, $false)
-        $stagedPowerShellMsiHash = (Get-FileHash `
-            -LiteralPath $stagedPowerShellMsi `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
-        if (-not $stagedPowerShellMsiHash.Equals(
-            $pinnedPowerShellMsiSha256,
-            [StringComparison]::Ordinal)) {
-            throw 'The copied PowerShell x64 MSI does not match its pinned SHA-256.'
-        }
-        Write-MediaTextFile -Path "$stagedPowerShellMsi.sha256" `
-            -Content "$pinnedPowerShellMsiSha256  $pinnedPowerShellMsiName`n" `
-            -Encoding Ascii
-
         $bootstrap = (Read-MediaTemplate `
             -Name 'Install-OokiGrader-Host.ps1.template').Replace(
                 '@@OOKI_VERSION@@',
                 $Version).Replace(
                 '@@PACKAGE_ZIP_SHA256@@',
-                $archiveHash).Replace(
-                '@@POWERSHELL_VERSION@@',
-                $pinnedPowerShellVersion).Replace(
-                '@@POWERSHELL_MSI_SHA256@@',
-                $pinnedPowerShellMsiSha256)
+                $archiveHash)
         if ($bootstrap.Contains('@@')) {
             throw 'The rendered PowerShell bootstrap contains an unresolved template token.'
         }
@@ -392,9 +367,7 @@ if ($PSCmdlet.ShouldProcess(
         $readme = (Read-MediaTemplate `
             -Name '00-README-ja.txt.template').Replace(
                 '@@OOKI_VERSION@@',
-                $Version).Replace(
-                '@@POWERSHELL_VERSION@@',
-                $pinnedPowerShellVersion)
+                $Version)
         if ($readme.Contains('@@')) {
             throw 'The rendered media README contains an unresolved template token.'
         }
@@ -438,22 +411,14 @@ if ($PSCmdlet.ShouldProcess(
                 productionSigningClaimed =
                     $packageEvidence.ProductionSigningClaimed
                 signerThumbprint = $packageEvidence.SignerThumbprint
-            }
-            prerequisite = [ordered]@{
-                product = 'Microsoft PowerShell'
-                version = $pinnedPowerShellVersion
-                supportChannel = 'LTS'
-                path = "Prerequisites/$pinnedPowerShellMsiName"
-                sha256 = $pinnedPowerShellMsiSha256
-                signatureStatus = [string] $powerShellSignature.Status
-                signerSubject =
-                    $powerShellSignature.SignerCertificate.Subject
-                officialRelease =
-                    "https://github.com/PowerShell/PowerShell/releases/tag/v$pinnedPowerShellVersion"
-                immutableArtifact = $true
+                hostInstallEntryPoint =
+                    [string] $releaseInventory.hostInstallEntryPoint
+                minimumTechnicianPowerShell =
+                    [string] $releaseInventory.minimumTechnicianPowerShell
             }
             minimumBootstrapPowerShell = '5.1'
-            requiredApplicationPowerShell = '7.4'
+            requiredApplicationPowerShell = '5.1 (included with Windows)'
+            bundledPrerequisites = @()
             artifactCount = $artifacts.Count
             artifacts = $artifacts
         }
@@ -479,13 +444,6 @@ if ($PSCmdlet.ShouldProcess(
                 [StringComparison]::Ordinal)) {
             throw 'The final release ZIP does not match its embedded SHA-256.'
         }
-        if (-not ((Get-FileHash -LiteralPath $stagedPowerShellMsi `
-            -Algorithm SHA256).Hash.ToLowerInvariant()).Equals(
-                $pinnedPowerShellMsiSha256,
-                [StringComparison]::Ordinal)) {
-            throw 'The final PowerShell x64 MSI does not match its pinned SHA-256.'
-        }
-
         [IO.Directory]::Move($staging, $target)
         [pscustomobject]@{
             state = 'packaged-and-verified'
@@ -493,8 +451,6 @@ if ($PSCmdlet.ShouldProcess(
             mediaRoot = $target
             packageArchive = $archiveName
             packageSha256 = $archiveHash
-            powerShellMsi = "Prerequisites/$pinnedPowerShellMsiName"
-            powerShellMsiSha256 = $pinnedPowerShellMsiSha256
             aggregateInventory = 'media-inventory.json'
             aggregateChecksums = 'checksums.txt'
             atomicPublish = $true

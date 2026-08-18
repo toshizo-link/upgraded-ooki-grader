@@ -301,7 +301,7 @@ def build() -> None:
         c,
         [
             "Windows x64リリースフォルダー一式",
-            "Microsoft公式PowerShell 7 x64 MSI",
+            "メディアのchecksums.txtと設置記録用紙",
             "管理下のUSBとホスト管理者情報",
             "各職員PCの管理者情報",
             "データ用ドライブ（165GiB以上）",
@@ -369,13 +369,13 @@ def build() -> None:
             ("IPを予約", "表示予定のIPをルーターでDHCP予約、または固定割当します。", "warn"),
             ("ディスクを確認", "DataRootはローカルNTFS。165GiB以上の空きと暗号化を確認します。", "safe"),
             ("電源を安定", "スリープを無効化。可能ならUPSと停電復帰後の自動起動を用意します。", "info"),
-            ("PowerShell 7", "Microsoft公式署名済みx64 MSIで7.4以降を導入。PATH登録、リモート機能は不要。", "info"),
+            ("標準PowerShell", "Windows標準の64-bit Windows PowerShell 5.1を確認。追加ランタイムやリモート機能は不要。", "info"),
         ],
         243,
         box_height=34,
         row_gap=8,
     )
-    command_box(c, "pwsh --version\nGet-Volume\nGet-NetConnectionProfile\nGet-NetIPAddress -AddressFamily IPv4", 14, 48, 182, 39)
+    command_box(c, "$PSVersionTable.PSVersion\nGet-Volume\nGet-NetConnectionProfile\nGet-NetIPAddress -AddressFamily IPv4", 14, 48, 182, 39)
     ui.callout(
         c,
         14,
@@ -464,9 +464,11 @@ def build() -> None:
     command_box(
         c,
         "# 基本: 検出された既定値を対話で確認\n"
-        "pwsh -NoLogo -NoProfile -File .\\Install-OokiGraderOnSite.ps1\n\n"
+        "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File .\\Install-OokiGraderOnSite.ps1\n\n"
         "# 暗号化済みバックアップ先も初回から構成\n"
-        "pwsh -NoLogo -NoProfile -File .\\Install-OokiGraderOnSite.ps1 `\n"
+        "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `\n"
+        "  -File .\\Install-OokiGraderOnSite.ps1 `\n"
         "  -BackupRoot 'E:\\OokiGraderBackup' `\n"
         "  -BackupDestinationEncryptionConfirmed",
         14,
@@ -821,9 +823,9 @@ def build() -> None:
     page_header(c, "14  設置時の問題", "症状から最初の確認へ", 15)
     ui.rounded_box(c, 14, 65, 182, 184, fill=ui.WHITE, stroke=ui.BORDER)
     cases = [
-        ("PowerShell不足", "pwsh --version。64-bit 7.4以降をホストへ導入。"),
+        ("PowerShell不足", "Windows標準の64-bit Windows PowerShell 5.1を修復。追加のPowerShell 7では代替しない。"),
         ("checksum失敗", "配布元、USB、不足・余分なファイル。個別差替えをせず一式を取り直す。"),
-        ("容量不足", "DataRootのNTFSボリュームに165GiB以上の物理空きがあるか。"),
+        ("容量不足", "165GiBを推奨。5GiB未満では設置後も答案アップロード不可。空きを回復する。"),
         ("RESERVED不可", "ルーターのDHCP予約または固定IP設定を先に完了。"),
         ("443競合", "Get-NetTCPConnection -LocalPort 443 -State Listen で所有プロセスを確認。"),
         ("職員PCだけ不可", "peer setup結果、職員LAN、Firewall CIDR、固定IP、PC時刻を確認。"),

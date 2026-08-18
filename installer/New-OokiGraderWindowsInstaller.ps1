@@ -55,6 +55,8 @@ if (-not [IO.File]::Exists($source)) {
 $compilerCandidate = $InnoCompilerPath
 if ([string]::IsNullOrWhiteSpace($compilerCandidate)) {
     $compilerCandidate = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
         "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
     ) | Where-Object {
@@ -63,13 +65,15 @@ if ([string]::IsNullOrWhiteSpace($compilerCandidate)) {
     } | Select-Object -First 1
 }
 if ([string]::IsNullOrWhiteSpace($compilerCandidate)) {
-    throw 'Inno Setup 6 ISCC.exe was not found. Install Inno Setup 6 or supply -InnoCompilerPath.'
+    throw 'Inno Setup 6.3 or later ISCC.exe was not found. Install a compatible Inno Setup release or supply -InnoCompilerPath.'
 }
 $compiler = Resolve-OokiExactPath -Path $compilerCandidate `
     -Purpose 'Inno Setup compiler' -MustExist -PathType File
 $compilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler)
-if ($compilerVersion.FileMajorPart -ne 6 -or
-    $compilerVersion.FileMinorPart -lt 3) {
+if ($compilerVersion.FileMajorPart -gt 0 -and
+    ($compilerVersion.FileMajorPart -lt 6 -or
+        ($compilerVersion.FileMajorPart -eq 6 -and
+            $compilerVersion.FileMinorPart -lt 3))) {
     throw 'The Windows installer must be compiled with Inno Setup 6.3 or later because its x64compatible architecture mode is required.'
 }
 $compilerSignature = Get-AuthenticodeSignature -LiteralPath $compiler

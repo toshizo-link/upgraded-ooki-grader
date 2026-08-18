@@ -42,7 +42,7 @@
 
 - Ooki Grader の Windows x64 リリースフォルダー一式
 - 配布フォルダーを格納した管理済み USB
-- Microsoft 公式の署名済み 64-bit PowerShell 7.4 以降 MSI（ホストに未導入の場合）
+- Windows 標準の 64-bit Windows PowerShell 5.1（追加インストール不要）
 - x64 Windows ホストのローカル管理者情報（現行 Windows 11 Pro を推奨）
 - 職員 PC ごとのローカル管理者情報
 - ホスト用の有線 LAN 接続
@@ -76,15 +76,15 @@
 5. データ用ボリュームが NTFS であることを確認し、165 GiB 以上の空きを推奨値として確認する。
 6. データ用とバックアップ用ボリュームで BitLocker または学校承認の暗号化を有効にする。
 7. スリープを無効にし、停電復帰後の起動方針を決める。可能なら UPS を使用する。
-8. 64-bit PowerShell 7.4 以降をインストールし、管理者ターミナルで次を確認する。未導入なら、Microsoft 公式の署名済み x64 MSI を使い、PATH への追加を有効にします。PowerShell Remoting は有効化する必要がありません。MSI 実行前にプロパティのデジタル署名が有効で、発行元が Microsoft であることを確認します。
+8. Windows 標準の 64-bit Windows PowerShell 5.1 を管理者として開く。PowerShell 7、.NET SDK、Node.js の追加導入や PowerShell Remoting の有効化は不要です。
 
 ```powershell
-pwsh --version
+$PSVersionTable.PSVersion
 ```
 
 Windows ホストには .NET SDK、Node.js、開発環境は不要です。配布物は自己完結型です。
 
-Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容量は推奨項目です。満たさない場合は警告と運用上の影響を表示しますが、それだけを理由に現地セットアップを中止しません。x64 実行環境、NTFS、使用可能な HTTPS ポート、正しい配布物と証明書、安全なパス構成は引き続き必須です。
+Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容量は推奨項目です。満たさない場合は警告と運用上の影響を表示しますが、それだけを理由に現地セットアップを中止しません。空きが既定の物理予約 5 GiB 未満の場合もインストールと修復は完了できますが、空きを増やすか予約値を意図的に変更するまで答案アップロードは無効です。x64 実行環境、NTFS、使用可能な HTTPS ポート、正しい配布物と証明書、安全なパス構成は引き続き必須です。
 
 ## 4. 配布物をコピーして確認する
 
@@ -95,7 +95,7 @@ Windows 11 Pro の版／ビルド、16 GiB の搭載 RAM、165 GiB の空き容�
    - `OokiGrader.Host.exe`
    - `OokiGrader.Tool.exe`
    - `Install-OokiGraderOnSite.ps1`
-3. 管理者 PowerShell 7 を開く。
+3. 管理者 Windows PowerShell 5.1（または PowerShell 7）を開く。
 4. リリースフォルダーへ移動する。
 
 ```powershell
@@ -110,7 +110,7 @@ Get-ChildItem release-inventory.json, checksums.txt, Install-OokiGraderOnSite.ps
 最も簡単な開始方法は、引数を付けずに実行し、検出された既定値を画面で確認する方法です。
 
 ```powershell
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1
 ```
 
 スクリプトは、`D:` があれば `D:\OokiGraderData`、なければ `C:\OokiGraderData` を提案し、接続中の校内 LAN からホスト IP と CIDR を提案します。正式名は `ooki-grader.test`、HTTPS ポートは `443` です。提案値が現地記録と違う場合は確定せず、正しい値を入力します。
@@ -118,7 +118,7 @@ pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
 バックアップ先を当日用意できる場合は、最初から指定するのが最も簡単です。暗号化済みであることを自分で確認してから、次のように実行します。
 
 ```powershell
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1 `
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1 `
   -BackupRoot 'E:\OokiGraderBackup' `
   -BackupDestinationEncryptionConfirmed
 ```
@@ -301,9 +301,10 @@ Invoke-WebRequest 'https://ooki-grader.test/health/ready' -UseBasicParsing
 
 | 症状 | 最初に確認すること |
 | --- | --- |
-| PowerShell 7 がない | `pwsh --version`。64-bit 7.4 以降を導入 |
+| Windows PowerShell 5.1 がない | Windows の標準コンポーネントを修復。PowerShell 7 の追加導入では代替しない |
 | チェックサム検査失敗 | 配布元、USB、余分な／欠けたファイル。個別修復せず一式を取り直す |
 | `165 GiB` 推奨値未満の警告 | インストールは続行可能。DataRoot の空き、実際の答案量、保存容量監視を確認し、可能なら空きを増やす |
+| `5 GiB` 物理予約未満の警告 | インストール／修復は続行可能だが答案アップロードは無効。空きを 5 GiB 以上へ戻すか、影響を確認して予約値を意図的に再構成する |
 | `RESERVED` を確認できない | ルーターの DHCP 予約または固定 IP 設定を先に完了 |
 | 443 番ポート使用中 | `Get-NetTCPConnection -LocalPort 443 -State Listen` |
 | ホストでは開くが職員 PC では開かない | peer setup の結果、職員 LAN、指定 CIDR、Firewall |

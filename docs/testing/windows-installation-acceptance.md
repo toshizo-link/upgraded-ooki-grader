@@ -51,15 +51,10 @@ browser certificate warning.
 - The repository containing this instruction sheet, including the uncommitted
   installer changes supplied by the primary task.
 - .NET SDK `10.0.302`, Node.js 24, npm, Git, Windows PowerShell 5.1, and a
-  64-bit PowerShell 7.4 or later for building. Record missing prerequisites as
-  `BLOCKED`; the host-media bootstrap itself must still be tested on a clean
-  snapshot without a compatible `pwsh` when such a snapshot is available.
-- Microsoft `PowerShell-7.6.4-win-x64.msi`. Obtain it only from Microsoft's
-  official PowerShell release if it was not supplied. Its SHA-256 must be:
-
-  ```text
-  d11942df52fd12470169797abfa4781d9480efdc81000ba4fa55a5b921ed8dd0
-  ```
+  64-bit PowerShell 7.4 or later for building. Record missing build
+  prerequisites as `BLOCKED`. The generated host media must run on a clean
+  supported Windows snapshot with only the built-in Windows PowerShell 5.1;
+  the host does not require PowerShell 7, an SDK, or Node.js.
 
 Use a unique prerelease version such as
 `0.9.2-acceptance.YYYYMMDDHHMMSS`. Do not use or modify the historical 0.9.0
@@ -81,8 +76,8 @@ New-Item -ItemType Directory -Path $ResultsRoot, $BuildRoot -ErrorAction Stop |
 Start-Transcript -LiteralPath (Join-Path $ResultsRoot 'transcript.txt')
 ```
 
-Record the repository path in `$RepositoryRoot` and the verified MSI path in
-`$PowerShellMsiPath`. Save these read-only facts as text:
+Record the repository path in `$RepositoryRoot`. Save these read-only facts as
+text:
 
 ```powershell
 Set-Location -LiteralPath $RepositoryRoot
@@ -94,9 +89,6 @@ node --version | Set-Content (Join-Path $ResultsRoot 'node-version.txt')
 npm --version | Set-Content (Join-Path $ResultsRoot 'npm-version.txt')
 $PSVersionTable | Out-String | Set-Content (
     Join-Path $ResultsRoot 'powershell-version.txt')
-Get-FileHash -Algorithm SHA256 -LiteralPath $PowerShellMsiPath |
-    Format-List | Out-String | Set-Content (
-        Join-Path $ResultsRoot 'powershell-msi-hash.txt')
 ```
 
 Also record `Get-ComputerInfo`, `Get-CimInstance Win32_ComputerSystem`,
@@ -110,11 +102,13 @@ machine/user names before returning the archive.
 Run the same build/test surface as CI and retain complete output and exit codes:
 
 ```powershell
-dotnet restore OokiGrader.slnx
+dotnet restore OokiGrader.slnx --disable-build-servers
 npm ci --prefix src/OokiGrader.Web --no-audit --no-fund
 npm ci --prefix tools/openapi-client --no-audit --no-fund
-dotnet build OokiGrader.slnx --configuration Release --no-restore
-dotnet test OokiGrader.slnx --configuration Release --no-build
+dotnet build OokiGrader.slnx --configuration Release --no-restore `
+  --disable-build-servers -m:1 /nodeReuse:false
+dotnet test OokiGrader.slnx --configuration Release --no-build `
+  --disable-build-servers
 npm --prefix src/OokiGrader.Web run check
 npm --prefix src/OokiGrader.Web test
 npm --prefix src/OokiGrader.Web run build
@@ -133,14 +127,16 @@ Get-ChildItem -LiteralPath $env:OOKI_INSTALLER_PARSE_ROOT -Recurse -File |
   ForEach-Object {
     $tokens = $null
     $errors = $null
-    [Management.Automation.Language.Parser]::ParseFile(
-      $_.FullName, [ref] $tokens, [ref] $errors) | Out-Null
-    foreach ($error in $errors) {
+    $source = [IO.File]::ReadAllText(
+      $_.FullName, [Text.UTF8Encoding]::new($false, $true))
+    [Management.Automation.Language.Parser]::ParseInput(
+      $source, $_.FullName, [ref] $tokens, [ref] $errors) | Out-Null
+    foreach ($parseError in $errors) {
       $failed = $true
       "{0}:{1}:{2}: {3}" -f $_.FullName,
-        $error.Extent.StartLineNumber,
-        $error.Extent.StartColumnNumber,
-        $error.Message
+        $parseError.Extent.StartLineNumber,
+        $parseError.Extent.StartColumnNumber,
+        $parseError.Message
     }
   }
 if ($failed) { exit 1 }
@@ -170,11 +166,54 @@ $PackageRoot = Join-Path $PackageOutput "OokiGrader-$Version-win-x64"
 & (Join-Path $RepositoryRoot 'installer\New-OokiGraderHostInstallMedia.ps1') `
     -PackageRoot $PackageRoot `
     -Version $Version `
-    -PowerShellMsiPath $PowerShellMsiPath `
     -OutputRoot $MediaOutput `
     -AllowChecksumVerifiedUnsignedOnSitePackage `
     -Confirm:$false
 $MediaRoot = Join-Path $MediaOutput "OokiGrader-$Version-Windows-Host-Install"
+```
+
+Prove that Windows PowerShell 5.1 can decode the actual packaged files, not
+only their explicitly decoded repository sources:
+
+```powershell
+$env:OOKI_PACKAGE_PARSE_ROOT = $PackageRoot
+$env:OOKI_MEDIA_PARSE_ROOT = $MediaRoot
+$PackagedParserProbe = @'
+$failed = $false
+$paths = @(
+  Get-ChildItem -LiteralPath $env:OOKI_PACKAGE_PARSE_ROOT -File |
+    Where-Object Extension -in '.ps1', '.psm1'
+  Get-Item -LiteralPath (Join-Path $env:OOKI_MEDIA_PARSE_ROOT `
+    'Install-OokiGrader-Host.ps1')
+)
+foreach ($path in $paths) {
+  $bytes = [IO.File]::ReadAllBytes($path.FullName)
+  if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xef -or
+      $bytes[1] -ne 0xbb -or $bytes[2] -ne 0xbf) {
+    $failed = $true
+    "$($path.FullName): missing UTF-8 BOM required for reliable Windows PowerShell 5.1 decoding"
+    continue
+  }
+  $tokens = $null
+  $parseErrors = $null
+  [Management.Automation.Language.Parser]::ParseFile(
+    $path.FullName, [ref] $tokens, [ref] $parseErrors) | Out-Null
+  foreach ($parseError in @($parseErrors)) {
+    $failed = $true
+    "{0}:{1}:{2}: {3}" -f $path.FullName,
+      $parseError.Extent.StartLineNumber,
+      $parseError.Extent.StartColumnNumber,
+      $parseError.Message
+  }
+}
+if ($failed) { exit 1 }
+'@
+$EncodedPackagedProbe = [Convert]::ToBase64String(
+  [Text.Encoding]::Unicode.GetBytes($PackagedParserProbe))
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+  -NoLogo -NoProfile -NonInteractive `
+  -EncodedCommand $EncodedPackagedProbe 2>&1
+Remove-Item Env:OOKI_PACKAGE_PARSE_ROOT, Env:OOKI_MEDIA_PARSE_ROOT
 ```
 
 Require all of these before continuing:
@@ -186,8 +225,10 @@ Require all of these before continuing:
   the aggregate checksum file itself;
 - the ZIP contains exactly one top-level `OokiGrader-$Version-win-x64`
   directory and a fresh extraction passes package verification;
-- the real PowerShell MSI is present below `Prerequisites`, has the pinned hash,
-  and has a valid Microsoft signature;
+- the media contains no separately installed runtime prerequisite and records
+  Windows PowerShell 5.1 as the built-in execution engine;
+- every packaged technician script and the generated bootstrap has a UTF-8 BOM
+  and passes Windows PowerShell 5.1 `ParseFile` decoding;
 - the generated README calls Windows 11 Pro, 16 GiB RAM, and 165 GiB free space
   recommendations, while x64, NTFS, integrity, port availability, safe paths,
   and certificate correctness remain requirements.
@@ -208,20 +249,13 @@ From the intact media, start the launcher. At the final `INSTALL` confirmation,
 cancel before entering the word. Confirm that no Ooki Grader service, CA, or
 firewall rule was created. Run the same launcher again. It must validate and
 reuse the exact extracted package instead of aborting because the directory
-already exists. Record whether the machine began with:
-
-- no PowerShell 7;
-- an old or x86 PowerShell 7; or
-- a compatible x64 PowerShell 7.
-
-Do not uninstall a pre-existing PowerShell merely to force another case. Test
-the missing/old cases only on additional clean snapshots. If MSI returns 3010,
-reboot and require the same launcher to resume successfully.
+already exists. Record whether PowerShell 7 is absent. Its absence must not
+affect installation; do not install or remove it merely for this test.
 
 ## Phase C — preflight recommendation semantics
 
-Use an empty local NTFS directory that has at least 5 GiB free. A 10–12 GiB
-throwaway VHDX is useful for proving the 165 GiB check is advisory, but create
+Use an empty local NTFS directory. A 4–12 GiB throwaway VHDX is useful for
+proving both free-space checks are advisory, but create
 one only on a disposable target and record its exact path. Never repartition a
 physical disk for this test.
 
@@ -232,9 +266,11 @@ with `-AllowChecksumVerifiedOnSitePackage`, then save the complete JSON. Require
 - `recommendationFailures` records any unmet recommendations;
 - `windows-supported`, `memory`, and `data-capacity` have
   `blocking: false` and `classification: recommendation`;
-- when free space is below 165 GiB but at least 5 GiB, `data-capacity` fails but
+- when free space is below 165 GiB, `data-capacity` fails but
   installation remains ready;
-- the separate 5 GiB emergency-reserve check passes and is blocking;
+- the 5 GiB default runtime-reserve check is also advisory; below that level the
+  service may be installed or repaired, but uploads remain unavailable until
+  enough space is freed or the reserve is deliberately reconfigured;
 - the runtime check proves both OS and process architecture are `X64`, not just
   “64 bit”;
 - NTFS, package integrity, port availability, safe path topology, and private

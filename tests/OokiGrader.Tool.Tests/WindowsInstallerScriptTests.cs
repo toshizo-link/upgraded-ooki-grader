@@ -100,6 +100,7 @@ public sealed class WindowsInstallerScriptTests
     {
         var install = ReadInstallerFile("Install-OokiGrader.ps1");
         var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+        var preflight = ReadInstallerFile("Test-OokiGraderPreflight.ps1");
 
         Assert.Contains(
             "Set-OokiWindowsService",
@@ -114,8 +115,12 @@ public sealed class WindowsInstallerScriptTests
             install,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Assert-OokiReleasePackage",
+            "Test-OokiGraderPreflight.ps1",
             install,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-OokiReleasePackage",
+            preflight,
             StringComparison.Ordinal);
         Assert.Contains(
             "Install-OokiHostCertificate",
@@ -165,6 +170,14 @@ public sealed class WindowsInstallerScriptTests
             "release signature",
             install,
             StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "function Get-OokiFileSha256",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Get-OokiFileSha256 -FilePath $target",
+            module,
+            StringComparison.Ordinal);
         Assert.Contains(
             "peer",
             install,
@@ -226,6 +239,14 @@ public sealed class WindowsInstallerScriptTests
             script,
             StringComparison.Ordinal);
         Assert.Contains(
+            "'-ExecutionPolicy'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "'Bypass'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Test-OokiGraderHealth.ps1",
             script,
             StringComparison.Ordinal);
@@ -249,6 +270,96 @@ public sealed class WindowsInstallerScriptTests
             "http://",
             script,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void WindowsServiceCreationDoesNotPassQuotedBinaryPathThroughScExe()
+    {
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains("New-Service -Name $ServiceName", module);
+        Assert.Contains("Invoke-CimMethod -InputObject $serviceRecord", module);
+        Assert.Contains("PathName = $binaryCommand", module);
+        Assert.DoesNotContain("'create',\n                    $ServiceName", module);
+        Assert.DoesNotContain("'binPath=',\n                    $binaryCommand", module);
+    }
+
+    [Fact]
+    public void SameVersionRerunArchivesAndRepairsExistingPayload()
+    {
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+
+        Assert.Contains("installation-complete.json", install);
+        Assert.Contains("if ([IO.Directory]::Exists($versionRoot))", install);
+        Assert.Contains("'completed same-version payload'", install);
+        Assert.Contains("'incomplete prior installation payload'", install);
+        Assert.Contains("$existingService.Status -ne 'Stopped'", install);
+        Assert.Contains("'previous-incomplete-' + $Version", install);
+        Assert.Contains(
+            "Move-Item -LiteralPath $versionRoot -Destination $recoveryRoot",
+            install);
+    }
+
+    [Fact]
+    public void InstallationIsRecordedOnlyAfterSuccessfulHealthVerification()
+    {
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+        var healthCheck = install.IndexOf(
+            "$health.state -notin",
+            StringComparison.Ordinal);
+        var manifestWrite = install.IndexOf(
+            "Write-OokiInstallationManifest",
+            StringComparison.Ordinal);
+        var completionWrite = install.IndexOf(
+            "schema = 'ooki-installation-complete/v1'",
+            StringComparison.Ordinal);
+
+        Assert.True(healthCheck >= 0);
+        Assert.True(manifestWrite > healthCheck);
+        Assert.True(completionWrite > manifestWrite);
+    }
+
+    [Fact]
+    public void ImmutablePayloadAclGrantsDirectExecutePermission()
+    {
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains("NT SERVICE\\${ServiceName}:RX", module);
+        Assert.Contains("*S-1-5-32-545:RX", module);
+        Assert.DoesNotContain("NT SERVICE\\${ServiceName}:(OI)(CI)RX", module);
+    }
+
+    [Fact]
+    public void ExistingFirewallRuleIsRecreatedWithSupportedCmdlets()
+    {
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains("$existing | Remove-NetFirewallRule", module);
+        Assert.Contains("New-NetFirewallRule -DisplayName $RuleName", module);
+        Assert.DoesNotContain("Set-NetFirewallPortFilter", module);
+        Assert.DoesNotContain("Set-NetFirewallAddressFilter", module);
+    }
+
+    [Fact]
+    public void FrontendStaticAssetsAreServedBeforeFallbackAuthorization()
+    {
+        var program = File.ReadAllText(Path.Combine(
+            RepositoryRoot,
+            "src",
+            "OokiGrader.Host",
+            "Program.cs"));
+        var staticFiles = program.IndexOf(
+            "app.UseStaticFiles();",
+            StringComparison.Ordinal);
+        var authorization = program.IndexOf(
+            "app.UseAuthorization();",
+            StringComparison.Ordinal);
+
+        Assert.True(staticFiles >= 0);
+        Assert.True(staticFiles < authorization);
+        Assert.Contains(
+            "app.MapFallbackToFile(\"index.html\").AllowAnonymous();",
+            program);
     }
 
     [Fact]
@@ -444,6 +555,10 @@ public sealed class WindowsInstallerScriptTests
             "data-capacity",
             "$null -ne $volume -and "
             + "$volume.SizeRemaining -ge 165GB) $false");
+        AssertNonBlockingRecommendation(
+            preflight,
+            "data-emergency-reserve",
+            "$volume.SizeRemaining -ge 5GB) $false");
     }
 
     [Fact]
@@ -473,12 +588,31 @@ public sealed class WindowsInstallerScriptTests
             "$volume.FileSystem -eq 'NTFS') $true");
         AssertBlockingPreflightCheck(
             preflight,
-            "data-emergency-reserve",
-            "$volume.SizeRemaining -ge 5GB) $true");
-        AssertBlockingPreflightCheck(
-            preflight,
             "release-package-integrity",
             "$packageEvidence.FileCount -gt 0) $true");
+    }
+
+    [Fact]
+    public void PhysicalReserveShortageIsTheOnlyAcceptedDegradedInstallHealth()
+    {
+        var install = ReadInstallerFile("Install-OokiGrader.ps1");
+        var health = ReadInstallerFile("Test-OokiGraderHealth.ps1");
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains("-TimeoutSeconds 90", install);
+        Assert.Contains("-AllowPhysicalReserveDegraded", install);
+        Assert.Contains("physical_reserve_not_satisfied", health);
+        Assert.Contains("database.state -eq 'healthy'", health);
+        Assert.Contains("storage.dataRootReadable", health);
+        Assert.Contains("storage.contentRootReadable", health);
+        Assert.Contains("physical-reserve-degraded", health);
+        Assert.Contains("$body.database -eq 'healthy'", module);
+        Assert.Contains("$body.schema -eq 'healthy'", module);
+        Assert.Contains("$body.storage -eq 'healthy'", module);
+        Assert.Contains("$body.physicalStorage -eq 'unhealthy'", module);
+        Assert.Contains("$body.certificate -ne 'unavailable'", module);
+        Assert.DoesNotContain("SkipCertificateCheck", health);
+        Assert.DoesNotContain("SkipCertificateCheck", module);
     }
 
     [Fact]
@@ -588,8 +722,45 @@ public sealed class WindowsInstallerScriptTests
             onSite,
             StringComparison.Ordinal);
         Assert.Contains(
-            "インストールは続行します。",
+            "Installation can continue.",
             onSite,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnSiteDefaultsRequireNoStorageAddressOrCidrPrompts()
+    {
+        var onSite = ReadInstallerFile("Install-OokiGraderOnSite.ps1");
+        var bootstrap = ReadInstallerFile(
+            "HostInstallMedia/Install-OokiGrader-Host.ps1.template");
+
+        Assert.Contains(
+            "Join-Path $env:ProgramData 'OokiGrader\\Data'",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Join-Path $env:ProgramData 'OokiGrader\\Backup'",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$HostIpAddress = $defaultAddress",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$SchoolSubnet = @($defaultSubnet)",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Read-OnSiteValue -Label",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "RESERVED",
+            onSite,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Read-Host `\n    'Encrypted backup",
+            bootstrap,
             StringComparison.Ordinal);
     }
 
@@ -785,6 +956,18 @@ public sealed class WindowsInstallerScriptTests
             script,
             StringComparison.Ordinal);
         Assert.Contains(
+            "hostInstallEntryPoint = 'Install-OokiGraderOnSite.ps1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "minimumTechnicianPowerShell = '5.1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "technicianScriptEncoding = 'utf-8-bom'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "\"-p:Version=$Version\"",
             script,
             StringComparison.Ordinal);
@@ -818,7 +1001,11 @@ public sealed class WindowsInstallerScriptTests
             builder,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Inno Setup 6",
+            "Inno Setup 6.3 or later",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Inno Setup 7\\ISCC.exe",
             builder,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -918,11 +1105,64 @@ public sealed class WindowsInstallerScriptTests
             setup,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            "{autopf}\\PowerShell\\7\\pwsh.exe",
+            "{sys}\\WindowsPowerShell\\v1.0\\powershell.exe",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("pwsh.exe", setup, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$PSVersionTable.PSVersion -lt",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "-Confirm:$false",
             setup,
             StringComparison.Ordinal);
         Assert.Contains(
-            "$PSVersionTable.PSVersion -lt [version]''7.4''",
+            "Install-OokiGraderOnSite.ps1",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-InstallationConfirmed",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "-HostAddressReservationConfirmed",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "-SchoolNetworkPrivateConfirmed",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if WizardSilent then",
+            setup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "無人セットアップには対応していません",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ReadinessPage",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "HostIpAddress",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SchoolSubnet",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Cardinal64",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "CertificatePage",
+            setup,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "-HostCertificatePath",
             setup,
             StringComparison.Ordinal);
         Assert.Contains(

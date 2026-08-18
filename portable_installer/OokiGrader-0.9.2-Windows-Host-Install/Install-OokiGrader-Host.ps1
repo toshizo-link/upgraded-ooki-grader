@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 #requires -RunAsAdministrator
 
 [CmdletBinding()]
@@ -7,9 +7,9 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$version = '@@OOKI_VERSION@@'
+$version = '0.9.2'
 $archiveName = "OokiGrader-$version-win-x64.zip"
-$expectedArchiveSha256 = '@@PACKAGE_ZIP_SHA256@@'
+$expectedArchiveSha256 = '94d76b2698573016488943c3bd7c8bf80b62f87ab3b41871efe6905c4f35361e'
 $mediaRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $archivePath = Join-Path $mediaRoot $archiveName
 $archiveChecksumPath = "$archivePath.sha256"

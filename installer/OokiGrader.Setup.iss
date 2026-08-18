@@ -14,10 +14,10 @@
   #define OokiExpectedSignerThumbprint ""
 #endif
 #ifndef OokiAllowUnsigned
-  #define OokiAllowUnsigned 0
+  #define OokiAllowUnsigned "0"
 #endif
 #ifndef OokiSignOutput
-  #define OokiSignOutput 0
+  #define OokiSignOutput "0"
 #endif
 
 [Setup]
@@ -48,7 +48,7 @@ UsePreviousAppDir=no
 Uninstallable=yes
 UninstallDisplayName=Ooki Grader
 UninstallDisplayIcon={app}\versions\{#OokiVersion}\OokiGrader.Host.exe
-#if OokiSignOutput == 1
+#if OokiSignOutput == "1"
 SignTool=ooki
 SignedUninstaller=yes
 #else
@@ -78,8 +78,8 @@ Root: HKLM; Subkey: "Software\OokiGrader"; ValueType: string; ValueName: "DnsNam
 Root: HKLM; Subkey: "Software\OokiGrader"; ValueType: string; ValueName: "HttpsPort"; ValueData: "{code:GetHttpsPort}"
 
 [Icons]
-Name: "{commonprograms}\Ooki Grader\Ooki Grader を開く"; Filename: "{code:GetApplicationUrl}"; Flags: shellexec
-Name: "{commonprograms}\Ooki Grader\状態を確認"; Filename: "{autopf}\PowerShell\7\pwsh.exe"; Parameters: "{code:GetHealthParameters}"; WorkingDir: "{app}\installer"
+Name: "{commonprograms}\Ooki Grader\Ooki Grader を開く"; Filename: "{code:GetApplicationUrl}"
+Name: "{commonprograms}\Ooki Grader\状態を確認"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "{code:GetHealthParameters}"; WorkingDir: "{app}\installer"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\versions"
@@ -91,21 +91,17 @@ const
   AllowUnsignedDevelopmentBuild = {#OokiAllowUnsigned};
 
 var
-  DataPage: TInputDirWizardPage;
   NetworkPage: TInputQueryWizardPage;
-  CertificatePage: TInputFileWizardPage;
 
 function PowerShellPath: string;
 begin
-  Result := ExpandConstant('{autopf}\PowerShell\7\pwsh.exe');
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
 end;
 
 function GetDataRoot(Param: string): string;
 begin
-  if DataPage <> nil then
-    Result := DataPage.Values[0]
-  else if not RegQueryStringValue(HKLM, ProductRegistryKey, 'DataRoot', Result) then
-    Result := '';
+  if not RegQueryStringValue(HKLM, ProductRegistryKey, 'DataRoot', Result) then
+    Result := ExpandConstant('{commonappdata}\OokiGrader\Data');
 end;
 
 function GetDnsName(Param: string): string;
@@ -122,11 +118,6 @@ begin
     Result := NetworkPage.Values[1]
   else if not RegQueryStringValue(HKLM, ProductRegistryKey, 'HttpsPort', Result) then
     Result := '443';
-end;
-
-function GetSchoolSubnet: string;
-begin
-  Result := NetworkPage.Values[2];
 end;
 
 function GetApplicationUrl(Param: string): string;
@@ -170,54 +161,42 @@ begin
     ' -File ' + AddQuotes(ExpandConstant('{app}\installer\Uninstall-OokiGrader.ps1')) +
     ' -InstallRoot ' + AddQuotes(ExpandConstant('{app}')) +
     ' -DataRoot ' + AddQuotes(GetDataRoot('')) +
-    ' -OfflineConfirmed -InstallerManagedApplicationRemoval -Confirm:$false';
+    ' -OfflineConfirmed -InstallerManagedApplicationRemoval';
 end;
 
 function BuildInstallParameters: string;
 begin
   Result := GetCommonPowerShellParameters() +
-    ' -File ' + AddQuotes(ExpandConstant('{tmp}\OokiGraderPackage\Install-OokiGrader.ps1')) +
+    ' -File ' + AddQuotes(ExpandConstant('{tmp}\OokiGraderPackage\Install-OokiGraderOnSite.ps1')) +
     ' -PackageRoot ' + AddQuotes(ExpandConstant('{tmp}\OokiGraderPackage')) +
-    ' -Version ' + AddQuotes('{#OokiVersion}') +
     ' -DataRoot ' + AddQuotes(GetDataRoot('')) +
-    ' -HostCertificatePath ' + AddQuotes(CertificatePage.Values[0]) +
     ' -DnsName ' + AddQuotes(GetDnsName('')) +
-    ' -SchoolSubnet ' + AddQuotes(GetSchoolSubnet()) +
     ' -InstallRoot ' + AddQuotes(ExpandConstant('{app}')) +
     ' -HttpsPort ' + GetHttpsPort('') +
     ' -ExpectedSignerThumbprint ' + AddQuotes(ExpectedSignerThumbprint) +
-    ' -Confirm:$false';
+    ' -InstallationConfirmed' +
+    ' -NonInteractive';
   if AllowUnsignedDevelopmentBuild = 1 then
-    Result := Result + ' -AllowUnsignedDevelopmentBuild';
+    Result := Result + ' -AcceptChecksumVerifiedUnsignedOnSitePackage';
 end;
 
 function InitializeSetup: Boolean;
 var
   ExistingVersion: string;
-  ExitCode: Integer;
-  VersionCheck: string;
 begin
   Result := True;
-  if not FileExists(PowerShellPath()) then
+  if WizardSilent then
   begin
     MsgBox(
-      'PowerShell 7.4 以降 (64-bit) が必要です。Microsoft の PowerShell 7 をインストールしてから、もう一度実行してください。',
+      '無人セットアップには対応していません。通常の対話セットアップを実行してください。',
       mbError, MB_OK);
     Result := False;
     Exit;
   end;
-  VersionCheck := '-NoLogo -NoProfile -NonInteractive -Command ' +
-    AddQuotes('if ($PSVersionTable.PSVersion -lt [version]''7.4'') { exit 4 }');
-  if (not Exec(
-      PowerShellPath(),
-      VersionCheck,
-      '',
-      SW_HIDE,
-      ewWaitUntilTerminated,
-      ExitCode)) or (ExitCode <> 0) then
+  if not FileExists(PowerShellPath()) then
   begin
     MsgBox(
-      '検出した PowerShell が 7.4 未満です。PowerShell 7.4 以降 (64-bit) に更新してください。',
+      'Windows 標準 PowerShell 5.1 が見つかりません。Windows コンポーネントを修復してから、もう一度実行してください。',
       mbError, MB_OK);
     Result := False;
     Exit;
@@ -237,7 +216,6 @@ end;
 procedure InitializeWizard;
 var
   ExistingValue: string;
-  DefaultDataRoot: string;
   WindowsVersion: TWindowsVersion;
 begin
   GetWindowsVersionEx(WindowsVersion);
@@ -246,80 +224,34 @@ begin
       'Windows 11 Pro の現行サポート対象ビルドを推奨します。現在の Windows でもセットアップは続行できますが、性能、安定性、サポート状況を確認してください。',
       mbInformation, MB_OK);
 
-  DataPage := CreateInputDirPage(
-    wpSelectDir,
-    'データ保存先',
-    '生徒情報・答案・AI認証情報を保存する専用フォルダーを指定してください。',
-    'ローカル NTFS は必須です。Windows 11 Pro、16 GiB RAM、165 GiB 以上の空きは推奨であり、満たさなくてもセットアップは続行します。アンインストールしてもデータは削除されません。',
-    False,
-    'OokiGraderData');
-  if RegQueryStringValue(HKLM, ProductRegistryKey, 'DataRoot', ExistingValue) then
-    DefaultDataRoot := ExistingValue
-  else if DirExists('D:\') then
-    DefaultDataRoot := 'D:\OokiGraderData'
-  else
-    DefaultDataRoot := ExpandConstant('{commonappdata}\OokiGrader\data');
-  DataPage.Add(DefaultDataRoot);
-
   NetworkPage := CreateInputQueryPage(
-    DataPage.ID,
+    wpSelectDir,
     '校内ネットワーク',
-    'Ooki Grader の校内 URL と接続範囲を指定してください。',
+    'Ooki Grader の校内 URL を確認してください。',
     'DNS 名と HTTPS ポートは証明書・ブラウザー URL と一致する必要があります。');
   NetworkPage.Add('DNS 名:', False);
   NetworkPage.Add('HTTPS ポート:', False);
-  NetworkPage.Add('許可する校内サブネット (CIDR):', False);
   if not RegQueryStringValue(HKLM, ProductRegistryKey, 'DnsName', ExistingValue) then
     ExistingValue := 'ooki-grader.test';
   NetworkPage.Values[0] := ExistingValue;
   if not RegQueryStringValue(HKLM, ProductRegistryKey, 'HttpsPort', ExistingValue) then
     ExistingValue := '443';
   NetworkPage.Values[1] := ExistingValue;
-  NetworkPage.Values[2] := '192.168.0.0/16';
-
-  CertificatePage := CreateInputFilePage(
-    NetworkPage.ID,
-    'HTTPS 証明書',
-    '指定した DNS 名の秘密鍵付き証明書を選択してください。',
-    'New-OokiGraderCertificate.ps1 で作成した空パスワードの PFX/P12 を選択します。');
-  CertificatePage.Add('証明書:', 'PKCS#12 (*.pfx;*.p12)|*.pfx;*.p12', '.pfx');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Port: Integer;
-  Extension: string;
 begin
   Result := True;
-  if CurPageID = DataPage.ID then
-  begin
-    if (Trim(GetDataRoot('')) = '') or
-       (ExtractFileDrive(GetDataRoot('')) = '') or
-       (Pos('\\', GetDataRoot('')) = 1) then
-    begin
-      MsgBox('データ保存先にはローカルドライブ上の絶対パスを指定してください。', mbError, MB_OK);
-      Result := False;
-    end;
-  end
-  else if CurPageID = NetworkPage.ID then
+  if CurPageID = NetworkPage.ID then
   begin
     Port := StrToIntDef(GetHttpsPort(''), 0);
     if (Trim(GetDnsName('')) = '') or
        (Pos(' ', GetDnsName('')) > 0) or
-       (Port < 1) or (Port > 65535) or
-       (Trim(GetSchoolSubnet()) = '') then
+       (Port < 1) or (Port > 65535) then
     begin
-      MsgBox('DNS 名、1〜65535 の HTTPS ポート、明示的な校内 CIDR を確認してください。', mbError, MB_OK);
-      Result := False;
-    end;
-  end
-  else if CurPageID = CertificatePage.ID then
-  begin
-    Extension := Lowercase(ExtractFileExt(CertificatePage.Values[0]));
-    if (not FileExists(CertificatePage.Values[0])) or
-       ((Extension <> '.pfx') and (Extension <> '.p12')) then
-    begin
-      MsgBox('有効な PFX/P12 証明書ファイルを選択してください。', mbError, MB_OK);
+      MsgBox('DNS 名と1〜65535 の HTTPS ポートを確認してください。', mbError, MB_OK);
       Result := False;
     end;
   end;

@@ -9,7 +9,7 @@
 > OpenRouter standard client retains advanced/manual evaluation and activation.
 > DeepSeek V4 Flash is text-only and therefore blocked from the current visual
 > workflow. Cross-provider automatic failover remains disabled. The repository
-> includes both an Inno Setup 6 x64 installer target and a supervised on-site
+> includes both an Inno Setup 6.3-or-later x64 installer target and a supervised on-site
 > installation path. The on-site path is the recommended small-school path: it
 > uses a technician-carried, completely checksum-verified release folder and a
 > free private local HTTPS CA, so neither a paid public TLS certificate nor a
@@ -122,11 +122,11 @@ school clients trust the public half of the school-local CA.
 
 ### 4.1 Supervised host install (recommended for one school)
 
-The technician opens PowerShell 7.4 as Administrator in the exact immutable
-release folder and runs:
+The technician opens the built-in 64-bit Windows PowerShell 5.1 (or PowerShell
+7) as Administrator in the exact immutable release folder and runs:
 
 ```powershell
-pwsh -NoLogo -NoProfile -File .\Install-OokiGraderOnSite.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Install-OokiGraderOnSite.ps1
 ```
 
 The guided script detects the active private IPv4 address and subnet and asks
@@ -151,7 +151,8 @@ Installs:
 - database;
 - recovery/diagnostic CLI;
 - a desktop link created only after database, storage, service, and real HTTPS
-  readiness checks pass;
+  checks pass; a shortage below the configured physical upload reserve is the
+  only accepted degraded state, and uploads remain disabled until it is fixed;
 - an immutable public-only classroom-PC setup package.
 
 ### 4.2 Peer setup

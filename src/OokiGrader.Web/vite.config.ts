@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     build: {
       outDir: "dist",
-      sourcemap: true,
+      sourcemap: mode !== "production",
       assetsDir: "assets",
     },
     server: {

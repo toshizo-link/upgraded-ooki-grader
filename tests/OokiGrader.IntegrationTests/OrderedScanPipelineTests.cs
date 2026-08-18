@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -809,7 +810,11 @@ public sealed class OrderedScanPipelineTests
                         services.AddSingleton<ContentObjectLockProvider>();
                         services.AddDbContextFactory<OokiGraderDbContext>(
                             options => options.UseSqlite(
-                                $"Data Source={database}"));
+                                new SqliteConnectionStringBuilder
+                                {
+                                    DataSource = database,
+                                    Pooling = false,
+                                }.ToString()));
                         services.AddScoped<OrderedScanBatchService>();
                         services.AddSingleton<OrderedScanAssemblyWorker>();
                         services.AddSingleton(Options.Create(

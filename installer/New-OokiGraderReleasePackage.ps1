@@ -164,6 +164,14 @@ if ($PSCmdlet.ShouldProcess(
                 throw "The publish output is missing $requiredExecutable."
             }
         }
+        $unnecessaryArtifact = Get-ChildItem -LiteralPath $payload `
+            -File -Recurse | Where-Object {
+                $_.Name -eq 'appsettings.Development.json' -or
+                $_.Extension -in @('.map', '.pdb')
+            } | Select-Object -First 1
+        if ($null -ne $unnecessaryArtifact) {
+            throw "The production publish contains an unnecessary development artifact: $($unnecessaryArtifact.Name)"
+        }
 
         $technicianFiles = @(
             'Install-OokiGraderOnSite.ps1',
@@ -185,10 +193,11 @@ if ($PSCmdlet.ShouldProcess(
             if (-not [IO.File]::Exists($installerSource)) {
                 throw "The technician package is missing $name."
             }
-            [IO.File]::Copy(
-                $installerSource,
+            $installerText = [IO.File]::ReadAllText($installerSource)
+            [IO.File]::WriteAllText(
                 (Join-Path $payload $name),
-                $false)
+                $installerText,
+                [Text.UTF8Encoding]::new($true))
         }
 
         $signingHookState = 'not-requested'
@@ -263,6 +272,9 @@ if ($PSCmdlet.ShouldProcess(
             version = $Version
             runtime = $Runtime
             selfContained = $true
+            hostInstallEntryPoint = 'Install-OokiGraderOnSite.ps1'
+            minimumTechnicianPowerShell = '5.1'
+            technicianScriptEncoding = 'utf-8-bom'
             signingHook = $signingHookState
             productionSigningClaimed = ($null -ne $signer)
             signerThumbprint = $signerThumbprint

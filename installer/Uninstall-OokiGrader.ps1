@@ -24,6 +24,9 @@ Import-Module (Join-Path $PSScriptRoot 'OokiGrader.Windows.psm1') -Force
 
 Assert-OokiWindows
 Assert-OokiAdministrator
+if ($InstallerManagedApplicationRemoval) {
+    $ConfirmPreference = 'None'
+}
 if (-not $OfflineConfirmed) {
     throw 'Uninstall requires explicit confirmation that teacher traffic is offline.'
 }

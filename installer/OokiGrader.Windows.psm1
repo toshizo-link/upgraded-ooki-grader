@@ -241,6 +241,36 @@ function Assert-OokiAuthenticodeSignature {
     }
 }
 
+function Get-OokiFileSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $FilePath
+    )
+
+    # Direct stream hashing is intentionally independent of PowerShell's
+    # FileSystem provider. Windows PowerShell 5.1 otherwise suppresses provider
+    # path resolution while a caller is using -WhatIf.
+    $stream = [IO.File]::Open(
+        $FilePath,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read)
+    try {
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            return ([BitConverter]::ToString(
+                $algorithm.ComputeHash($stream))).Replace(
+                    '-',
+                    '').ToLowerInvariant()
+        } finally {
+            $algorithm.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Assert-OokiReleasePackage {
     [CmdletBinding()]
     param(
@@ -307,8 +337,7 @@ function Assert-OokiReleasePackage {
         if (-not [IO.File]::Exists($target)) {
             throw "The release package is missing $relative."
         }
-        $actualHash = (Get-FileHash -LiteralPath $target `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = Get-OokiFileSha256 -FilePath $target
         if (-not $actualHash.Equals(
             $expectedHash,
             [StringComparison]::Ordinal)) {
@@ -542,6 +571,18 @@ function Assert-OokiSchoolSubnet {
         if (-not $private) {
             throw "The firewall scope must be private: $item"
         }
+        if ($parts.Count -eq 2 -and $bytes.Length -eq 4) {
+            $minimumPrivatePrefix = if ($bytes[0] -eq 10) {
+                8
+            } elseif ($bytes[0] -eq 172) {
+                12
+            } else {
+                16
+            }
+            if ($prefix -lt $minimumPrivatePrefix) {
+                throw "The firewall CIDR range extends outside private address space: $item"
+            }
+        }
     }
 
     return $SchoolSubnet
@@ -565,10 +606,10 @@ function Set-OokiInstallAcl {
                 $root,
                 '/inheritance:r',
                 '/grant:r',
-                '*S-1-5-18:(OI)(CI)F',
-                '*S-1-5-32-544:(OI)(CI)F',
-                '*S-1-5-32-545:(OI)(CI)RX',
-                "NT SERVICE\${ServiceName}:(OI)(CI)RX",
+                '*S-1-5-18:F',
+                '*S-1-5-32-544:F',
+                '*S-1-5-32-545:RX',
+                "NT SERVICE\${ServiceName}:RX",
                 '/T',
                 '/C'
             )
@@ -612,6 +653,35 @@ function Set-OokiDataAcl {
                 )
         }
     }
+}
+
+function Set-OokiBackupAcl {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string] $BackupRoot,
+
+        [string] $ServiceName = 'OokiGrader.Host'
+    )
+
+    $root = Resolve-OokiExactPath -Path $BackupRoot -Purpose 'Backup root'
+    if ($root.StartsWith('\\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The automatic backup root must be on a local filesystem.'
+    }
+    Assert-OokiServiceName -ServiceName $ServiceName | Out-Null
+    if ($PSCmdlet.ShouldProcess($root, 'Create and secure backup directory')) {
+        [IO.Directory]::CreateDirectory($root) | Out-Null
+        Invoke-OokiNative -FilePath "$env:SystemRoot\System32\icacls.exe" `
+            -ArgumentList @(
+                $root,
+                '/inheritance:r',
+                '/grant:r',
+                '*S-1-5-18:(OI)(CI)F',
+                '*S-1-5-32-544:(OI)(CI)F',
+                "NT SERVICE\${ServiceName}:(OI)(CI)M"
+            )
+    }
+    return $root
 }
 
 function Install-OokiHostCertificate {
@@ -748,34 +818,39 @@ function Set-OokiWindowsService {
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($PSCmdlet.ShouldProcess($ServiceName, 'Configure delayed automatic Windows Service')) {
         if ($null -eq $existing) {
-            Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
-                -ArgumentList @(
-                    'create',
-                    $ServiceName,
-                    'binPath=',
-                    $binaryCommand,
-                    'start=',
-                    'delayed-auto',
-                    'DisplayName=',
-                    'Ooki Grader'
-                )
+            New-Service -Name $ServiceName `
+                -BinaryPathName $binaryCommand `
+                -DisplayName 'Ooki Grader' `
+                -StartupType Automatic | Out-Null
         }
 
         # Configure the virtual account only after SCM has created the service
         # identity. The service is never started in the temporary LocalSystem
         # configuration.
+        $escapedServiceName = $ServiceName.Replace("'", "''")
+        $serviceRecord = Get-CimInstance Win32_Service `
+            -Filter "Name='$escapedServiceName'" -ErrorAction Stop
+        $changeResult = Invoke-CimMethod -InputObject $serviceRecord `
+            -MethodName Change -Arguments @{
+                PathName = $binaryCommand
+                StartMode = 'Automatic'
+                StartName = "NT SERVICE\$ServiceName"
+                DisplayName = 'Ooki Grader'
+            }
+        if ($null -eq $changeResult -or $changeResult.ReturnValue -ne 0) {
+            $returnValue = if ($null -eq $changeResult) {
+                'no result'
+            } else {
+                [string] $changeResult.ReturnValue
+            }
+            throw "Windows service configuration failed with return value $returnValue."
+        }
         Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
             -ArgumentList @(
                 'config',
                 $ServiceName,
-                'binPath=',
-                $binaryCommand,
                 'start=',
-                'delayed-auto',
-                'obj=',
-                "NT SERVICE\$ServiceName",
-                'DisplayName=',
-                'Ooki Grader'
+                'delayed-auto'
             )
 
         Invoke-OokiNative -FilePath "$env:SystemRoot\System32\sc.exe" `
@@ -823,20 +898,13 @@ function Set-OokiFirewallRule {
     if ($PSCmdlet.ShouldProcess(
         $RuleName,
         'Create or update scoped HTTPS firewall rule')) {
-        if ($null -eq $existing) {
-            New-NetFirewallRule -DisplayName $RuleName `
-                -Direction Inbound -Action Allow -Enabled True `
-                -Profile $FirewallProfile -Protocol TCP -LocalPort $Port `
-                -RemoteAddress $RemoteAddress | Out-Null
-        } else {
-            $existing | Set-NetFirewallRule -Direction Inbound `
-                -Action Allow -Enabled True `
-                -Profile $FirewallProfile | Out-Null
-            $existing | Set-NetFirewallPortFilter -Protocol TCP `
-                -LocalPort $Port | Out-Null
-            $existing | Set-NetFirewallAddressFilter `
-                -RemoteAddress $RemoteAddress | Out-Null
+        if ($null -ne $existing) {
+            $existing | Remove-NetFirewallRule -Confirm:$false
         }
+        New-NetFirewallRule -DisplayName $RuleName `
+            -Direction Inbound -Action Allow -Enabled True `
+            -Profile $FirewallProfile -Protocol TCP -LocalPort $Port `
+            -RemoteAddress $RemoteAddress | Out-Null
     }
 }
 
@@ -1161,6 +1229,123 @@ function Wait-OokiService {
         [TimeSpan]::FromSeconds($TimeoutSeconds))
 }
 
+function Get-OokiReadyEndpointHealth {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Uri] $Uri,
+
+        [ValidateRange(5, 300)]
+        [int] $TimeoutSeconds = 60,
+
+        [switch] $AllowPhysicalReserveDegraded
+    )
+
+    if ($Uri.Scheme -ne 'https') {
+        throw 'Readiness checks require HTTPS.'
+    }
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastStatusCode = $null
+    do {
+        $statusCode = $null
+        $responseBody = $null
+        try {
+            $response = Invoke-WebRequest -Uri $Uri -Method Get `
+                -UseBasicParsing -TimeoutSec 10
+            $statusCode = [int] $response.StatusCode
+            $responseBody = [string] $response.Content
+        } catch {
+            $errorResponse = if ($null -ne
+                $_.Exception.PSObject.Properties['Response']) {
+                $_.Exception.Response
+            } else {
+                $null
+            }
+            if ($null -ne $errorResponse) {
+                try {
+                    if ($errorResponse.GetType().FullName -eq
+                        'System.Net.Http.HttpResponseMessage') {
+                        $statusCode = [int] $errorResponse.StatusCode
+                        $responseBody = $errorResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    } else {
+                        $statusCode = [int] $errorResponse.StatusCode
+                        $stream = $errorResponse.GetResponseStream()
+                        if ($null -ne $stream) {
+                            $reader = [IO.StreamReader]::new($stream)
+                            try {
+                                $responseBody = $reader.ReadToEnd()
+                            } finally {
+                                $reader.Dispose()
+                            }
+                        }
+                    }
+                } catch {
+                    $responseBody = $null
+                }
+            }
+        }
+        $lastStatusCode = $statusCode
+        if (-not [string]::IsNullOrWhiteSpace($responseBody)) {
+            try {
+                $body = $responseBody | ConvertFrom-Json
+                $certificateUsable =
+                    -not [string]::IsNullOrWhiteSpace(
+                        [string] $body.certificate) -and
+                    $body.certificate -ne 'unavailable'
+                $fullyReady = $statusCode -eq 200 -and
+                    $body.state -eq 'healthy' -and
+                    $body.database -eq 'healthy' -and
+                    $body.schema -eq 'healthy' -and
+                    $body.storage -eq 'healthy' -and
+                    $body.physicalStorage -eq 'healthy' -and
+                    $certificateUsable
+                $reserveOnlyDegraded =
+                    $AllowPhysicalReserveDegraded -and
+                    $statusCode -eq 503 -and
+                    $body.state -eq 'unhealthy' -and
+                    $body.database -eq 'healthy' -and
+                    $body.schema -eq 'healthy' -and
+                    $body.storage -eq 'healthy' -and
+                    $body.physicalStorage -eq 'unhealthy' -and
+                    $certificateUsable
+                if ($fullyReady -or $reserveOnlyDegraded) {
+                    return [pscustomobject]@{
+                        state = if ($fullyReady) {
+                            'healthy'
+                        } else {
+                            'physical-reserve-degraded'
+                        }
+                        statusCode = $statusCode
+                        database = [string] $body.database
+                        schema = [string] $body.schema
+                        storage = [string] $body.storage
+                        physicalStorage = [string] $body.physicalStorage
+                        certificate = [string] $body.certificate
+                        tlsBypassUsed = $false
+                    }
+                }
+            } catch {
+                # A generic HTTPS response is not sufficient health evidence.
+            }
+        }
+        if ([DateTimeOffset]::UtcNow -lt $deadline) {
+            Start-Sleep -Seconds 2
+        }
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    return [pscustomobject]@{
+        state = 'unavailable'
+        statusCode = $lastStatusCode
+        database = $null
+        schema = $null
+        storage = $null
+        physicalStorage = $null
+        certificate = $null
+        tlsBypassUsed = $false
+    }
+}
+
 function Test-OokiReadyEndpoint {
     [CmdletBinding()]
     param(
@@ -1171,37 +1356,9 @@ function Test-OokiReadyEndpoint {
         [int] $TimeoutSeconds = 60
     )
 
-    if ($Uri.Scheme -ne 'https') {
-        throw 'Readiness checks require HTTPS.'
-    }
-
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
-        try {
-            $response = Invoke-WebRequest -Uri $Uri -Method Get `
-                -UseBasicParsing -TimeoutSec 10
-            if ($response.StatusCode -eq 200) {
-                try {
-                    $body = $response.Content | ConvertFrom-Json
-                    if ($body.state -eq 'healthy' -and
-                        $body.database -eq 'healthy' -and
-                        $body.schema -eq 'healthy' -and
-                        $body.storage -eq 'healthy') {
-                        return $true
-                    }
-                } catch {
-                    # A generic HTTPS 200 is not sufficient readiness evidence.
-                }
-            }
-        } catch {
-            # Retry until the bounded deadline below.
-        }
-        if ([DateTimeOffset]::UtcNow -lt $deadline) {
-            Start-Sleep -Seconds 2
-        }
-    } while ([DateTimeOffset]::UtcNow -lt $deadline)
-
-    return $false
+    $health = Get-OokiReadyEndpointHealth -Uri $Uri `
+        -TimeoutSeconds $TimeoutSeconds
+    return $health.state -eq 'healthy'
 }
 
 function Write-OokiWindowsEvent {
@@ -1292,6 +1449,7 @@ Export-ModuleMember -Function @(
     'Assert-OokiSchoolSubnet',
     'Set-OokiInstallAcl',
     'Set-OokiDataAcl',
+    'Set-OokiBackupAcl',
     'Install-OokiHostCertificate',
     'Set-OokiCertificateAcl',
     'Set-OokiWindowsService',
@@ -1306,6 +1464,7 @@ Export-ModuleMember -Function @(
     'New-OokiOperationMarker',
     'Remove-OokiOperationMarker',
     'Wait-OokiService',
+    'Get-OokiReadyEndpointHealth',
     'Test-OokiReadyEndpoint',
     'Write-OokiWindowsEvent'
 )

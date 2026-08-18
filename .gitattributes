@@ -1,13 +1,17 @@
 # Source text uses explicit repository line endings.
 *.cs text eol=lf
+*.json text eol=lf
+*.mjs text eol=lf
 *.ps1 text eol=lf
 *.psm1 text eol=lf
 *.iss text eol=lf
 *.md text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
 
 # Generated and immutable Windows artifacts must retain their exact bytes.
 output/windows/releases/** -text -eol
 output/windows/host-install-media/** -text -eol
-
 # Windows PowerShell 5.1 bootstrap templates have builder-controlled encoding.
 installer/HostInstallMedia/** -text -eol
+*.zip filter=lfs diff=lfs merge=lfs -text
