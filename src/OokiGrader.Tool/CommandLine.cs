@@ -42,7 +42,7 @@ internal sealed class CommandLine
         var command = arguments[0];
         var index = 1;
         string? subcommand = null;
-        if (command is "backup" or "restore")
+        if (command is "backup" or "restore" or "maintenance")
         {
             if (arguments.Length <= index
                 || (arguments[index].Length > 0
@@ -139,6 +139,7 @@ internal sealed class CommandLine
         "destination-encryption-confirmed",
         "maintenance-confirmed",
         "offline-confirmed",
+        "confirm-maintenance",
     ];
 
     private static readonly HashSet<string> KnownOptions =
@@ -154,6 +155,7 @@ internal sealed class CommandLine
         "manifest-sha256",
         "maintenance-confirmed",
         "offline-confirmed",
+        "confirm-maintenance",
         "confirm-restore",
     ];
 }

@@ -1142,7 +1142,9 @@ public sealed partial class GeminiBatchClient(HttpClient httpClient)
                 connection.BaseAddress.Host,
                 AllowedHost,
                 StringComparison.OrdinalIgnoreCase)
-            || connection.ModelId != SelectedModel
+            || !AiProviderCatalog.IsModelIdValid(
+                AiProviders.GeminiDirect,
+                connection.ModelId)
             || connection.Timeout < TimeSpan.FromSeconds(5)
             || connection.Timeout > TimeSpan.FromMinutes(5))
         {

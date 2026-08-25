@@ -1364,12 +1364,30 @@ function AiConfigurationView({
               />
             </Field>
           ) : (
-            <InlineAlert tone="info">
-              <p>
-                既定モデル: <strong>{modelId}</strong>
-              </p>
-            </InlineAlert>
+            <Field
+              label="GeminiモデルID"
+              htmlFor="ai-connection-model"
+              required
+              hint="Google AI Studioに表示される正確なモデルIDを入力します。変更後は、保存前に画像入力と構造化出力を自動確認します。"
+            >
+              <input
+                id="ai-connection-model"
+                value={modelId}
+                onChange={(event) => setModelId(event.target.value)}
+                placeholder={geminiDefaultModel}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </Field>
           )}
+          {connectionEditor?.provider === "geminiDirect" &&
+          modelId.trim() &&
+          !isValidAiModelId("geminiDirect", modelId.trim()) ? (
+            <InlineAlert tone="danger">
+              <p>Geminiの正確なモデルIDを入力してください。</p>
+            </InlineAlert>
+          ) : null}
           {connectionEditor?.provider === "openRouter" &&
           modelId.trim() &&
           !isValidAiModelId("openRouter", modelId.trim()) ? (
@@ -2161,6 +2179,36 @@ function HealthView({
   const [backupWorking, setBackupWorking] = useState<string>();
   const [backupMessage, setBackupMessage] = useState<string>();
   const [backupError, setBackupError] = useState<string>();
+  const [maintenanceWorking, setMaintenanceWorking] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState<string>();
+
+  async function setMaintenanceMode(enabled: boolean) {
+    const confirmed = window.confirm(
+      enabled
+        ? "メンテナンスモードに入ると、更新が完了するまで新しいアップロードや変更操作が停止します。続行しますか？"
+        : "更新と動作確認は完了しましたか？メンテナンスモードを終了しますか？",
+    );
+    if (!confirmed) return;
+
+    setMaintenanceWorking(true);
+    setMaintenanceError(undefined);
+    try {
+      await api.post(
+        enabled ? "/admin/maintenance:enter" : "/admin/maintenance:exit",
+        {},
+        { idempotencyKey: newIdempotencyKey() },
+      );
+      query.reload();
+    } catch (reason) {
+      setMaintenanceError(
+        reason instanceof Error
+          ? reason.message
+          : "メンテナンスモードを変更できませんでした。",
+      );
+    } finally {
+      setMaintenanceWorking(false);
+    }
+  }
 
   async function createBackup() {
     setBackupWorking("create");
@@ -2287,6 +2335,42 @@ function HealthView({
           </p>
         </div>
         <StatusBadge status={displayState} />
+      </Card>
+
+      <Card>
+        <div className="card__header">
+          <div>
+            <h2>メンテナンスモード</h2>
+            <p>
+              {health.maintenanceMode
+                ? "有効です。新しいアップロードや変更操作は停止しています。"
+                : "ホストの更新・復元前に有効にし、操作中の先生がいないことを確認します。"}
+            </p>
+          </div>
+          <Button
+            variant={health.maintenanceMode ? "secondary" : "danger"}
+            onClick={() => void setMaintenanceMode(!health.maintenanceMode)}
+            disabled={maintenanceWorking}
+          >
+            {maintenanceWorking
+              ? "変更中…"
+              : health.maintenanceMode
+                ? "メンテナンスを終了"
+                : "メンテナンスに入る"}
+          </Button>
+        </div>
+        {maintenanceError ? (
+          <InlineAlert tone="danger">
+            <p>{maintenanceError}</p>
+          </InlineAlert>
+        ) : null}
+        {health.maintenanceMode ? (
+          <InlineAlert tone="warning">
+            <p>
+              更新が完了し、ホストの動作を確認するまでこの状態を維持してください。
+            </p>
+          </InlineAlert>
+        ) : null}
       </Card>
 
       {actionableComponents.length ? (

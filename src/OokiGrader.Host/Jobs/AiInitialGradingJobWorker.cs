@@ -1450,7 +1450,9 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         string responseJson;
         try
         {
-            AiResponseMetadataValidator.Validate(stored.Response, ModelId);
+            AiResponseMetadataValidator.Validate(
+                stored.Response,
+                claim.Connection.ModelId);
             responseJson = stored.Response.StructuredOutput.GetRawText();
             if (responseJson.Length > MaximumStoredResponseCharacters)
             {
@@ -1546,7 +1548,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         {
             schemaVersion = 1,
             provider = AiProviders.GeminiDirect,
-            modelId = ModelId,
+            modelId = claim.Connection.ModelId,
             connectionId = claim.Connection.ConnectionId,
             connectionRevision = claim.ConnectionRevision,
             taskType = AiTaskTypes.InitialGrading,
@@ -2737,7 +2739,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 != profile.AiConnection.CredentialRevision
             || (profile.ProcessingStrategy == "gemini_batch"
                 && (profile.AiConnection.Provider != AiProviders.GeminiDirect
-                    || profile.ModelId != ModelId
+                    || profile.ModelId != profile.AiConnection.ModelId
                     || profile.AiConnection
                         .LastBatchCapabilityProbeState != "passed"
                     || profile.AiConnection

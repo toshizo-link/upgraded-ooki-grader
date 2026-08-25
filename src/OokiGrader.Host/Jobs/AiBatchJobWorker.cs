@@ -315,7 +315,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
             {
                 schemaVersion = 1,
                 provider = AiProviders.GeminiDirect,
-                modelId = GeminiBatchClient.SelectedModel,
+                modelId = connection.ModelId,
                 payload.CompatibilityKey,
                 connectionId = connection.Id,
                 connectionRevision = connection.CredentialRevision,
@@ -328,7 +328,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
             {
                 Id = batchId,
                 Provider = AiProviders.GeminiDirect,
-                ModelId = GeminiBatchClient.SelectedModel,
+                ModelId = connection.ModelId,
                 AiConnectionId = connection.Id,
                 ConnectionRevision = connection.CredentialRevision,
                 AiTaskProfileId = profile.Id,
@@ -1293,7 +1293,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 .AsNoTracking()
                 .Where(item =>
                     item.Provider == AiProviders.GeminiDirect
-                    && item.ModelId == GeminiBatchClient.SelectedModel
+                    && item.ModelId == batch.ModelId
                     && item.EffectiveAt <= now)
                 .OrderByDescending(item => item.EffectiveAt)
                 .ThenByDescending(item => item.CapturedAt)
@@ -1429,7 +1429,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                         Id = UlidId.New(now),
                         AiRequestId = mapping.AiRequestId,
                         RequestedProvider = AiProviders.GeminiDirect,
-                        RequestedModel = GeminiBatchClient.SelectedModel,
+                        RequestedModel = batch.ModelId,
                         ActualProvider = result.Response.Provider,
                         ActualModel = result.Response.ActualModel,
                         InputTokens = result.Response.Usage.PromptTokens,
@@ -2316,14 +2316,13 @@ public sealed partial class AiBatchJobWorker : BackgroundService
         var connection = profile.AiConnection;
         if (!profile.Active
             || profile.ProcessingStrategy != "gemini_batch"
-            || profile.ModelId != GeminiBatchClient.SelectedModel
+            || profile.ModelId != connection.ModelId
             || connection.State != "active"
             || connection.LastCapabilityProbeState != "passed"
             || connection.LastBatchCapabilityProbeState != "passed"
             || connection.LastBatchCapabilityProbeCredentialRevision
                 != connection.CredentialRevision
             || connection.Provider != AiProviders.GeminiDirect
-            || connection.ModelId != GeminiBatchClient.SelectedModel
             || profile.ConnectionRevision != connection.CredentialRevision
             || candidates.Any(item =>
                 item.AiRequest.AiTaskProfileId != profile.Id
@@ -2338,9 +2337,8 @@ public sealed partial class AiBatchJobWorker : BackgroundService
     private static void ValidateBatchConfiguration(AiBatchEntity batch)
     {
         if (batch.Provider != AiProviders.GeminiDirect
-            || batch.ModelId != GeminiBatchClient.SelectedModel
+            || batch.ModelId != batch.AiConnection.ModelId
             || batch.AiConnection.Provider != AiProviders.GeminiDirect
-            || batch.AiConnection.ModelId != GeminiBatchClient.SelectedModel
             || batch.AiConnection.State != "active"
             || batch.AiConnection.LastCapabilityProbeState != "passed"
             || batch.AiConnection.LastBatchCapabilityProbeState != "passed"

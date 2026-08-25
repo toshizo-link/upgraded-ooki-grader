@@ -15,6 +15,8 @@ const queryState = vi.hoisted(() => ({
   profiles: [] as Record<string, unknown>[],
   connectionsReload: vi.fn(),
   profilesReload: vi.fn(),
+  healthReload: vi.fn(),
+  maintenanceMode: false,
 }));
 
 const apiState = vi.hoisted(() => ({
@@ -48,6 +50,25 @@ vi.mock("../hooks/useApiQuery", () => ({
         reload: queryState.profilesReload,
       };
     }
+    if (key === "admin-health") {
+      return {
+        data: {
+          maintenanceMode: queryState.maintenanceMode,
+          components: [],
+        },
+        error: undefined,
+        status: "success" as const,
+        reload: queryState.healthReload,
+      };
+    }
+    if (key === "admin-backups") {
+      return {
+        data: { items: [], configuration: {} },
+        error: undefined,
+        status: "success" as const,
+        reload: vi.fn(),
+      };
+    }
     return {
       data: undefined,
       error: undefined,
@@ -75,8 +96,43 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/admin?tab=ai");
   queryState.connections = [];
   queryState.profiles = [];
+  queryState.maintenanceMode = false;
   apiState.post.mockResolvedValue(undefined);
   apiState.put.mockResolvedValue(undefined);
+});
+
+describe("AdminPage maintenance mode", () => {
+  it("requires confirmation and enters maintenance mode", async () => {
+    window.history.replaceState(null, "", "/admin?tab=health");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "メンテナンスに入る" }),
+    );
+
+    await waitFor(() => {
+      expect(apiState.post).toHaveBeenCalledWith(
+        "/admin/maintenance:enter",
+        {},
+        expect.objectContaining({ idempotencyKey: expect.any(String) }),
+      );
+    });
+    expect(queryState.healthReload).toHaveBeenCalledOnce();
+  });
+
+  it("shows the exit action while maintenance mode is active", () => {
+    window.history.replaceState(null, "", "/admin?tab=health");
+    queryState.maintenanceMode = true;
+    renderPage();
+
+    expect(
+      screen.getByRole("heading", { name: "メンテナンスモード" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "メンテナンスを終了" }),
+    ).toBeVisible();
+  });
 });
 
 afterEach(() => {

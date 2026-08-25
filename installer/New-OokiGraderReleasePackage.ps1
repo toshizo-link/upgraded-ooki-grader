@@ -177,6 +177,7 @@ if ($PSCmdlet.ShouldProcess(
             'Install-OokiGraderOnSite.ps1',
             'Install-OokiGrader.ps1',
             'Upgrade-OokiGrader.ps1',
+            'Update-OokiGraderOnHost.ps1',
             'Repair-OokiGrader.ps1',
             'Restore-OokiGrader.ps1',
             'Uninstall-OokiGrader.ps1',

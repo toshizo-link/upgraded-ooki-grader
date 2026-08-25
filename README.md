@@ -218,7 +218,11 @@ persistent ASP.NET Core Data Protection key ring under `Data:Root`, so a normal
 Host restart does not require the key to be entered again. This macOS store is
 development-only; moving the data root or restoring it on another machine still
 requires re-entry. The checked-in grading path accepts the exact model
-identifier `gemini-3.5-flash-lite`.
+identifier `gemini-3.5-flash-lite` by default. An administrator can enter a
+different exact Gemini model ID on the same screen. The replacement is saved
+and activated only after the full authentication, image, structured-output,
+usage-metadata, and representative-task capability checks pass. Do not change
+models while submitted Gemini Batch work is still in progress.
 
 The normal Gemini screen does not ask a school administrator to create an
 evaluation record, approve a pilot, or activate four profiles by hand. Its
@@ -240,6 +244,13 @@ the immutable template version and opens its first test session; teachers do
 not publish and then create the same test again in a second screen. Formal
 golden-set accuracy evaluation remains a release and model-change quality gate,
 not a routine Gemini setup step.
+
+For a host that is already installed, deploy the release package with
+`installer/Update-OokiGraderOnHost.ps1`. The wrapper reads the current version,
+install root, service name, DNS name, HTTPS port, and signer identity from the
+persistent installation manifest, then delegates to the guarded upgrade flow.
+It still requires maintenance mode and the identifiers of a fresh verified
+backup; model changes do not bypass the normal data-safety boundary.
 
 ### Configure OpenRouter (optional)
 

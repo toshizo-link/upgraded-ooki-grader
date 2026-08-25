@@ -1,0 +1,195 @@
+Write-Host '3/3 Checking the installed host and latest verified backup...'
+$dataRoot = Join-Path $env:ProgramData 'OokiGrader\Data'
+$installationPath = Join-Path $dataRoot 'operations\installation.json'
+if (-not [IO.File]::Exists($installationPath)) {
+    throw "No portable Ooki Grader installation was found at $dataRoot."
+}
+try {
+    $installation = Get-Content -LiteralPath $installationPath -Raw |
+        ConvertFrom-Json
+} catch {
+    throw 'The installed Ooki Grader installation manifest is invalid.'
+}
+if ([string]::IsNullOrWhiteSpace([string] $installation.version) -or
+    [string]::IsNullOrWhiteSpace([string] $installation.installRoot) -or
+    [string]::IsNullOrWhiteSpace([string] $installation.configurationPath)) {
+    throw 'The installed Ooki Grader manifest is incomplete.'
+}
+if ([string] $installation.version -eq '@@OOKI_VERSION@@') {
+    Write-Host 'Ooki Grader is already at version @@OOKI_VERSION@@.'
+    $successJson = Write-DiagnosticResult -State 'already-updated'
+    if ($transcriptStarted) {
+        Stop-Transcript | Out-Null
+        $transcriptStarted = $false
+    }
+    $successJson
+    exit 0
+}
+
+$configurationPath = [string] $installation.configurationPath
+if (-not [IO.File]::Exists($configurationPath)) {
+    throw "The installed production configuration is missing: $configurationPath"
+}
+try {
+    $configuration = Get-Content -LiteralPath $configurationPath -Raw |
+        ConvertFrom-Json
+} catch {
+    throw 'The installed production configuration is invalid.'
+}
+$backupRoot = [string] $configuration.Backup.DestinationRoot
+$useBackup = -not [string]::IsNullOrWhiteSpace($backupRoot) -and
+    [IO.Directory]::Exists($backupRoot) -and
+    [bool] $configuration.Backup.DestinationEncryptionConfirmed
+$backupId = $null
+$backupRelativePath = $null
+$backupManifestSha256 = $null
+$backupCompletedAt = $null
+if ($useBackup) {
+    $latestManifestFile = Get-ChildItem -LiteralPath $backupRoot `
+        -Filter manifest.json -File -Recurse -Force |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if ($null -eq $latestManifestFile) {
+        $useBackup = $false
+    } else {
+        try {
+            $backupManifest = Get-Content `
+                -LiteralPath $latestManifestFile.FullName -Raw |
+                ConvertFrom-Json
+        } catch {
+            throw 'The newest backup manifest is invalid.'
+        }
+        $backupId = [string] $backupManifest.backupId
+        if ($backupId -notmatch '^[0-9A-HJKMNP-TV-Z]{26}$' -or
+            -not ([string] $backupManifest.applicationVersion).Equals(
+                [string] $installation.version,
+                [StringComparison]::Ordinal) -or
+            -not [bool] $backupManifest.destinationEncryptionConfirmed) {
+            throw 'The newest configured backup is not eligible for this update.'
+        }
+        $backupCompletedAt = [DateTimeOffset]::Parse(
+            [string] $backupManifest.completedAt,
+            [Globalization.CultureInfo]::InvariantCulture)
+        if ($backupCompletedAt -lt [DateTimeOffset]::UtcNow.AddHours(-24)) {
+            throw 'The configured backup is more than 24 hours old. Remove the obsolete backup configuration or create a fresh backup.'
+        }
+        $backupPrefix = [IO.Path]::GetFullPath($backupRoot).TrimEnd('\') + '\'
+        $backupSetPath = [IO.Path]::GetFullPath(
+            $latestManifestFile.DirectoryName)
+        if (-not $backupSetPath.StartsWith(
+            $backupPrefix,
+            [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The newest backup manifest is outside the configured backup root.'
+        }
+        $backupRelativePath = $backupSetPath.Substring(
+            $backupPrefix.Length).Replace('\', '/')
+        $backupManifestSha256 = Get-Sha256 -Path `
+            $latestManifestFile.FullName
+    }
+}
+
+$currentVersionRoot = Join-Path (Join-Path (
+    [string] $installation.installRoot) 'versions') `
+    ([string] $installation.version)
+$currentTool = Join-Path $currentVersionRoot 'OokiGrader.Tool.exe'
+if (-not [IO.File]::Exists($currentTool)) {
+    throw 'The currently installed offline health tool is missing.'
+}
+$healthText = & $currentTool health `
+    --database (Join-Path $dataRoot 'ooki-grader.db') `
+    --data-root $dataRoot `
+    --content-root (Join-Path $dataRoot 'objects') `
+    --json
+if ($LASTEXITCODE -notin @(0, 3)) {
+    throw "The installed health tool stopped with exit code $LASTEXITCODE."
+}
+$health = ($healthText | Out-String) | ConvertFrom-Json
+if ($health.database.state -ne 'healthy' -or
+    -not [bool] $health.database.schemaCurrent -or
+    [bool] $health.storage.restoreOrMigrationMarkerPresent) {
+    throw 'The host must be healthy, schema-current, and free of restore/migration markers.'
+}
+
+Write-Host ''
+Write-Host 'Ooki Grader portable update'
+Write-Host "  Current version: $($installation.version)"
+Write-Host '  New version:     @@OOKI_VERSION@@'
+Write-Host "  Data:            $dataRoot"
+Write-Host "  Backup:          $(if ($useBackup) { $backupRelativePath } else { 'NOT CONFIGURED - database recovery will not be available' })"
+if ($useBackup) {
+    Write-Host "  Backup ID:       $backupId"
+    Write-Host "  Backup completed:$($backupCompletedAt.ToString('O'))"
+}
+Write-Host "  Maintenance:     $(if ($health.database.maintenanceMode) { 'already enabled' } else { 'will be enabled safely while offline' })"
+Write-Host "  Safety:          $(if ($useBackup) { 'verified backup and prior version retained' } else { 'prior application version retained; NO database recovery' })"
+Write-Host ''
+$requiredConfirmation = if ($useBackup) {
+    'UPDATE'
+} else {
+    'UPDATE WITHOUT BACKUP'
+}
+$confirmation = Read-Host "Type $requiredConfirmation to install this update"
+if ($confirmation -cne $requiredConfirmation) {
+    throw 'The update was cancelled before the service or application changed.'
+}
+
+if (-not [bool] $health.database.maintenanceMode) {
+    $serviceName = [string] $installation.serviceName
+    Write-Host 'Stopping the service and entering maintenance mode...'
+    Stop-Service -Name $serviceName -Force
+    (Get-Service -Name $serviceName).WaitForStatus(
+        [System.ServiceProcess.ServiceControllerStatus]::Stopped,
+        [TimeSpan]::FromSeconds(60))
+    & (Join-Path $packageRoot 'OokiGrader.Tool.exe') maintenance enter `
+        --database (Join-Path $dataRoot 'ooki-grader.db') `
+        --offline-confirmed --confirm-maintenance --json
+    if ($LASTEXITCODE -ne 0) {
+        Start-Service -Name $serviceName
+        throw 'The offline maintenance transition failed; the prior service was restarted.'
+    }
+}
+
+$releaseInventory = Get-Content -LiteralPath (
+    Join-Path $packageRoot 'release-inventory.json') -Raw |
+    ConvertFrom-Json
+$updateArguments = @(
+    '-NoLogo',
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    (Join-Path $packageRoot 'Update-OokiGraderOnHost.ps1'),
+    '-PackageRoot',
+    $packageRoot,
+    '-Version',
+    '@@OOKI_VERSION@@',
+    '-DataRoot',
+    $dataRoot,
+    '-UpdateConfirmed'
+)
+if ($useBackup) {
+    $updateArguments += @(
+        '-BackupDestination', $backupRoot,
+        '-VerifiedBackupId', $backupId,
+        '-VerifiedBackupRelativePath', $backupRelativePath,
+        '-VerifiedBackupManifestSha256', $backupManifestSha256)
+} else {
+    $updateArguments += '-ProceedWithoutBackup'
+}
+if (-not [bool] $releaseInventory.productionSigningClaimed) {
+    $updateArguments += '-AllowChecksumVerifiedOnSitePackage'
+}
+& $runtimePowerShell @updateArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "Ooki Grader update stopped with exit code $LASTEXITCODE."
+}
+
+$successJson = Write-DiagnosticResult -State 'updated-and-verified'
+if ($transcriptStarted) {
+    Stop-Transcript | Out-Null
+    $transcriptStarted = $false
+}
+Write-Host 'Ooki Grader host update completed successfully.'
+Write-Host "Diagnostic result: $resultPath"
+Write-Host "Diagnostic log: $transcriptPath"
+$successJson

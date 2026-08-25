@@ -16,17 +16,13 @@ param(
     [Parameter(Mandatory)]
     [string] $DataRoot,
 
-    [Parameter(Mandatory)]
     [string] $BackupDestination,
 
-    [Parameter(Mandatory)]
     [ValidatePattern('^[0-9A-HJKMNP-TV-Z]{26}$')]
     [string] $VerifiedBackupId,
 
-    [Parameter(Mandatory)]
     [string] $VerifiedBackupRelativePath,
 
-    [Parameter(Mandatory)]
     [ValidatePattern('^[A-Fa-f0-9]{64}$')]
     [string] $VerifiedBackupManifestSha256,
 
@@ -36,8 +32,9 @@ param(
     [Parameter(Mandatory)]
     [switch] $OfflineConfirmed,
 
-    [Parameter(Mandatory)]
     [switch] $FreshPreUpgradeBackupConfirmed,
+
+    [switch] $ProceedWithoutBackup,
 
     [Parameter(Mandatory)]
     [Uri] $ReadyUri,
@@ -67,10 +64,19 @@ if ($AllowChecksumVerifiedOnSitePackage -and
 }
 $allowUnsignedPackage = $AllowChecksumVerifiedOnSitePackage -or
     $AllowUnsignedDevelopmentBuild
-if (-not $MaintenanceConfirmed -or
-    -not $OfflineConfirmed -or
-    -not $FreshPreUpgradeBackupConfirmed) {
-    throw 'Upgrade requires explicit maintenance, offline, and fresh verified backup confirmations.'
+if (-not $MaintenanceConfirmed -or -not $OfflineConfirmed) {
+    throw 'Upgrade requires explicit maintenance and offline confirmations.'
+}
+if ($ProceedWithoutBackup -and $FreshPreUpgradeBackupConfirmed) {
+    throw 'Choose either a verified backup or the explicit no-backup mode.'
+}
+if (-not $ProceedWithoutBackup -and
+    (-not $FreshPreUpgradeBackupConfirmed -or
+        [string]::IsNullOrWhiteSpace($BackupDestination) -or
+        [string]::IsNullOrWhiteSpace($VerifiedBackupId) -or
+        [string]::IsNullOrWhiteSpace($VerifiedBackupRelativePath) -or
+        [string]::IsNullOrWhiteSpace($VerifiedBackupManifestSha256))) {
+    throw 'A complete fresh verified backup is required unless -ProceedWithoutBackup is explicitly selected.'
 }
 if ($ReadyUri.Scheme -ne 'https') {
     throw 'Upgrade readiness verification requires HTTPS.'
@@ -85,13 +91,20 @@ $currentVersion = Resolve-OokiExactPath -Path $CurrentVersionRoot `
     -Purpose 'Current version root' -MustExist -PathType Directory
 $install = Assert-OokiInstallRoot -InstallRoot $InstallRoot
 $data = Assert-OokiDataRoot -DataRoot $DataRoot
-$backup = Resolve-OokiExactPath -Path $BackupDestination `
-    -Purpose 'Encrypted backup destination' -MustExist -PathType Directory
-Assert-OokiDisjointPaths -Paths @{
+$backup = if ($ProceedWithoutBackup) {
+    $null
+} else {
+    Resolve-OokiExactPath -Path $BackupDestination `
+        -Purpose 'Encrypted backup destination' -MustExist -PathType Directory
+}
+$paths = @{
     'Install root' = $install
     'Data root' = $data
-    'Backup root' = $backup
-} | Out-Null
+}
+if ($null -ne $backup) {
+    $paths['Backup root'] = $backup
+}
+Assert-OokiDisjointPaths -Paths $paths | Out-Null
 Assert-OokiServiceName -ServiceName $ServiceName | Out-Null
 $installation = Read-OokiInstallationManifest -DataRoot $data
 if ($null -eq $installation -or
@@ -177,8 +190,10 @@ if (-not $configuredExecutable.Equals(
     throw 'The configured Windows Service does not point at the declared current version.'
 }
 
-$backupVerification = Invoke-OokiToolJson -ToolPath $currentTool `
-    -Arguments @(
+$backupVerification = if ($ProceedWithoutBackup) {
+    $null
+} else {
+    Invoke-OokiToolJson -ToolPath $currentTool -Arguments @(
         'backup',
         'verify',
         '--database',
@@ -195,7 +210,8 @@ $backupVerification = Invoke-OokiToolJson -ToolPath $currentTool `
         '--manifest-sha256',
         $VerifiedBackupManifestSha256
     )
-if (-not $backupVerification.verified) {
+}
+if ($null -ne $backupVerification -and -not $backupVerification.verified) {
     throw 'The selected pre-upgrade backup did not pass verification.'
 }
 $beforeHealth = Invoke-OokiToolJson -ToolPath $currentTool -Arguments @(
@@ -279,7 +295,8 @@ if ($PSCmdlet.ShouldProcess(
             state = 'upgraded'
             version = $Version
             previousVersionPreserved = $true
-            backupVerified = $true
+            backupVerified = -not $ProceedWithoutBackup
+            proceededWithoutBackup = [bool] $ProceedWithoutBackup
             beforeMigration = $beforeMigration
             afterMigration = $afterHealth.database.currentMigrationId
             rollbackBoundary = 'An older binary is never started after an incompatible schema change.'
@@ -314,6 +331,9 @@ if ($PSCmdlet.ShouldProcess(
             throw 'Upgrade failed before a schema change. The prior signed binary was restored and data was preserved.'
         }
 
+        if ($ProceedWithoutBackup) {
+            throw 'Upgrade failed after the schema changed. No backup was configured, so automated recovery is unavailable. The service remains stopped and the migration marker remains in place.'
+        }
         $restorePlan = Invoke-OokiToolJson -ToolPath $newTool -Arguments @(
             'restore',
             'plan',

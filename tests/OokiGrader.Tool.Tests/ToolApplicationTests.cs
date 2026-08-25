@@ -369,6 +369,66 @@ public sealed class ToolApplicationTests
             json.RootElement.GetProperty("errorCode").GetString());
     }
 
+    [Fact]
+    public async Task OfflineMaintenanceEnterRequiresBothConfirmationsAndMutatesSingleton()
+    {
+        await using var fixture = await ToolFixture.CreateAsync();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await ToolApplication.RunAsync(
+            [
+                "maintenance",
+                "enter",
+                "--database",
+                fixture.DatabasePath,
+                "--offline-confirmed",
+                "--confirm-maintenance",
+                "--json",
+            ],
+            output,
+            error);
+
+        Assert.Equal(ToolExitCodes.Success, exitCode);
+        Assert.Empty(error.ToString());
+        Assert.True((await ReadDatabaseStateAsync(fixture.DatabasePath))
+            .MaintenanceMode);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(
+            "maintenance",
+            json.RootElement.GetProperty("state").GetString());
+        Assert.True(
+            json.RootElement.GetProperty("mutationPerformed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task OfflineMaintenanceEnterRefusesMissingConfirmation()
+    {
+        await using var fixture = await ToolFixture.CreateAsync();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await ToolApplication.RunAsync(
+            [
+                "maintenance",
+                "enter",
+                "--database",
+                fixture.DatabasePath,
+                "--offline-confirmed",
+                "--json",
+            ],
+            output,
+            error);
+
+        Assert.Equal(ToolExitCodes.Usage, exitCode);
+        Assert.False((await ReadDatabaseStateAsync(fixture.DatabasePath))
+            .MaintenanceMode);
+        using var json = JsonDocument.Parse(error.ToString());
+        Assert.Equal(
+            "maintenance_confirmation_required",
+            json.RootElement.GetProperty("errorCode").GetString());
+    }
+
     private static FileSnapshot Snapshot(string path)
     {
         var info = new FileInfo(path);

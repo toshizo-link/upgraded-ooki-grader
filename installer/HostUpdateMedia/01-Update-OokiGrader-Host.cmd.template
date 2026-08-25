@@ -1,0 +1,30 @@
+@echo off
+chcp 65001 >nul
+setlocal
+
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" ^
+  -NoLogo -NoProfile -NonInteractive ^
+  -Command "if (([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }" ^
+  >nul 2>&1
+if errorlevel 1 (
+  echo Right-click this file and select Run as administrator.
+  pause
+  exit /b 1
+)
+
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" ^
+  -NoLogo -NoProfile -ExecutionPolicy Bypass ^
+  -File "%~dp0Update-OokiGrader-Host.ps1"
+
+set "OOKI_EXIT_CODE=%ERRORLEVEL%"
+if not "%OOKI_EXIT_CODE%"=="0" (
+  echo.
+  echo Update did not complete. Save the error shown above.
+  pause
+  exit /b %OOKI_EXIT_CODE%
+)
+
+echo.
+echo Ooki Grader host update completed.
+pause
+exit /b 0

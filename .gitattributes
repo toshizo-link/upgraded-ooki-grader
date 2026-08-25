@@ -12,6 +12,8 @@
 # Generated and immutable Windows artifacts must retain their exact bytes.
 output/windows/releases/** -text -eol
 output/windows/host-install-media/** -text -eol
+output/windows/host-update-media/** -text -eol
 # Windows PowerShell 5.1 bootstrap templates have builder-controlled encoding.
 installer/HostInstallMedia/** -text -eol
+installer/HostUpdateMedia/** -text -eol
 *.zip filter=lfs diff=lfs merge=lfs -text

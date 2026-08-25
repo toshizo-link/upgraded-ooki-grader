@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Data.Sqlite;
 using OokiGrader.Infrastructure.Backups;
 
 namespace OokiGrader.Tool;
@@ -37,6 +38,11 @@ public static class ToolApplication
                         cancellationToken)
                     .ConfigureAwait(false),
                 ("backup", "verify") => await RunBackupVerifyAsync(
+                        commandLine,
+                        output,
+                        cancellationToken)
+                    .ConfigureAwait(false),
+                ("maintenance", "enter") => await RunMaintenanceEnterAsync(
                         commandLine,
                         output,
                         cancellationToken)
@@ -202,6 +208,79 @@ public static class ToolApplication
         return verification.Verified
             ? ToolExitCodes.Success
             : ToolExitCodes.CheckFailed;
+    }
+
+    private static async Task<int> RunMaintenanceEnterAsync(
+        CommandLine commandLine,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        commandLine.AllowOnly(
+            "database",
+            "offline-confirmed",
+            "confirm-maintenance",
+            "json");
+        if (!commandLine.HasFlag("offline-confirmed")
+            || !commandLine.HasFlag("confirm-maintenance"))
+        {
+            throw new ToolUsageException(
+                "maintenance_confirmation_required",
+                "Offline state and the maintenance transition must be explicitly confirmed.");
+        }
+
+        var databasePath = SafePaths.RequireAbsoluteNonRoot(
+            commandLine.RequireValue("database"),
+            "--database",
+            requireExistingFile: true);
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false,
+        }.ToString();
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using (var busy = connection.CreateCommand())
+        {
+            busy.CommandText = "PRAGMA busy_timeout = 1000;";
+            await busy.ExecuteNonQueryAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        await using var transaction = (SqliteTransaction)
+            await connection.BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE site_settings
+            SET maintenance_mode = 1,
+                revision = revision + 1,
+                updated_at = $updated_at
+            WHERE id = 'site';
+            """;
+        command.Parameters.AddWithValue(
+            "$updated_at",
+            TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds());
+        if (await command.ExecuteNonQueryAsync(cancellationToken)
+                .ConfigureAwait(false) != 1)
+        {
+            throw new InvalidOperationException(
+                "The singleton site settings row is unavailable.");
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await WriteResultAsync(
+                output,
+                new
+                {
+                    command = "maintenance.enter",
+                    state = "maintenance",
+                    mutationPerformed = true,
+                },
+                commandLine.Json)
+            .ConfigureAwait(false);
+        return ToolExitCodes.Success;
     }
 
     private static async Task<int> RunRestorePlanAsync(
@@ -537,6 +616,9 @@ public static class ToolApplication
                      --backup-id <canonical-ulid>
                      --relative-path <backup-set-relative-path>
                      [--manifest-sha256 <sha256>] [--json]
+
+              maintenance enter --database <absolute-file>
+                     --offline-confirmed --confirm-maintenance [--json]
 
               restore plan --database <absolute-file>
                      --content-root <absolute-dir>

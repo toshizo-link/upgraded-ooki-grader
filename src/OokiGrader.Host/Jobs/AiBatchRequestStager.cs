@@ -167,9 +167,8 @@ public sealed class AiBatchRequestStager(
             || aiRequest.State is not ("prepared" or "budget_blocked")
             || profile.ProcessingStrategy != "gemini_batch"
             || !profile.Active
-            || profile.ModelId != GeminiBatchClient.SelectedModel
+            || profile.ModelId != connection.ModelId
             || connection.Provider != AiProviders.GeminiDirect
-            || connection.ModelId != GeminiBatchClient.SelectedModel
             || connection.State != "active"
             || connection.LastCapabilityProbeState != "passed"
             || connection.LastBatchCapabilityProbeState != "passed"

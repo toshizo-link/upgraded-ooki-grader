@@ -423,7 +423,7 @@ public sealed class GeminiBatchClientTests
     }
 
     [Fact]
-    public async Task BatchClientRejectsUnapprovedModelBeforeNetworkCall()
+    public async Task BatchClientAllowsValidAlternativeModelToReachProvider()
     {
         var calls = 0;
         var client = new GeminiBatchClient(
@@ -439,7 +439,7 @@ public sealed class GeminiBatchClientTests
                 Encoding.UTF8.GetBytes("test-key"),
                 "batches/batch-1"));
 
-        Assert.Equal(0, calls);
+        Assert.Equal(1, calls);
     }
 
     private static AiProviderRequest Request(string requestKey)
