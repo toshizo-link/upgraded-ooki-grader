@@ -2,7 +2,7 @@
 
 **Status:** Baseline design with teacher-first simplification  
 **Specification version:** 1.0  
-**Last verified:** 2026-08-11
+**Last verified:** 2026-08-27
 **Primary deployment:** One Japanese cram-school site, Windows 11 host, trusted school LAN  
 **Primary users:** School administrators, teachers, and scan operators
 
@@ -42,9 +42,12 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** expres
   `12-coordinate-free-teacher-workflow.md` supersedes earlier references to
   teacher-edited regions, crops, privacy masking, or full-page fallback.
 - The teacher-first simplification routes all new work through one normal
-  queued request path. Gemini is the default: the normal setup tests a supplied
+  queued request path. `gemini-3.7-flash` is the default and new profiles use
+  `LOW`, `MEDIUM`, or `HIGH` thinking only. The normal setup tests a supplied
   candidate key before persistence and, only on a full capability/image-task
   pass, atomically makes the four exact-current advisory profiles available.
+  An existing connection can change model while leaving the API-key field blank;
+  the host reuses the encrypted key and runs the same full probe.
   The administrator does not enter evaluation evidence or activate those four
   profiles manually. OpenRouter remains an advanced option and only an
   image-capable, structured-output model with approved accuracy evidence can be
@@ -57,6 +60,11 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** expres
 ## External facts verified for this design
 
 The following facts affect architecture and cost. They are not guarantees by Ooki Grader and MUST be reverified before implementation and release:
+
+Entries dated 2026-07-27 are retained as historical verification evidence for
+the earlier 3.5 evaluation baseline. They do not override the current
+`gemini-3.7-flash` application default, and the underlying evaluation records
+must not be rewritten when a default changes.
 
 - Google lists `gemini-3.5-flash-lite` as a stable GA model supporting text, image, PDF, structured output, and the Batch API. Its listed limits are 1,048,576 input tokens and 65,536 output tokens. [Official model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
 - The Batch API is asynchronous, targets completion within 24 hours, is available only through `generateContent`, supports inline requests under 20 MB or JSONL input files up to 2 GB, and is priced at 50% of equivalent standard inference. Batch creation is not idempotent. [Official Batch API guide](https://ai.google.dev/gemini-api/docs/batch-api)

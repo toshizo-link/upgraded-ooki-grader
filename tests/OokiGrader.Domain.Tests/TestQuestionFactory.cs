@@ -17,7 +17,8 @@ internal static class TestQuestionFactory
         MilliPoints? maximum = null,
         MilliPoints? increment = null,
         bool requiresCompleteAnswer = false,
-        bool answerOrderInsensitive = false)
+        bool answerOrderInsensitive = false,
+        QuestionHierarchy? hierarchy = null)
     {
         var answers = new List<AcceptedAnswer>
         {
@@ -46,7 +47,8 @@ internal static class TestQuestionFactory
             teacherVerified,
             answers,
             requiresCompleteAnswer: requiresCompleteAnswer,
-            answerOrderInsensitive: answerOrderInsensitive);
+            answerOrderInsensitive: answerOrderInsensitive,
+            hierarchy: hierarchy);
     }
 
     public static QuestionDefinition Numeric(

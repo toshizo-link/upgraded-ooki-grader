@@ -8,7 +8,7 @@ import { TemplateGenerationFinalCheckPage } from "./TemplateGenerationFinalCheck
 const state = vi.hoisted(() => ({
   data: undefined as TemplateGenerationBatch | undefined,
   reload: vi.fn(),
-  updateUnit: vi.fn<() => Promise<void>>(),
+  updateUnit: vi.fn<() => Promise<TemplateGenerationBatch>>(),
   updateStepSet: vi.fn<() => Promise<void>>(),
   confirmBatch: vi.fn<() => Promise<TemplateGenerationBatch>>(),
 }));
@@ -44,7 +44,7 @@ beforeEach(() => {
     "/templates/generation/batch-1/final-check",
   );
   state.data = makeOtherBatch();
-  state.updateUnit.mockResolvedValue(undefined);
+  state.updateUnit.mockResolvedValue(makeOtherBatch());
   state.updateStepSet.mockResolvedValue(undefined);
   state.confirmBatch.mockResolvedValue({
     ...makeOtherBatch(),
@@ -68,7 +68,7 @@ describe("TemplateGenerationFinalCheckPage", () => {
     ).toBeVisible();
     expect(screen.getByLabelText("学年")).toHaveValue("");
     expect(
-      screen.getByRole("button", { name: "確認してテンプレートを作成" }),
+      screen.getByRole("button", { name: "テンプレートを作成" }),
     ).toBeDisabled();
   });
 
@@ -156,7 +156,7 @@ describe("TemplateGenerationFinalCheckPage", () => {
     expect(screen.queryByLabelText("テスト名")).not.toBeInTheDocument();
   });
 
-  it("surfaces a row-version conflict and never silently discards the edit", async () => {
+  it("autosaves edits and surfaces a row-version conflict without discarding them", async () => {
     const batch = makeOtherBatch();
     batch.units[0] = {
       ...batch.units[0]!,
@@ -179,7 +179,10 @@ describe("TemplateGenerationFinalCheckPage", () => {
     fireEvent.change(screen.getByLabelText("テスト名"), {
       target: { value: "新しい名前" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "変更を保存" }));
+
+    await waitFor(() => expect(state.updateUnit).toHaveBeenCalledTimes(1), {
+      timeout: 2_000,
+    });
 
     expect(
       await screen.findByText(
@@ -190,6 +193,68 @@ describe("TemplateGenerationFinalCheckPage", () => {
       screen.getByRole("button", { name: "最新の内容を読み込む" }),
     ).toBeEnabled();
     expect(screen.getByLabelText("テスト名")).toHaveValue("新しい名前");
+  });
+
+  it("keeps a newer unit edit dirty and resaves it after an in-flight save", async () => {
+    const batch = makeOtherBatch();
+    batch.units[0] = {
+      ...batch.units[0]!,
+      resolvedGrade: "grade4",
+      blockingWarnings: [],
+    };
+    batch.blockingWarnings = [];
+    batch.finalCheckReady = true;
+    state.data = batch;
+    let completeFirstSave!: (value: TemplateGenerationBatch) => void;
+    state.updateUnit
+      .mockImplementationOnce(
+        () =>
+          new Promise<TemplateGenerationBatch>((resolve) => {
+            completeFirstSave = resolve;
+          }),
+      )
+      .mockImplementationOnce(async () => ({
+        ...batch,
+        units: [{ ...batch.units[0]!, rowVersion: 4 }],
+        rowVersion: 6,
+      }));
+    renderPage();
+
+    const nameInput = screen.getByLabelText("テスト名");
+    fireEvent.change(nameInput, {
+      target: { value: "先に送信した名前" },
+    });
+    await waitFor(() => expect(state.updateUnit).toHaveBeenCalledTimes(1), {
+      timeout: 2_000,
+    });
+
+    expect(nameInput).toBeEnabled();
+    fireEvent.change(nameInput, {
+      target: { value: "送信中に入力した最新の名前" },
+    });
+    completeFirstSave({
+      ...batch,
+      units: [{ ...batch.units[0]!, rowVersion: 3 }],
+      rowVersion: 5,
+    });
+
+    await waitFor(() =>
+      expect(nameInput).toHaveValue("送信中に入力した最新の名前"),
+    );
+    await waitFor(() => expect(state.updateUnit).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    expect(state.updateUnit).toHaveBeenLastCalledWith(
+      "batch-1",
+      "unit-1",
+      expect.objectContaining({
+        baseTestName: "送信中に入力した最新の名前",
+        expectedRowVersion: 3,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("自動保存済み")).toBeInTheDocument(),
+    );
   });
 });
 

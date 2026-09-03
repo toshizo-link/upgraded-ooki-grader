@@ -14,6 +14,9 @@ public static class ResultReportSourceHasher
         Append(hash, report.SchoolName);
         Append(hash, report.StudentDisplayName);
         Append(hash, report.StudentNumber);
+        Append(hash, report.StudentGradeLabel);
+        Append(hash, report.StudentClassLabel);
+        Append(hash, report.OriginalScanSha256);
         Append(hash, report.TestTitle);
         Append(
             hash,
@@ -28,12 +31,20 @@ public static class ResultReportSourceHasher
         foreach (var question in report.Questions)
         {
             Append(hash, question.DisplayLabel);
+            Append(hash, question.MajorQuestionLabel);
+            Append(hash, question.MiddleQuestionLabel);
+            Append(hash, question.MinorQuestionLabel);
             Append(hash, question.QuestionText);
             Append(hash, question.RecognizedAnswer);
             Append(hash, question.AwardedPointsMilli);
             Append(hash, question.MaximumPointsMilli);
             Append(hash, question.Outcome);
             Append(hash, question.IsCorrected);
+            Append(hash, question.ModelAnswers?.Count ?? 0);
+            foreach (var modelAnswer in question.ModelAnswers ?? [])
+            {
+                Append(hash, modelAnswer);
+            }
             Append(
                 hash,
                 report.IncludeTeacherComments ? question.TeacherComment : null);

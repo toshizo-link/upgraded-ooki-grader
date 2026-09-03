@@ -534,6 +534,45 @@ public sealed class AiInitialGradingJobWorkerTests
         Assert.Empty(fixture.Provider.Requests);
     }
 
+    [Fact]
+    public async Task StoredBatchResponseAppliesAfterModelAndProfileSwitch()
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            enableBatch: true);
+        var seeded = await fixture.SeedAsync(
+            processingStrategy: "gemini_batch");
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await fixture.StoreBatchResponseAndQueueApplyAsync(
+            seeded,
+            actualModel: AiInitialGradingJobWorker.ModelId + "-001");
+        await fixture.SwitchModelWithHistoricalBatchAsync(seeded);
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var connection = await db.AiConnections.AsNoTracking().SingleAsync();
+        var profiles = await db.AiTaskProfiles
+            .AsNoTracking()
+            .OrderBy(item => item.CreatedAt)
+            .ThenBy(item => item.Id)
+            .ToArrayAsync();
+        var request = await db.AiRequests.AsNoTracking().SingleAsync();
+        var batch = await db.AiBatches.AsNoTracking().SingleAsync();
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        Assert.Equal("gemini-3.7-flash-preview", connection.ModelId);
+        Assert.Equal(2, profiles.Length);
+        Assert.False(profiles[0].Active);
+        Assert.True(profiles[1].Active);
+        Assert.NotEqual(profiles[0].Revision, batch.TaskProfileRevision);
+        Assert.Equal(AiInitialGradingJobWorker.ModelId, batch.ModelId);
+        Assert.Equal("succeeded", request.State);
+        Assert.Equal(AiInitialGradingJobWorker.ModelId + "-001", run.Model);
+        Assert.Equal("ready_to_finalize", run.State);
+        Assert.Empty(fixture.Provider.Requests);
+    }
+
     [Theory]
     [InlineData(false, "ready_to_finalize", "not_required")]
     [InlineData(true, "needs_grade_review", "pending")]
@@ -1952,7 +1991,11 @@ public sealed class AiInitialGradingJobWorkerTests
                 PromptVersion = bundle.PromptVersion,
                 SchemaVersion = bundle.SchemaVersion,
                 PromptContentHash = bundle.ContentHash,
-                ThinkingLevel = "minimal",
+                ThinkingLevel = AiProviderCatalog.SupportsMinimalThinking(
+                    _providerId,
+                    _modelId)
+                        ? "minimal"
+                        : "low",
                 MediaResolution = "high",
                 MaxOutputTokens = 1_024,
                 ConcurrencyLimit = 1,
@@ -2123,6 +2166,84 @@ public sealed class AiInitialGradingJobWorkerTests
                 State = "queued",
                 MaxAttempts = 8,
                 NextAttemptAt = now.AddMinutes(-1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        public async Task SwitchModelWithHistoricalBatchAsync(
+            SeededAiWorkflow seeded)
+        {
+            await using var db = await CreateDbContextAsync();
+            var connection = await db.AiConnections.SingleAsync();
+            var historicalProfile = await db.AiTaskProfiles.SingleAsync();
+            var request = await db.AiRequests
+                .Include(item => item.BatchRequest)
+                .SingleAsync(item => item.EntityId == seeded.SubmissionId);
+            var mapping = request.BatchRequest
+                ?? throw new InvalidOperationException(
+                    "The staged batch mapping is missing.");
+            var now = DateTimeOffset.UtcNow;
+            var batch = new AiBatchEntity
+            {
+                Id = UlidId.New(now),
+                Provider = AiProviders.GeminiDirect,
+                ModelId = historicalProfile.ModelId,
+                AiConnectionId = connection.Id,
+                ConnectionRevision = connection.CredentialRevision,
+                AiTaskProfileId = historicalProfile.Id,
+                TaskProfileRevision = request.TaskProfileRevision,
+                CompatibilityKey = mapping.CompatibilityKey,
+                ManifestJson = "{}",
+                ManifestHash = new string('e', 64),
+                DisplayName = $"ooki-test-history-{request.Id}",
+                State = "succeeded",
+                SubmissionEpoch = 1,
+                CreateAttemptCount = 1,
+                ProviderBatchName = $"batches/history-{request.Id}",
+                InputJsonLinesSha256 = mapping.ProviderRequestHash,
+                InputJsonLinesBytes = 1,
+                RequestCount = 1,
+                SuccessfulRequestCount = 1,
+                PendingRequestCount = 0,
+                CleanupState = "completed",
+                CreatedAt = now,
+                UpdatedAt = now,
+                CompletedAt = now,
+            };
+            db.AiBatches.Add(batch);
+            mapping.AiBatchId = batch.Id;
+            mapping.Ordinal = 0;
+
+            connection.ModelId = "gemini-3.7-flash-preview";
+            connection.UpdatedAt = now;
+            historicalProfile.Active = false;
+            historicalProfile.UpdatedAt = now;
+            await db.SaveChangesAsync();
+
+            db.AiTaskProfiles.Add(new AiTaskProfileEntity
+            {
+                Id = UlidId.New(now),
+                Name = "Replacement initial grading profile",
+                TaskType = historicalProfile.TaskType,
+                AiConnectionId = connection.Id,
+                ConnectionRevision = connection.CredentialRevision,
+                ModelId = connection.ModelId,
+                ProcessingStrategy = historicalProfile.ProcessingStrategy,
+                PromptVersion = historicalProfile.PromptVersion,
+                SchemaVersion = historicalProfile.SchemaVersion,
+                PromptContentHash = historicalProfile.PromptContentHash,
+                ThinkingLevel = "low",
+                MediaResolution = historicalProfile.MediaResolution,
+                MaxOutputTokens = historicalProfile.MaxOutputTokens,
+                ConcurrencyLimit = historicalProfile.ConcurrencyLimit,
+                ApprovalState = "capability_passed",
+                Active = true,
+                ActivatedAt = now,
+                ActivatedByStaffUserId =
+                    historicalProfile.CreatedByStaffUserId,
+                CreatedByStaffUserId = historicalProfile.CreatedByStaffUserId,
                 CreatedAt = now,
                 UpdatedAt = now,
             });

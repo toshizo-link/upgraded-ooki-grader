@@ -631,12 +631,17 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             ConfigureUlid(builder, entity => entity.QuestionRegionId);
             ConfigureUlid(builder, entity => entity.AnswerRegionId);
             builder.Property(entity => entity.DisplayLabel).HasMaxLength(100);
+            builder.Property(entity => entity.MajorQuestionLabel).HasMaxLength(100);
+            builder.Property(entity => entity.MiddleQuestionLabel).HasMaxLength(100);
+            builder.Property(entity => entity.MinorQuestionLabel).HasMaxLength(100);
+            builder.Property(entity => entity.HierarchyPathKey).HasMaxLength(350);
             builder.Property(entity => entity.QuestionType).HasMaxLength(64);
             builder.Property(entity => entity.GradingMode).HasMaxLength(64);
             builder.Property(entity => entity.PointIncrementMilli)
                 .HasDefaultValue(1L);
             builder.Property(entity => entity.RubricText).HasMaxLength(20_000);
             builder.Property(entity => entity.TeacherNote).HasMaxLength(4_000);
+            builder.Property(entity => entity.ExtractionReviewJson).HasMaxLength(20_000);
             builder.HasIndex(entity => new
             {
                 entity.TemplateVersionId,
@@ -645,7 +650,7 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.HasIndex(entity => new
             {
                 entity.TemplateVersionId,
-                entity.DisplayLabel
+                entity.HierarchyPathKey
             }).IsUnique();
             builder.HasOne(entity => entity.TemplateVersion)
                 .WithMany(entity => entity.Questions)
@@ -1795,9 +1800,6 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
                     "ck_ai_batch_provider",
                     "provider = 'geminiDirect'");
                 table.HasCheckConstraint(
-                    "ck_ai_batch_model",
-                    "model_id = 'gemini-3.5-flash-lite'");
-                table.HasCheckConstraint(
                     "ck_ai_batch_state",
                     "state IN ('prepared','uploading','submitting','submitted'," +
                     "'reconcile_required','pending','running','delayed'," +
@@ -2520,6 +2522,32 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     {
         var now = _clock.UtcNow;
 
+        // Keep code that creates QuestionEntity directly (including older
+        // integrations and restored backups) compatible with the hierarchy
+        // columns.  The legacy display label is a valid 中問, so it also gives
+        // every existing question a stable, unique hierarchy path.
+        foreach (var entry in ChangeTracker.Entries<QuestionEntity>())
+        {
+            if (entry.State is not (EntityState.Added or EntityState.Modified))
+            {
+                continue;
+            }
+
+            var question = entry.Entity;
+            question.MajorQuestionLabel = NormalizeHierarchyLabel(
+                question.MajorQuestionLabel);
+            question.MiddleQuestionLabel =
+                NormalizeHierarchyLabel(question.MiddleQuestionLabel)
+                ?? question.DisplayLabel.Trim();
+            question.MinorQuestionLabel = NormalizeHierarchyLabel(
+                question.MinorQuestionLabel);
+            question.HierarchyPathKey = string.Join(
+                "\u001f",
+                question.MajorQuestionLabel ?? string.Empty,
+                question.MiddleQuestionLabel,
+                question.MinorQuestionLabel ?? string.Empty);
+        }
+
         foreach (var entry in ChangeTracker.Entries<IRetentionMutableLineageEntity>())
         {
             if (entry.State == EntityState.Deleted)
@@ -2581,6 +2609,9 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             }
         }
     }
+
+    private static string? NormalizeHierarchyLabel(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static void ConfigureRevision<TEntity>(
         Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity> builder)

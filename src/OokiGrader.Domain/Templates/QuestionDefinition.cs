@@ -29,7 +29,8 @@ public sealed class QuestionDefinition
         ChoiceAnswerPolicy? choicePolicy = null,
         string? kanjiPolicyNote = null,
         bool requiresCompleteAnswer = false,
-        bool answerOrderInsensitive = false)
+        bool answerOrderInsensitive = false,
+        QuestionHierarchy? hierarchy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(logicalQuestionId);
@@ -71,6 +72,7 @@ public sealed class QuestionDefinition
         KanjiPolicyNote = string.IsNullOrWhiteSpace(kanjiPolicyNote) ? null : kanjiPolicyNote;
         RequiresCompleteAnswer = requiresCompleteAnswer;
         AnswerOrderInsensitive = answerOrderInsensitive;
+        Hierarchy = hierarchy ?? QuestionHierarchy.FromLegacyLabel(displayLabel);
     }
 
     public string Id { get; }
@@ -106,6 +108,12 @@ public sealed class QuestionDefinition
     /// components, including duplicate occurrences, must still be present.
     /// </summary>
     public bool AnswerOrderInsensitive { get; }
+
+    /// <summary>
+    /// Printed 大問/中問/小問 path. The represented entity is always the level
+    /// that actually awards points.
+    /// </summary>
+    public QuestionHierarchy Hierarchy { get; }
 
     public bool RequiresReviewAlways { get; }
 
@@ -166,7 +174,8 @@ public sealed class QuestionDefinition
             ChoicePolicy,
             KanjiPolicyNote,
             RequiresCompleteAnswer,
-            AnswerOrderInsensitive);
+            AnswerOrderInsensitive,
+            Hierarchy);
     }
 
     public DomainValidationResult ValidateForPublish(string path)
@@ -318,15 +327,6 @@ public sealed class QuestionDefinition
                     "question.manual_review_required",
                     "Unsupported questions must be manual and always require review.",
                     path));
-        }
-
-        if (GradingMode == GradingMode.AiRubric && _rubricRules.Count == 0)
-        {
-            errors.Add(
-                new DomainError(
-                    "rubric.required",
-                    "AI-rubric questions require at least one teacher-approved rubric rule.",
-                    $"{path}.rubricRules"));
         }
 
         return errors.Count == 0

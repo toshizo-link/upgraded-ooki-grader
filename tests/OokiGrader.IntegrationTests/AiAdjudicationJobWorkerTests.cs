@@ -787,7 +787,7 @@ public sealed class AiAdjudicationJobWorkerTests
                 PromptVersion = bundle.PromptVersion,
                 SchemaVersion = bundle.SchemaVersion,
                 PromptContentHash = bundle.ContentHash,
-                ThinkingLevel = "minimal",
+                ThinkingLevel = "low",
                 MediaResolution = "high",
                 MaxOutputTokens = 1_024,
                 ConcurrencyLimit = 1,

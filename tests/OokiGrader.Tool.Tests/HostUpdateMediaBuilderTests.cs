@@ -15,6 +15,13 @@ public sealed class HostUpdateMediaBuilderTests
         Assert.Contains("checksums.txt", script);
         Assert.Contains("[IO.Directory]::Move($staging, $target)", script);
         Assert.Contains("outputs are immutable", script);
+        Assert.Equal(
+            2,
+            script.Split(
+                "[IO.Path]::GetRelativePath(",
+                StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("Substring($artifactPrefix.Length)", script);
+        Assert.DoesNotContain("Substring($prefix.Length)", script);
     }
 
     [Fact]

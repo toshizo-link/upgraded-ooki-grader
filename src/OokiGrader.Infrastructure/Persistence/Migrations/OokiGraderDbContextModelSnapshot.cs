@@ -334,8 +334,6 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_ai_batch_create_attempt", "create_attempt_count <= 1");
 
-                            t.HasCheckConstraint("ck_ai_batch_model", "model_id = 'gemini-3.5-flash-lite'");
-
                             t.HasCheckConstraint("ck_ai_batch_provider", "provider = 'geminiDirect'");
 
                             t.HasCheckConstraint("ck_ai_batch_remote_identity", "(provider_batch_name IS NULL) OR (state NOT IN ('prepared','uploading','submitting','reconcile_required'))");
@@ -3109,11 +3107,22 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("display_label");
 
+                    b.Property<string>("ExtractionReviewJson")
+                        .HasMaxLength(20000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("extraction_review_json");
+
                     b.Property<string>("GradingMode")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
                         .HasColumnName("grading_mode");
+
+                    b.Property<string>("HierarchyPathKey")
+                        .IsRequired()
+                        .HasMaxLength(350)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("hierarchy_path_key");
 
                     b.Property<string>("KanjiPolicyNote")
                         .HasColumnType("TEXT")
@@ -3125,6 +3134,22 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("logical_question_id")
                         .IsFixedLength();
+
+                    b.Property<string>("MajorQuestionLabel")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("major_question_label");
+
+                    b.Property<string>("MiddleQuestionLabel")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("middle_question_label");
+
+                    b.Property<string>("MinorQuestionLabel")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("minor_question_label");
 
                     b.Property<long>("MaxPointsMilli")
                         .HasColumnType("INTEGER")
@@ -3201,7 +3226,7 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("QuestionRegionId");
 
-                    b.HasIndex("TemplateVersionId", "DisplayLabel")
+                    b.HasIndex("TemplateVersionId", "HierarchyPathKey")
                         .IsUnique();
 
                     b.HasIndex("TemplateVersionId", "OrderIndex")

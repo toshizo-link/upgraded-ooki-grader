@@ -65,7 +65,7 @@ public sealed class AiProviderClientResolver : IAiProviderClientResolver
 
 internal static class AiProviderRuntime
 {
-    public const string GeminiModel = "gemini-3.5-flash-lite";
+    public const string GeminiModel = AiProviderCatalog.GeminiDefaultModelId;
     public const string OpenRouterDefaultModel =
         "google/gemini-3.1-flash-lite";
 
@@ -90,6 +90,26 @@ internal static class AiProviderRuntime
         AiProviders.GeminiDirect => "Gemini",
         AiProviders.OpenRouter => "OpenRouter",
         _ => provider,
+    };
+
+    public static string DefaultThinkingLevel(
+        string provider,
+        string modelId,
+        string taskType) =>
+        taskType == AiTaskTypes.TemplateExtraction
+            ? "medium"
+            : AiProviderCatalog.SupportsMinimalThinking(provider, modelId)
+                ? "minimal"
+                : "low";
+
+    public static string ToProviderThinkingLevel(string value) => value switch
+    {
+        "minimal" => "MINIMAL",
+        "low" => "LOW",
+        "medium" => "MEDIUM",
+        "high" => "HIGH",
+        _ => throw new InvalidOperationException(
+            "The AI profile thinking level is invalid."),
     };
 
     public static bool IsAmbiguousDispatch(AiProviderException exception) =>

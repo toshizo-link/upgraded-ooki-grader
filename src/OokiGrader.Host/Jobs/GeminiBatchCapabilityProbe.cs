@@ -74,7 +74,12 @@ public sealed class GeminiBatchCapabilityProbe(
                     mediaHash),
             ],
             MaxOutputTokens: 64,
-            MediaResolution: "MEDIA_RESOLUTION_LOW");
+            MediaResolution: "MEDIA_RESOLUTION_LOW",
+            ThinkingLevel: AiProviderCatalog.SupportsMinimalThinking(
+                    connection.Provider,
+                    connection.ModelId)
+                ? "MINIMAL"
+                : "LOW");
         var jsonLines = batchProvider.BuildJsonLines([request]);
         var manifestHash = Sha256(jsonLines);
         var displayName = $"ooki-{probeId}-{manifestHash[..12]}";

@@ -448,6 +448,7 @@ version:
 
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/ordered-scan-routing:classify-page` | validate one raw PDF page and locally align it against published template pages from open sessions; returns a route or `needsReview` without an AI-provider call |
 | `GET` | `/ordered-scan-batches/{batchId}` | manifest, items, groups, issues, submissions |
 | `POST` | `/ordered-scan-batches/{batchId}:finalize` | freeze/queue local classification and assembly |
 | `POST` | `/ordered-scan-batches/{batchId}:cancel` | release staged pages before assembly |

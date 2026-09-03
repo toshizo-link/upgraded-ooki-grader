@@ -1,12 +1,12 @@
 # AI, recognition, and grading design
 
-> **Current-flow note (2026-08-11):** all new work uses one durable queue of
+> **Current-flow note (2026-08-27):** all new work uses one durable queue of
 > standard provider requests. Gemini Batch, teacher-visible economy/priority,
 > expedite, coordinate crops, and automatic cross-provider failover are disabled.
 > Batch tables below describe retained legacy persistence/recovery compatibility,
 > not an option in the current teacher or administrator workflow.
 >
-> **Gemini-setup update (2026-08-11):** normal add/replace probes the supplied
+> **Gemini-setup update (2026-08-27):** normal add/replace probes the supplied
 > candidate before persistence and, only on a complete capability/image-task
 > pass, atomically enables the four exact-current advisory task profiles.
 > Failure preserves the previous working configuration. Manual connection test
@@ -57,7 +57,7 @@ All external content is treated as untrusted. Structured schemas, allowlisted fi
 | Capability | Official Gemini connection | OpenRouter connection |
 |---|---|---|
 | Credential | School's Google Gemini auth/restricted API key | School's OpenRouter bearer API key |
-| Default model ID | `gemini-3.5-flash-lite` | separately configured and accuracy-validated |
+| Default model ID | `gemini-3.7-flash` | separately configured and accuracy-validated |
 | Request API | Gemini `generateContent` | OpenRouter `/api/v1/chat/completions` |
 | Image transport | Gemini Files API/reference or inline | Base64 `image_url` data URLs; no public URL |
 | Structured result | Gemini structured output schema | `response_format.type=json_schema`, `strict=true` |
@@ -82,7 +82,7 @@ strategy, reasoning/media settings, prompt/schema/configuration hashes,
 concurrency, price snapshot, capability/approval state, and optional formal
 accuracy evaluation. This allows, for example:
 
-- Gemini 3.5 Flash Lite as the checked-in default for visual tasks;
+- Gemini 3.7 Flash as the checked-in default for visual tasks;
 - an image-capable OpenRouter model after connection and accuracy gates pass;
 - a more accurate, separately validated OpenRouter vision model only for ambiguous answers;
 - official Gemini only with bounded standard inference.
@@ -130,6 +130,14 @@ working connection/profile set. A later manual Gemini connection test runs the
 same contract and self-heals missing/stale exact-current profiles; startup
 reconciles active Gemini profiles after prompt/schema/hash changes. In-flight
 jobs remain pinned to the immutable profile revision with which they started.
+
+Changing only an existing connection's model omits the API key from the request.
+The host leases the stored encrypted secret, probes the candidate model with the
+same complete contract, and updates the connection/current profiles without a
+credential revision only after full success. `gemini-3.7-flash` profiles accept
+`LOW`, `MEDIUM`, and `HIGH` thinking levels; `MINIMAL` is invalid for new or
+updated profiles. Immutable older profile/evaluation snapshots and completed
+grading provenance remain readable and are never rewritten to the new default.
 
 The in-app OpenRouter connection test uses synthetic standard text and image
 inference rather than relying on catalog metadata alone. Release evaluation may
@@ -353,19 +361,32 @@ After the gate, the selected system tells the model to:
 
 - enumerate printed questions in visual reading order;
 - retain Japanese numbering such as `一`, `（1）`, `問1`;
+- represent every scoring unit with the unified hierarchy: optional scope-only
+  `大問`, required `中問`, and optional `小問`;
+- award points at `中問` when there is no `小問`; otherwise keep `中問` as scope
+  and award points independently at each `小問`; never create a direct
+  `大問`-to-`小問` path or assign points to `大問`;
+- when one `中問` visibly scores several child responses as a unit, return one
+  middle scoring item and do not also return its visible child `小問` as scoring
+  rows; return child rows only when the middle level is scope-only;
+- apply those same rules to tables, diagram fill-ins, ordinary fill-ins, Q&A,
+  choices, and mixed pages while preserving unusual original paper structure;
 - transcribe question text;
 - use visible model answers when present and preserve their script/provenance;
 - otherwise solve/propose expected answers as non-authoritative
   `ai_proposed` content with confidence and a concise teacher-facing reason;
 - identify question type and printed label;
-- propose accepted variants conservatively;
+- propose accepted variants conservatively, with every entry representing an
+  independently complete acceptable answer rather than a fragment or criterion;
 - avoid creating an answer when the source lacks enough information;
 - internal subject knowledge, and approved search grounding when explicitly
   enabled, may be used only to create an explicitly non-authoritative
   `ai_proposed` answer when no authoritative answer source exists;
 - set `requires_teacher_answer` for teacher-only/material-dependent questions;
 - infer points only when printed or obvious; otherwise use a configurable default and warn;
-- propose, but never decide, non-Kanji policy;
+- automatically propose `完答`, `順不同`, and `漢字必須` for the point-bearing
+  level from visible instructions and answer form;
+- leave the teacher-only note and free-form rubric blank;
 - return the visibly printed paper name and explicit grade in the same response;
 - never append a STEP suffix, use filename evidence, infer grade from difficulty,
   or return test type, subject, answer style, split, or variation classifications;
@@ -383,8 +404,13 @@ The grading task contains a compact, canonical rubric generated from the publish
 - Kanji policy and explicit phonetic exceptions;
 - whether every answer component is required for any credit;
 - whether explicitly separated components may appear in any order;
-- rubric elements;
+- the teacher-authored free-form rubric only when it is non-empty;
 - whether the result requires review regardless of confidence.
+
+Each accepted-answer entry is a complete alternative that can satisfy the
+question independently. Structured grading options are always included at the
+point-bearing `中問` or `小問`; an absent teacher rubric is represented as
+null/empty and is never filled with AI-generated prose.
 
 The model transcribes first, then proposes an outcome. For a page chunk it must
 return an observation only when the answer is visible in that chunk and mark

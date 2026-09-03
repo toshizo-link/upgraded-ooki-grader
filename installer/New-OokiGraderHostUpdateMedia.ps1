@@ -146,10 +146,11 @@ if ($PSCmdlet.ShouldProcess(
             -File -Force -Recurse | Where-Object {
                 $_.Name -notin @('media-inventory.json', 'checksums.txt')
             } | Sort-Object FullName)
-        $artifactPrefix = $staging.TrimEnd('\') + '\'
         $inventory.artifacts = @($artifactFiles | ForEach-Object {
             [ordered]@{
-                path = $_.FullName.Substring($artifactPrefix.Length).Replace(
+                path = [IO.Path]::GetRelativePath(
+                    $staging,
+                    $_.FullName).Replace(
                     '\',
                     '/')
                 bytes = $_.Length
@@ -170,9 +171,10 @@ if ($PSCmdlet.ShouldProcess(
 
         $files = @(Get-ChildItem -LiteralPath $staging -File -Force -Recurse |
             Sort-Object FullName)
-        $prefix = $staging.TrimEnd('\') + '\'
         $checksumLines = foreach ($file in $files) {
-            $relative = $file.FullName.Substring($prefix.Length).Replace(
+            $relative = [IO.Path]::GetRelativePath(
+                $staging,
+                $file.FullName).Replace(
                 '\',
                 '/')
             $hash = (Get-FileHash -LiteralPath $file.FullName `

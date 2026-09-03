@@ -154,7 +154,10 @@ public sealed record QuestionResponse(
     bool AnswerOrderInsensitive,
     bool RequiresReviewAlways,
     long Revision,
-    IReadOnlyList<AcceptedAnswerResponse> AcceptedAnswers);
+    IReadOnlyList<AcceptedAnswerResponse> AcceptedAnswers,
+    string? MajorQuestionLabel = null,
+    string? MiddleQuestionLabel = null,
+    string? MinorQuestionLabel = null);
 
 public sealed record AcceptedAnswerResponse(
     string Id,
@@ -175,7 +178,10 @@ public sealed record UpsertQuestionRequest(
     bool AnswerOrderInsensitive,
     bool RequiresReviewAlways,
     IReadOnlyList<UpsertAcceptedAnswerRequest> AcceptedAnswers,
-    long? Revision);
+    long? Revision,
+    string? MajorQuestionLabel = null,
+    string? MiddleQuestionLabel = null,
+    string? MinorQuestionLabel = null);
 
 public sealed record UpsertAcceptedAnswerRequest(
     string Text,

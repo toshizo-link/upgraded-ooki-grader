@@ -53,6 +53,104 @@ public sealed class AiBatchJobWorkerTests
     }
 
     [Fact]
+    public async Task PreparedBatchCompletesAfterModelAndActiveProfileSwitch()
+    {
+        await using var fixture = await BatchFixture.CreateAsync();
+        await fixture.StageAsync();
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var batch = await db.AiBatches.SingleAsync();
+            var connection = await db.AiConnections.SingleAsync();
+            var historicalProfile = await db.AiTaskProfiles.SingleAsync();
+            Assert.Equal(GeminiBatchClient.SelectedModel, batch.ModelId);
+            Assert.Equal(
+                historicalProfile.Revision,
+                batch.TaskProfileRevision);
+
+            connection.ModelId = "gemini-3.7-flash-preview";
+            connection.UpdatedAt = fixture.Time.GetUtcNow();
+            historicalProfile.Active = false;
+            historicalProfile.UpdatedAt = fixture.Time.GetUtcNow();
+            await db.SaveChangesAsync();
+            Assert.NotEqual(
+                historicalProfile.Revision,
+                batch.TaskProfileRevision);
+
+            db.AiTaskProfiles.Add(new AiTaskProfileEntity
+            {
+                Id = UlidId.New(fixture.Time.GetUtcNow()),
+                Name = "Replacement batch profile",
+                TaskType = AiTaskTypes.InitialGrading,
+                AiConnectionId = connection.Id,
+                ConnectionRevision = connection.CredentialRevision,
+                ModelId = connection.ModelId,
+                ProcessingStrategy = "gemini_batch",
+                PromptVersion = historicalProfile.PromptVersion,
+                SchemaVersion = historicalProfile.SchemaVersion,
+                PromptContentHash = historicalProfile.PromptContentHash,
+                ThinkingLevel = "low",
+                MediaResolution = historicalProfile.MediaResolution,
+                MaxOutputTokens = historicalProfile.MaxOutputTokens,
+                ConcurrencyLimit = historicalProfile.ConcurrencyLimit,
+                ApprovalState = "capability_passed",
+                Active = true,
+                ActivatedAt = fixture.Time.GetUtcNow(),
+                ActivatedByStaffUserId = historicalProfile.CreatedByStaffUserId,
+                CreatedByStaffUserId = historicalProfile.CreatedByStaffUserId,
+                CreatedAt = fixture.Time.GetUtcNow(),
+                UpdatedAt = fixture.Time.GetUtcNow(),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        fixture.Time.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var verified = fixture.CreateDbContext();
+        var completedBatch = await verified.AiBatches.SingleAsync();
+        var request = await verified.AiRequests.SingleAsync();
+        Assert.Equal("succeeded", completedBatch.State);
+        Assert.Equal("completed", completedBatch.CleanupState);
+        Assert.Equal("response_ready", request.State);
+        Assert.NotEmpty(fixture.Provider.ObservedModelIds);
+        Assert.All(
+            fixture.Provider.ObservedModelIds,
+            modelId => Assert.Equal(
+                GeminiBatchClient.SelectedModel,
+                modelId));
+    }
+
+    [Fact]
+    public async Task PreparedBatchDoesNotSubmitWithRotatedCredential()
+    {
+        await using var fixture = await BatchFixture.CreateAsync();
+        await fixture.StageAsync();
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var connection = await db.AiConnections.SingleAsync();
+            connection.CredentialRevision++;
+            connection.UpdatedAt = fixture.Time.GetUtcNow();
+            await db.SaveChangesAsync();
+        }
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var verified = fixture.CreateDbContext();
+        var batch = await verified.AiBatches.SingleAsync();
+        var submitJob = await verified.BackgroundJobs.SingleAsync(
+            item => item.Type == AiBatchJobWorker.SubmitJobType);
+        Assert.Equal("prepared", batch.State);
+        Assert.Equal("retry_waiting", submitJob.State);
+        Assert.Equal("ai_batch_worker_error", submitJob.ErrorCode);
+        Assert.Empty(fixture.Provider.ObservedModelIds);
+    }
+
+    [Fact]
     public async Task AmbiguousCreateNeverResubmitsAndAdoptsSingleMatch()
     {
         await using var fixture = await BatchFixture.CreateAsync();
@@ -642,7 +740,7 @@ public sealed class AiBatchJobWorkerTests
                     PromptVersion = "prompt-v1",
                     SchemaVersion = "schema-v1",
                     PromptContentHash = new string('a', 64),
-                    ThinkingLevel = "minimal",
+                    ThinkingLevel = "low",
                     MediaResolution = "high",
                     MaxOutputTokens = 1_024,
                     ConcurrencyLimit = 1,
@@ -809,6 +907,7 @@ public sealed class AiBatchJobWorkerTests
         public bool ReturnNoResults { get; set; }
         public string ResponseJson { get; set; } = """{"ok":true}""";
         public string? ResultErrorCode { get; set; }
+        public List<string> ObservedModelIds { get; } = [];
         private string[] RequestKeys { get; set; } = [];
 
         public byte[] BuildJsonLines(
@@ -828,7 +927,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             UploadCalls++;
             return Task.FromResult(new AiBatchInputFile(
                 "files/input-1",
@@ -844,7 +943,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             CreateCalls++;
             if (CreateFailure is not null)
             {
@@ -869,7 +968,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             return Task.FromResult(
                 RemoteStatus
                 ?? Status(
@@ -886,7 +985,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             return Task.CompletedTask;
         }
 
@@ -897,7 +996,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             return Task.CompletedTask;
         }
 
@@ -908,7 +1007,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             return Task.FromResult(new AiBatchListPage(
                 ListedBatches,
                 null));
@@ -921,7 +1020,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             if (ReturnNoResults)
             {
                 return Task.FromResult<
@@ -948,7 +1047,7 @@ public sealed class AiBatchJobWorkerTests
                     new AiProviderResponse(
                         AiProviders.GeminiDirect,
                         GeminiBatchClient.SelectedModel,
-                        "gemini-3.5-flash-lite-001",
+                        $"{GeminiBatchClient.SelectedModel}-001",
                         "response-1",
                         "STOP",
                         output.RootElement.Clone(),
@@ -966,7 +1065,7 @@ public sealed class AiBatchJobWorkerTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ObserveBoundary();
+            ObserveBoundary(connection);
             DeleteCalls++;
             return Task.CompletedTask;
         }
@@ -1009,9 +1108,10 @@ public sealed class AiBatchJobWorkerTests
                 raw.RootElement.Clone());
         }
 
-        private void ObserveBoundary()
+        private void ObserveBoundary(AiConnectionSettings connection)
         {
             ObservedInsideWriteCoordinator |= writeCoordinator.IsInside;
+            ObservedModelIds.Add(connection.ModelId);
         }
     }
 

@@ -74,7 +74,13 @@ internal static class QuestionEntityDomainMapper
             choicePolicy: choicePolicy,
             kanjiPolicyNote: entity.KanjiPolicyNote,
             requiresCompleteAnswer: entity.RequiresCompleteAnswer,
-            answerOrderInsensitive: entity.AnswerOrderInsensitive);
+            answerOrderInsensitive: entity.AnswerOrderInsensitive,
+            hierarchy: new QuestionHierarchy(
+                entity.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(entity.MiddleQuestionLabel)
+                    ? entity.DisplayLabel
+                    : entity.MiddleQuestionLabel,
+                entity.MinorQuestionLabel));
     }
 
     private static AcceptedAnswer MapAnswer(

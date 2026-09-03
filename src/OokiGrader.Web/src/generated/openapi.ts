@@ -211,6 +211,59 @@ export type paths = {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/ordered-scan-routing:classify-page": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query: {
+                    readonly clientItemId?: string;
+                    readonly fileName?: string;
+                    readonly sizeBytes: number | string;
+                    readonly inputOrdinal: number | string;
+                };
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/pdf": string;
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content: {
+                        readonly "application/json": components["schemas"]["OrderedScanRoutingResponse"];
+                    };
+                };
+                /** @description Unprocessable Entity */
+                readonly 422: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content: {
+                        readonly "application/problem+json": components["schemas"]["ProblemDetails"];
+                    };
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/results/{submissionId}": {
         readonly parameters: {
             readonly query?: never;
@@ -429,6 +482,50 @@ export type paths = {
                 };
             };
         };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/reports/pass-fail-matrix": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: {
+            readonly parameters: {
+                readonly query?: {
+                    readonly search?: string;
+                    readonly from?: string;
+                    readonly to?: string;
+                    readonly studentId?: string;
+                    readonly templateId?: string;
+                    readonly subject?: string;
+                    readonly category?: string;
+                    readonly course?: string;
+                    readonly class?: string;
+                    readonly passMarkBasisPoints?: number | string;
+                };
+                readonly header?: never;
+                readonly path?: never;
+                readonly cookie?: never;
+            };
+            readonly requestBody?: never;
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly put?: never;
+        readonly post?: never;
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -2073,6 +2170,46 @@ export type paths = {
             readonly requestBody: {
                 readonly content: {
                     readonly "application/json": components["schemas"]["ReorderQuestionsApiRequest"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/templates/{templateId}/versions/{versionId}/questions:applyKanjiRequirement": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly templateId: string;
+                    readonly versionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["ApplyKanjiRequirementApiRequest"];
                 };
             };
             readonly responses: {
@@ -5298,6 +5435,9 @@ export type components = {
         };
         /** @enum {unknown} */
         readonly AnswerStyle: "normal" | "fillBlank" | null;
+        readonly ApplyKanjiRequirementApiRequest: {
+            readonly kanjiRequired?: boolean;
+        };
         readonly ApplyRosterImportRequest: {
             readonly strategy: null | string;
         };
@@ -5478,6 +5618,42 @@ export type components = {
             /** Format: int64 */
             readonly expectedRowVersion: null | number | string;
         };
+        readonly OrderedScanRoutingCandidate: {
+            readonly sessionId: string;
+            /** Format: int32 */
+            readonly confidenceBasisPoints: number | string;
+            readonly evidence: readonly string[];
+        };
+        readonly OrderedScanRoutingDecision: {
+            readonly clientItemId: string;
+            /** Format: int32 */
+            readonly inputOrdinal: number | string;
+            readonly state: string;
+            readonly destinationSessionId: null | string;
+            /** Format: int32 */
+            readonly expectedPageCount: null | number | string;
+            /** Format: int32 */
+            readonly detectedTemplatePageNumber: null | number | string;
+            readonly candidates: readonly components["schemas"]["OrderedScanRoutingCandidate"][];
+            readonly issueCode: null | string;
+        };
+        readonly OrderedScanRoutingResponse: {
+            readonly classificationMode: string;
+            readonly openSessions: readonly components["schemas"]["OrderedScanRoutingSession"][];
+            readonly items: readonly components["schemas"]["OrderedScanRoutingDecision"][];
+        };
+        readonly OrderedScanRoutingSession: {
+            readonly id: string;
+            readonly title: string;
+            /** Format: date */
+            readonly testDate: string;
+            readonly classLabel: null | string;
+            readonly gradeLabel: null | string;
+            readonly subject: null | string;
+            readonly course: null | string;
+            /** Format: int32 */
+            readonly expectedPageCount: null | number | string;
+        };
         readonly OverrideResultBody: {
             /** Format: int32 */
             readonly sourceResultRevision: number | string;
@@ -5509,6 +5685,14 @@ export type components = {
             readonly displayName: null | string;
             readonly roles: null | readonly string[];
         };
+        readonly ProblemDetails: {
+            readonly type?: null | string;
+            readonly title?: null | string;
+            /** Format: int32 */
+            readonly status?: null | number | string;
+            readonly detail?: null | string;
+            readonly instance?: null | string;
+        };
         readonly PublishTemplateApiRequest: {
             /** Format: int64 */
             readonly revision?: null | number | string;
@@ -5518,6 +5702,9 @@ export type components = {
         };
         readonly QuestionWriteRequest: {
             readonly displayLabel?: null | string;
+            readonly majorQuestionLabel?: null | string;
+            readonly middleQuestionLabel?: null | string;
+            readonly minorQuestionLabel?: null | string;
             /** Format: int32 */
             readonly order?: null | number | string;
             /** Format: int32 */
@@ -5542,6 +5729,7 @@ export type components = {
             readonly questionRegion?: null | components["schemas"]["PageRegionWriteRequest"];
             readonly requiresReviewAlways?: null | boolean;
             readonly teacherVerified?: null | boolean;
+            readonly resolveExtractionReviewIssues?: null | boolean;
             /** Format: int64 */
             readonly revision?: null | number | string;
         };
@@ -5586,7 +5774,7 @@ export type components = {
             readonly revision: null | number | string;
         };
         readonly SaveAiConnectionRequest: {
-            readonly apiKey: string;
+            readonly apiKey: null | string;
             readonly provider: null | string;
             readonly modelId: null | string;
             /** Format: int32 */

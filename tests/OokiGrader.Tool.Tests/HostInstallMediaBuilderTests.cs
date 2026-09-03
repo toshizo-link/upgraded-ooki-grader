@@ -73,6 +73,111 @@ public sealed class HostInstallMediaBuilderTests
     }
 
     [Fact]
+    public void BuilderAllowsOnlyExplicitUnsignedMediaBuildsOffWindows()
+    {
+        var builder = ReadInstallerFile(
+            "New-OokiGraderHostInstallMedia.ps1");
+
+        Assert.Contains(
+            "if (-not $AllowChecksumVerifiedUnsignedOnSitePackage)",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-OokiWindows",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$packageEvidence.ProductionSigningClaimed",
+            builder,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Production-signed release packages must be verified on Windows",
+            builder,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageAndMediaPathSeparationUsesNativeSeparators()
+    {
+        var module = ReadInstallerFile("OokiGrader.Windows.psm1");
+
+        Assert.Contains(
+            "$separator = [IO.Path]::DirectorySeparatorChar",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[IO.Path]::AltDirectorySeparatorChar",
+            module,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[StringComparison]::Ordinal",
+            module,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$left = ([string] $resolved[$leftName]).TrimEnd('\\')",
+            module,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PackageAndMediaPathSeparationRejectsNestedPaths()
+    {
+        var modulePath = Path.Combine(
+            RepositoryRoot,
+            "installer",
+            "OokiGrader.Windows.psm1");
+        var parent = Path.Combine(
+            RepositoryRoot,
+            $"ooki-disjoint-{Guid.NewGuid():N}");
+        var child = Path.Combine(parent, "child");
+        static string Quote(string value) =>
+            "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+        var command =
+            $"Import-Module {Quote(modulePath)} -Force; "
+            + "$null = Assert-OokiDisjointPaths -Paths @{ "
+            + $"Parent = {Quote(parent)}; Child = {Quote(child)} }}";
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "pwsh",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("-NoLogo");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-Command");
+        startInfo.ArgumentList.Add(command);
+
+        System.Diagnostics.Process? process;
+        try
+        {
+            process = System.Diagnostics.Process.Start(startInfo);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // PowerShell source assertions above remain portable on hosts that
+            // do not have the packaging runtime installed.
+            return;
+        }
+
+        Assert.NotNull(process);
+        using (process)
+        {
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            var standardError = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.Contains(
+                "non-overlapping roots",
+                standardOutput + standardError,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void BuilderAddsNoHostRuntimePrerequisite()
     {
         var builder = ReadInstallerFile(

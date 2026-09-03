@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   reloadEditor: vi.fn(),
   reloadGeneration: vi.fn(),
   get: vi.fn(),
+  patch: vi.fn(),
   post: vi.fn(),
 }));
 
@@ -56,6 +57,7 @@ vi.mock("../lib/api", async (importOriginal) => {
     api: {
       ...actual.api,
       get: state.get,
+      patch: state.patch,
       post: state.post,
     },
   };
@@ -84,66 +86,205 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("TemplateEditorPage confirmation and publish recovery", () => {
-  it("uses the explicit all mode and reports every skipped structural blocker", async () => {
+describe("TemplateEditorPage autosave and publish recovery", () => {
+  it("autosaves edits as verified without a separate save or confirm action", async () => {
     const first = state.editorData!.questions[0]!;
-    const second = state.editorData!.questions[1]!;
-    state.post.mockImplementation(async (path: string) => {
-      if (!path.endsWith("/questions:verifyProposals")) {
-        throw new Error(`Unexpected POST ${path}`);
-      }
-      return {
-        revision: 8,
-        verifiedQuestionCount: 1,
-        verifiedAnswerCount: 1,
-        skippedQuestionCount: 1,
-        issues: [
-          {
-            code: "question.text_required",
-            message: "問2の問題文を入力してください。",
-            questionId: "question-2",
-            blocking: true,
-          },
-        ],
-        questions: [
-          {
-            ...first,
-            teacherVerified: true,
-            proposalState: "accepted",
-            warnings: [],
-            acceptedAnswers: first.acceptedAnswers.map((answer) => ({
-              ...answer,
-              teacherVerified: true,
-            })),
-          },
-          second,
-        ],
-      };
+    state.editorData = makeEditorFixture([first]);
+    state.patch.mockImplementation(async (_path, payload) => ({
+      ...first,
+      ...payload,
+      revision: 2,
+      proposalState: "accepted",
+      warnings: [],
+    }));
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/問題文/), {
+      target: { value: "自動保存する問題文" },
+    });
+
+    await waitFor(() =>
+      expect(state.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/questions/question-1"),
+        expect.objectContaining({
+          questionText: "自動保存する問題文",
+          middleQuestionLabel: "問1",
+          teacherVerified: true,
+          acceptedAnswers: [
+            expect.objectContaining({ teacherVerified: true }),
+          ],
+        }),
+        expect.objectContaining({ etag: '"rev-1"' }),
+      ),
+      { timeout: 2_000 },
+    );
+    expect(
+      screen.queryByRole("button", { name: "変更を保存" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "この問題を確認" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not allow an immediate question switch to discard a pending autosave", async () => {
+    const first = state.editorData!.questions[0]!;
+    const second = {
+      ...state.editorData!.questions[1]!,
+      questionText: "二問目の問題文",
+    };
+    state.editorData = makeEditorFixture([first, second]);
+    state.patch.mockImplementation(async (_path, payload) => ({
+      ...first,
+      ...payload,
+      revision: 2,
+      proposalState: "accepted",
+      warnings: [],
+    }));
+    renderPage();
+
+    const questionText = await screen.findByLabelText(/問題文/);
+    fireEvent.change(questionText, {
+      target: { value: "切り替えても失われない編集" },
+    });
+    const secondQuestionButton = within(
+      screen.getByLabelText("問題一覧"),
+    ).getByRole("button", { name: /問2/ });
+
+    expect(secondQuestionButton).toBeDisabled();
+    fireEvent.click(secondQuestionButton);
+    expect(screen.getByLabelText(/問題文/)).toHaveValue(
+      "切り替えても失われない編集",
+    );
+
+    await waitFor(() => expect(state.patch).toHaveBeenCalledTimes(1), {
+      timeout: 2_000,
+    });
+    await waitFor(() => expect(secondQuestionButton).toBeEnabled());
+  });
+
+  it("keeps and resaves edits typed while an older autosave is in flight", async () => {
+    const first = state.editorData!.questions[0]!;
+    state.editorData = makeEditorFixture([first]);
+    let completeFirstSave!: (value: TemplateQuestion) => void;
+    state.patch
+      .mockImplementationOnce(
+        () =>
+          new Promise<TemplateQuestion>((resolve) => {
+            completeFirstSave = resolve;
+          }),
+      )
+      .mockImplementationOnce(async (_path, payload) => ({
+        ...first,
+        ...payload,
+        revision: 3,
+        proposalState: "accepted",
+        warnings: [],
+      }));
+    renderPage();
+
+    const questionText = await screen.findByLabelText(/問題文/);
+    fireEvent.change(questionText, {
+      target: { value: "先に送信した編集" },
+    });
+    await waitFor(() => expect(state.patch).toHaveBeenCalledTimes(1), {
+      timeout: 2_000,
+    });
+
+    fireEvent.change(questionText, {
+      target: { value: "送信中に入力した最新の編集" },
+    });
+    expect(questionText).toHaveValue("送信中に入力した最新の編集");
+
+    completeFirstSave({
+      ...first,
+      questionText: "先に送信した編集",
+      revision: 2,
+      proposalState: "accepted",
+      warnings: [],
+    });
+    await waitFor(() =>
+      expect(questionText).toHaveValue("送信中に入力した最新の編集"),
+    );
+    await waitFor(() => expect(state.patch).toHaveBeenCalledTimes(2), {
+      timeout: 2_500,
+    });
+    expect(state.patch).toHaveBeenLastCalledWith(
+      expect.stringContaining("/questions/question-1"),
+      expect.objectContaining({
+        questionText: "送信中に入力した最新の編集",
+      }),
+      expect.objectContaining({ etag: '"rev-2"' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/保存済み/)).toBeInTheDocument(),
+    );
+  });
+
+  it("applies 漢字必須 to every question in one action", async () => {
+    const updated = state.editorData!.questions.map((question) => ({
+      ...question,
+      allowNonKanji: false,
+    }));
+    state.post.mockResolvedValue({
+      items: updated,
+      totalCount: updated.length,
+      page: 1,
+      pageSize: updated.length,
     });
     renderPage();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "すべての問題を確認" }),
-    );
-    const dialog = screen.getByRole("dialog", {
-      name: "すべての問題を確認済みにしますか？",
-    });
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "すべての問題を確認" }),
+      screen.getByRole("button", {
+        name: "この漢字必須設定をすべての問題に適用",
+      }),
     );
 
     await waitFor(() =>
       expect(state.post).toHaveBeenCalledWith(
-        expect.stringContaining("questions:verifyProposals"),
-        expect.objectContaining({ selectionMode: "all" }),
+        expect.stringContaining("questions:applyKanjiRequirement"),
+        { kanjiRequired: true },
         expect.any(Object),
       ),
     );
+  });
+
+  it("offers an exception-only action to resolve a machine review blocker", async () => {
+    const first = makeQuestion({
+      warnings: [
+        "[question.additional_placeholders_redacted] 対象欄を原稿で確認してください。",
+      ],
+    });
+    state.editorData = makeEditorFixture([first]);
+    state.patch.mockImplementation(async (_path, payload) => ({
+      ...first,
+      ...payload,
+      revision: 2,
+      teacherVerified: true,
+      warnings: [],
+    }));
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "AI警告を解決済みにする",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(state.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/questions/question-1"),
+        expect.objectContaining({
+          resolveExtractionReviewIssues: true,
+          teacherVerified: true,
+        }),
+        expect.objectContaining({ etag: '"rev-1"' }),
+      ),
+    );
     expect(
-      await screen.findByText("1問を確認済み。1問は確認できませんでした"),
-    ).toBeVisible();
-    expect(screen.getByText("問2の問題文を入力してください。")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "問2" })).toBeVisible();
+      screen.queryByRole("button", {
+        name: "AI警告を解決済みにする",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows all start blockers and keeps template-global issues non-clickable", async () => {

@@ -853,6 +853,7 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
                 inputManifestHash,
                 profile.MaxOutputTokens,
                 ToMediaResolution(profile.MediaResolution),
+                AiProviderRuntime.ToProviderThinkingLevel(profile.ThinkingLevel),
                 profile.AiConnection.SecretReference,
                 new AiConnectionSettings(
                     profile.AiConnection.Id,
@@ -931,7 +932,8 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             claim.Bundle.ResponseJsonSchema,
             media,
             claim.MaxOutputTokens,
-            claim.MediaResolution);
+            claim.MediaResolution,
+            claim.ThinkingLevel);
     }
 
     private Task MarkDispatchingAsync(
@@ -1991,7 +1993,10 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             && profile.PromptVersion == bundle.PromptVersion
             && profile.SchemaVersion == bundle.SchemaVersion
             && profile.PromptContentHash == bundle.ContentHash
-            && profile.ThinkingLevel == "minimal"
+            && profile.ThinkingLevel == AiProviderRuntime.DefaultThinkingLevel(
+                profile.AiConnection.Provider,
+                profile.ModelId,
+                profile.TaskType)
             && profile.ProcessingStrategy is
                 "queued_standard" or "expedite_standard";
     }
@@ -2413,6 +2418,7 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
         string InputManifestHash,
         int MaxOutputTokens,
         string MediaResolution,
+        string ThinkingLevel,
         string SecretReference,
         AiConnectionSettings Connection,
         AiPromptBundle Bundle,

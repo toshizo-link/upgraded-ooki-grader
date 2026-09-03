@@ -10,7 +10,7 @@ namespace OokiGrader.Reports.Pdf;
 
 public sealed class ResultPdfRenderer : IResultPdfRenderer
 {
-    public const string CurrentRendererVersion = "pdfsharp-6.2.4-layout-1";
+    public const string CurrentRendererVersion = "pdfsharp-6.2.4-layout-2";
     private const double PageWidth = 595.28;
     private const double PageHeight = 841.89;
     private const double MarginLeft = 42;
@@ -23,11 +23,10 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
     private const double CellPadding = 6;
     private const double BodyLineHeight = 13.2;
     private const double MinimumRowHeight = 31;
-    private const double LabelColumnWidth = 38;
-    private const double QuestionColumnWidth = 216;
-    private const double AnswerColumnWidth = 128;
-    private const double ScoreColumnWidth = 76;
-    private const double OutcomeColumnWidth = 53.28;
+    private const double LabelColumnWidth = 75;
+    private const double StudentAnswerColumnWidth = 155;
+    private const double ModelAnswerColumnWidth = 200;
+    private const double ScoreColumnWidth = 81.28;
     private const int MaximumQuestions = 2_000;
 
     private static readonly XColor Ink = XColor.FromArgb(31, 41, 55);
@@ -82,6 +81,7 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
                     ref canvas,
                     report,
                     report.Questions[index],
+                    index == 0 ? null : report.Questions[index - 1],
                     index,
                     fonts);
             }
@@ -166,9 +166,16 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
             22);
         canvas.Y += titleLines.Count * 22 + 8;
 
-        var studentText = string.IsNullOrWhiteSpace(report.StudentNumber)
-            ? $"生徒　{report.StudentDisplayName}"
-            : $"生徒　{report.StudentDisplayName}　（{report.StudentNumber}）";
+        var studentIdentity = string.IsNullOrWhiteSpace(report.StudentNumber)
+            ? report.StudentDisplayName
+            : $"{report.StudentDisplayName}　（{report.StudentNumber}）";
+        var studentContext = string.Join(
+            "・",
+            new[] { report.StudentGradeLabel, report.StudentClassLabel }
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+        var studentText = string.IsNullOrWhiteSpace(studentContext)
+            ? $"生徒　{studentIdentity}"
+            : $"生徒　{studentIdentity}　　{studentContext}";
         canvas.Graphics.DrawString(
             studentText,
             fonts.Body,
@@ -221,7 +228,7 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
     private static void DrawTableHeader(PageCanvas canvas, ReportFonts fonts)
     {
         var widths = ColumnWidths();
-        var labels = new[] { "番号", "問題", "解答", "得点", "判定" };
+        var labels = new[] { "大問・中問・小問", "生徒の解答", "模範解答", "得点" };
         var x = MarginLeft;
         for (var index = 0; index < labels.Length; index++)
         {
@@ -255,30 +262,29 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
         ref PageCanvas canvas,
         ResultReportDocument report,
         ResultReportQuestion question,
+        ResultReportQuestion? previousQuestion,
         int rowIndex,
         ReportFonts fonts)
     {
-        var questionText = question.QuestionText;
-        if (report.IncludeTeacherComments
-            && !string.IsNullOrWhiteSpace(question.TeacherComment))
-        {
-            questionText += $"\nコメント: {question.TeacherComment}";
-        }
-
-        var answerText = string.IsNullOrWhiteSpace(question.RecognizedAnswer)
+        var studentAnswerText = string.IsNullOrWhiteSpace(question.RecognizedAnswer)
             ? question.Outcome == "blank" ? "（空欄）" : "（認識なし）"
             : question.RecognizedAnswer!;
-        var questionLines = WrapText(
+        var modelAnswerText = question.ModelAnswers is { Count: > 0 }
+            ? string.Join(" ／ ", question.ModelAnswers)
+            : "（採点基準を参照）";
+        var studentAnswerLines = WrapText(
             canvas.Graphics,
-            questionText,
+            studentAnswerText,
             fonts.TableBody,
-            QuestionColumnWidth - (2 * CellPadding));
-        var answerLines = WrapText(
+            StudentAnswerColumnWidth - (2 * CellPadding));
+        var modelAnswerLines = WrapText(
             canvas.Graphics,
-            answerText,
+            modelAnswerText,
             fonts.TableBody,
-            AnswerColumnWidth - (2 * CellPadding));
-        var totalLines = Math.Max(1, Math.Max(questionLines.Count, answerLines.Count));
+            ModelAnswerColumnWidth - (2 * CellPadding));
+        var totalLines = Math.Max(
+            1,
+            Math.Max(studentAnswerLines.Count, modelAnswerLines.Count));
         var fullRowHeight = Math.Max(
             MinimumRowHeight,
             (totalLines * BodyLineHeight) + (2 * CellPadding));
@@ -299,13 +305,14 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
                 canvas,
                 question,
                 rowIndex,
-                questionLines,
-                answerLines,
+                studentAnswerLines,
+                modelAnswerLines,
                 0,
                 totalLines,
                 fullRowHeight,
                 continuation: false,
-                fonts);
+                hierarchyLabel: FormatHierarchyLabel(question, previousQuestion),
+                fonts: fonts);
             canvas.Y += fullRowHeight;
             return;
         }
@@ -330,12 +337,13 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
                 canvas,
                 question,
                 rowIndex,
-                questionLines,
-                answerLines,
+                studentAnswerLines,
+                modelAnswerLines,
                 offset,
                 linesInChunk,
                 height,
                 continuation,
+                FormatHierarchyLabel(question, previousQuestion),
                 fonts);
             canvas.Y += height;
             offset += linesInChunk;
@@ -348,16 +356,53 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
         }
     }
 
+    private static string FormatHierarchyLabel(
+        ResultReportQuestion question,
+        ResultReportQuestion? previous)
+    {
+        var middle = string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+            ? question.DisplayLabel
+            : question.MiddleQuestionLabel;
+        var majorChanged = !string.Equals(
+            question.MajorQuestionLabel,
+            previous?.MajorQuestionLabel,
+            StringComparison.Ordinal);
+        var middleChanged = majorChanged || !string.Equals(
+            middle,
+            string.IsNullOrWhiteSpace(previous?.MiddleQuestionLabel)
+                ? previous?.DisplayLabel
+                : previous.MiddleQuestionLabel,
+            StringComparison.Ordinal);
+        var labels = new List<string>(3);
+        if (majorChanged && !string.IsNullOrWhiteSpace(question.MajorQuestionLabel))
+        {
+            labels.Add(question.MajorQuestionLabel);
+        }
+
+        if (middleChanged || string.IsNullOrWhiteSpace(question.MinorQuestionLabel))
+        {
+            labels.Add(middle!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(question.MinorQuestionLabel))
+        {
+            labels.Add(question.MinorQuestionLabel);
+        }
+
+        return labels.Count == 0 ? question.DisplayLabel : string.Join("\n", labels);
+    }
+
     private static void DrawQuestionChunk(
         PageCanvas canvas,
         ResultReportQuestion question,
         int rowIndex,
-        List<string> questionLines,
-        List<string> answerLines,
+        List<string> studentAnswerLines,
+        List<string> modelAnswerLines,
         int offset,
         int lineCount,
         double height,
         bool continuation,
+        string hierarchyLabel,
         ReportFonts fonts)
     {
         var widths = ColumnWidths();
@@ -384,7 +429,7 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
             x += width;
         }
 
-        var label = continuation ? "続き" : question.DisplayLabel;
+        var label = continuation ? "続き" : hierarchyLabel;
         canvas.Graphics.DrawString(
             label,
             fonts.TableBody,
@@ -398,7 +443,7 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
 
         DrawLineSlice(
             canvas.Graphics,
-            questionLines,
+            studentAnswerLines,
             offset,
             lineCount,
             fonts.TableBody,
@@ -407,39 +452,31 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
             canvas.Y + CellPadding);
         DrawLineSlice(
             canvas.Graphics,
-            answerLines,
+            modelAnswerLines,
             offset,
             lineCount,
             fonts.TableBody,
             new XSolidBrush(Ink),
-            MarginLeft + LabelColumnWidth + QuestionColumnWidth + CellPadding,
+            MarginLeft + LabelColumnWidth + StudentAnswerColumnWidth + CellPadding,
             canvas.Y + CellPadding);
 
         if (!continuation)
         {
-            var score =
-                $"{FormatPoints(question.AwardedPointsMilli)} / " +
-                $"{FormatPoints(question.MaximumPointsMilli)}";
-            var scoreX =
-                MarginLeft + LabelColumnWidth + QuestionColumnWidth + AnswerColumnWidth;
-            canvas.Graphics.DrawString(
-                score,
-                fonts.TableBody,
-                new XSolidBrush(Ink),
-                new XRect(scoreX + 3, canvas.Y, ScoreColumnWidth - 6, height),
-                XStringFormats.Center);
-            var outcomeX = scoreX + ScoreColumnWidth;
-            var outcomeBrush = new XSolidBrush(OutcomeColor(question.Outcome));
+            var score = $"{FormatPoints(question.AwardedPointsMilli)} 点";
+            var scoreX = MarginLeft
+                + LabelColumnWidth
+                + StudentAnswerColumnWidth
+                + ModelAnswerColumnWidth;
             if (question.IsCorrected)
             {
                 canvas.Graphics.DrawString(
-                    LocalizeOutcome(question.Outcome),
+                    score,
                     fonts.TableBody,
-                    outcomeBrush,
+                    new XSolidBrush(OutcomeColor(question.Outcome)),
                     new XRect(
-                        outcomeX + 2,
+                        scoreX + 3,
                         canvas.Y + (height / 2) - 15,
-                        OutcomeColumnWidth - 4,
+                        ScoreColumnWidth - 6,
                         14),
                     XStringFormats.Center);
                 canvas.Graphics.DrawString(
@@ -447,23 +484,19 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
                     fonts.Footer,
                     new XSolidBrush(XColors.DarkGoldenrod),
                     new XRect(
-                        outcomeX + 2,
+                        scoreX + 2,
                         canvas.Y + (height / 2),
-                        OutcomeColumnWidth - 4,
+                        ScoreColumnWidth - 4,
                         12),
                     XStringFormats.Center);
             }
             else
             {
                 canvas.Graphics.DrawString(
-                    LocalizeOutcome(question.Outcome),
+                    score,
                     fonts.TableBody,
-                    outcomeBrush,
-                    new XRect(
-                        outcomeX + 2,
-                        canvas.Y,
-                        OutcomeColumnWidth - 4,
-                        height),
+                    new XSolidBrush(OutcomeColor(question.Outcome)),
+                    new XRect(scoreX + 3, canvas.Y, ScoreColumnWidth - 6, height),
                     XStringFormats.Center);
             }
         }
@@ -512,7 +545,7 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
 
         canvas.Y += 12;
         canvas.Graphics.DrawString(
-            "この帳票は確定済みの現在結果から作成されています。答案画像は含まれません。",
+            "この成績表は確定済みの現在結果から作成されています。",
             fonts.Small,
             new XSolidBrush(MutedInk),
             new XRect(
@@ -683,10 +716,9 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
     private static double[] ColumnWidths() =>
         [
             LabelColumnWidth,
-            QuestionColumnWidth,
-            AnswerColumnWidth,
+            StudentAnswerColumnWidth,
+            ModelAnswerColumnWidth,
             ScoreColumnWidth,
-            OutcomeColumnWidth,
         ];
 
     private static string FormatPoints(long milliPoints)
@@ -819,6 +851,8 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
         Required(report.SchoolName, nameof(report.SchoolName), 200);
         Required(report.StudentDisplayName, nameof(report.StudentDisplayName), 200);
         Optional(report.StudentNumber, nameof(report.StudentNumber), 100);
+        Optional(report.StudentGradeLabel, nameof(report.StudentGradeLabel), 100);
+        Optional(report.StudentClassLabel, nameof(report.StudentClassLabel), 100);
         Required(report.TestTitle, nameof(report.TestTitle), 500);
         if (report.TemplateVersionNumber <= 0)
         {
@@ -857,9 +891,22 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
         {
             ArgumentNullException.ThrowIfNull(question);
             Required(question.DisplayLabel, nameof(question.DisplayLabel), 100);
+            Optional(question.MajorQuestionLabel, nameof(question.MajorQuestionLabel), 100);
+            Optional(question.MiddleQuestionLabel, nameof(question.MiddleQuestionLabel), 100);
+            Optional(question.MinorQuestionLabel, nameof(question.MinorQuestionLabel), 100);
             Required(question.QuestionText, nameof(question.QuestionText), 16_000);
             Optional(question.RecognizedAnswer, nameof(question.RecognizedAnswer), 16_000);
             Optional(question.TeacherComment, nameof(question.TeacherComment), 4_000);
+            if (question.ModelAnswers is { Count: > 100 })
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(report),
+                    "A question cannot contain more than 100 model answers.");
+            }
+            foreach (var modelAnswer in question.ModelAnswers ?? [])
+            {
+                Required(modelAnswer, nameof(question.ModelAnswers), 16_000);
+            }
             if (question.AwardedPointsMilli < 0
                 || question.MaximumPointsMilli < 0
                 || question.AwardedPointsMilli > question.MaximumPointsMilli)

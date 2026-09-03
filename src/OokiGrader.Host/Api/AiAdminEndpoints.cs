@@ -106,7 +106,9 @@ public static class AiAdminEndpoints
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var validation = ValidateConnectionRequest(request);
+        var validation = ValidateConnectionRequest(
+            request,
+            requireApiKey: true);
         if (validation is not null)
         {
             return validation(context);
@@ -116,6 +118,7 @@ public static class AiAdminEndpoints
             request,
             out var provider,
             out var modelId);
+        var apiKey = request.ApiKey!;
 
         if (!providerFeaturePolicy.IsEnabled(provider))
         {
@@ -155,14 +158,14 @@ public static class AiAdminEndpoints
             CreatedAt = now,
             UpdatedAt = now,
         };
-        connection.KeyFingerprint = Fingerprint(request.ApiKey);
+        connection.KeyFingerprint = Fingerprint(apiKey);
 
         AiCapabilityProbeResult? automaticProbe = null;
         if (request.TestAndEnable == true)
         {
             automaticProbe = await ProbeSuppliedCredentialAsync(
                 connection,
-                request.ApiKey,
+                apiKey,
                 providerResolver,
                 cancellationToken);
             if (!IsSuccessfulImageProbe(connection, automaticProbe))
@@ -183,7 +186,7 @@ public static class AiAdminEndpoints
             secretReference = await secretStore.WriteAsync(
                 connection.Id,
                 connection.CredentialRevision,
-                request.ApiKey.AsMemory(),
+                apiKey.AsMemory(),
                 cancellationToken);
             connection.SecretReference = secretReference.Value;
             db.AiConnections.Add(connection);
@@ -295,7 +298,9 @@ public static class AiAdminEndpoints
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var validation = ValidateConnectionRequest(request);
+        var validation = ValidateConnectionRequest(
+            request,
+            requireApiKey: false);
         if (validation is not null)
         {
             return validation(context);
@@ -306,6 +311,9 @@ public static class AiAdminEndpoints
             request,
             out var provider,
             out var modelId);
+        var apiKey = string.IsNullOrEmpty(request.ApiKey)
+            ? null
+            : request.ApiKey;
 
         var connection = await db.AiConnections
             .Include(item => item.TaskProfiles)
@@ -353,31 +361,14 @@ public static class AiAdminEndpoints
                 "最新の設定を読み込み直してから、もう一度保存してください。");
         }
 
-        var remoteBatchInProgress = await db.AiBatches
-            .AsNoTracking()
-            .AnyAsync(
-                batch =>
-                    batch.AiConnectionId == connection.Id
-                    && batch.ConnectionRevision
-                        == connection.CredentialRevision
-                    && (batch.State == "uploading"
-                        || batch.State == "submitting"
-                        || batch.State == "submitted"
-                        || batch.State == "reconcile_required"
-                        || batch.State == "pending"
-                        || batch.State == "running"
-                        || batch.State == "delayed"
-                        || batch.State == "manual_review"
-                        || batch.CleanupState == "pending"),
-                cancellationToken);
-        if (remoteBatchInProgress)
+        if (apiKey is not null
+            && await HasRemoteBatchInProgressAsync(
+                db,
+                connection.Id,
+                connection.CredentialRevision,
+                cancellationToken))
         {
-            return ApiHelpers.Problem(
-                context,
-                StatusCodes.Status409Conflict,
-                "AI_KEY_ROTATION_BATCH_IN_PROGRESS",
-                "AI APIキーを交換できません",
-                "送信済みの Gemini Batch を照合し、リモートファイルの消去が完了してから交換してください。");
+            return KeyRotationBatchInProgress(context);
         }
 
         if (request.TestAndEnable == true)
@@ -388,21 +379,67 @@ public static class AiAdminEndpoints
                 Provider = connection.Provider,
                 EndpointProfile = AiProviderCatalog.GetEndpointProfile(provider),
                 ModelId = modelId,
-                CredentialRevision = checked(connection.CredentialRevision + 1),
+                CredentialRevision = apiKey is null
+                    ? connection.CredentialRevision
+                    : checked(connection.CredentialRevision + 1),
                 TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300),
                 ConcurrencyLimit = Math.Clamp(
                     request.ConcurrencyLimit ?? 2,
                     1,
                     16),
             };
-            var automaticProbe = await ProbeSuppliedCredentialAsync(
-                candidate,
-                request.ApiKey,
-                providerResolver,
-                cancellationToken);
+            AiCapabilityProbeResult automaticProbe;
+            if (apiKey is not null)
+            {
+                automaticProbe = await ProbeSuppliedCredentialAsync(
+                    candidate,
+                    apiKey,
+                    providerResolver,
+                    cancellationToken);
+            }
+            else
+            {
+                AiSecretLease storedSecret;
+                try
+                {
+                    storedSecret = await secretStore.ReadAsync(
+                        new AiSecretReference(connection.SecretReference),
+                        cancellationToken);
+                }
+                catch (KeyNotFoundException)
+                {
+                    return MissingStoredSecret(context);
+                }
+
+                using (storedSecret)
+                {
+                    automaticProbe = await providerResolver
+                        .GetRequired(connection.Provider)
+                        .ProbeAsync(
+                            ToSettings(candidate),
+                            storedSecret.Utf8Bytes,
+                            cancellationToken);
+                }
+            }
+
             if (!IsSuccessfulImageProbe(candidate, automaticProbe))
             {
                 return AutomaticProbeFailed(context, automaticProbe);
+            }
+
+            if (apiKey is null)
+            {
+                return await UpdateAndEnableConnectionAsync(
+                    connection,
+                    candidate,
+                    automaticProbe,
+                    expectedRevision,
+                    context,
+                    principal,
+                    db,
+                    promptCatalog,
+                    timeProvider,
+                    cancellationToken);
             }
 
             return await ReplaceAndEnableConnectionAsync(
@@ -410,7 +447,7 @@ public static class AiAdminEndpoints
                 candidate,
                 automaticProbe,
                 expectedRevision,
-                request.ApiKey,
+                apiKey,
                 context,
                 principal,
                 db,
@@ -420,16 +457,67 @@ public static class AiAdminEndpoints
                 cancellationToken);
         }
 
+        if (apiKey is null)
+        {
+            var previousModelId = connection.ModelId;
+            var settingsUpdatedAt = timeProvider.GetUtcNow();
+            connection.TimeoutSeconds = Math.Clamp(
+                request.TimeoutSeconds ?? connection.TimeoutSeconds,
+                5,
+                300);
+            connection.ConcurrencyLimit = Math.Clamp(
+                request.ConcurrencyLimit ?? connection.ConcurrencyLimit,
+                1,
+                16);
+            connection.EndpointProfile = AiProviderCatalog.GetEndpointProfile(provider);
+            connection.ModelId = modelId;
+            connection.State = "pending_probe";
+            connection.LastCapabilityProbeState = null;
+            connection.LastCapabilityProbeErrorCode = null;
+            connection.LastCapabilityProbeAt = null;
+            connection.LastBatchCapabilityProbeState = null;
+            connection.LastBatchCapabilityProbeErrorCode = null;
+            connection.LastBatchCapabilityProbeAt = null;
+            connection.LastBatchCapabilityProbeCredentialRevision = null;
+            connection.UpdatedAt = settingsUpdatedAt;
+            var settingsDeactivatedProfileCount = 0;
+            foreach (var profile in connection.TaskProfiles.Where(
+                         profile => profile.Active))
+            {
+                profile.Active = false;
+                profile.UpdatedAt = settingsUpdatedAt;
+                settingsDeactivatedProfileCount++;
+            }
+
+            AddAudit(
+                db,
+                context,
+                principal,
+                settingsUpdatedAt,
+                "ai.connection_settings_updated",
+                connection.Id,
+                new
+                {
+                    previousModelId,
+                    connection.ModelId,
+                    credentialReused = true,
+                    deactivatedProfileCount = settingsDeactivatedProfileCount,
+                });
+            await db.SaveChangesAsync(cancellationToken);
+            ApiHelpers.SetRevisionEtag(context.Response, connection.Revision);
+            return Results.Ok(ToConnectionResponse(connection));
+        }
+
         var previousReference = new AiSecretReference(connection.SecretReference);
         var nextCredentialRevision = checked(connection.CredentialRevision + 1);
         var nextReference = await secretStore.WriteAsync(
             connection.Id,
             nextCredentialRevision,
-            request.ApiKey.AsMemory(),
+            apiKey.AsMemory(),
             cancellationToken);
         var now = timeProvider.GetUtcNow();
         connection.SecretReference = nextReference.Value;
-        connection.KeyFingerprint = Fingerprint(request.ApiKey);
+        connection.KeyFingerprint = Fingerprint(apiKey);
         connection.CredentialRevision = nextCredentialRevision;
         connection.TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300);
         connection.ConcurrencyLimit = Math.Clamp(request.ConcurrencyLimit ?? 2, 1, 16);
@@ -599,6 +687,83 @@ public static class AiAdminEndpoints
         return Results.Ok(ToConnectionResponse(connection, persistedProbe));
     }
 
+    private static async Task<IResult> UpdateAndEnableConnectionAsync(
+        AiConnectionEntity connection,
+        AiConnectionEntity candidate,
+        AiCapabilityProbeResult probeResult,
+        long expectedRevision,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        OokiGraderDbContext db,
+        IAiPromptBundleCatalog promptCatalog,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            cancellationToken);
+        await db.Entry(connection).ReloadAsync(cancellationToken);
+        if (connection.Revision != expectedRevision)
+        {
+            return RevisionMismatch(context);
+        }
+
+        if (candidate.CredentialRevision != connection.CredentialRevision)
+        {
+            return RevisionMismatch(context);
+        }
+
+        var previousModelId = connection.ModelId;
+        var now = timeProvider.GetUtcNow();
+        connection.TimeoutSeconds = candidate.TimeoutSeconds;
+        connection.ConcurrencyLimit = candidate.ConcurrencyLimit;
+        connection.EndpointProfile = candidate.EndpointProfile;
+        connection.ModelId = candidate.ModelId;
+        ApplyProbeResult(connection, probeResult, now);
+        var persistedProbe = BuildProbe(connection, probeResult, now);
+        db.AiCapabilityProbes.Add(persistedProbe);
+
+        AddAudit(
+            db,
+            context,
+            principal,
+            now,
+            "ai.connection_settings_updated",
+            connection.Id,
+            new
+            {
+                previousModelId,
+                connection.ModelId,
+                credentialReused = true,
+                automaticSetup = true,
+            });
+        await ReconcileCurrentProfilesAsync(
+            db,
+            connection,
+            ApiHelpers.StaffId(principal),
+            promptCatalog,
+            now,
+            replaceOtherProviders: true,
+            cancellationToken: cancellationToken);
+        AddAudit(
+            db,
+            context,
+            principal,
+            now,
+            "ai.profiles_auto_enabled",
+            connection.Id,
+            new
+            {
+                connection.Provider,
+                connection.CredentialRevision,
+                taskTypes = DefaultTaskTypes,
+            });
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        ApiHelpers.SetRevisionEtag(context.Response, connection.Revision);
+        return Results.Ok(ToConnectionResponse(connection, persistedProbe));
+    }
+
     private static async Task<IResult> ProbeConnectionAsync(
         string connectionId,
         HttpContext context,
@@ -635,12 +800,7 @@ public static class AiAdminEndpoints
         }
         catch (KeyNotFoundException)
         {
-            return ApiHelpers.Problem(
-                context,
-                StatusCodes.Status409Conflict,
-                "AI_CONNECTION_SECRET_MISSING",
-                "保存済みのAI APIキーを読み込めません",
-                "「APIキーを交換」からAPIキーを再登録し、もう一度接続を確認してください。");
+            return MissingStoredSecret(context);
         }
 
         using (secret)
@@ -2448,9 +2608,10 @@ public static class AiAdminEndpoints
             PromptVersion = bundle.PromptVersion,
             SchemaVersion = bundle.SchemaVersion,
             PromptContentHash = bundle.ContentHash,
-            ThinkingLevel = taskType == AiTaskTypes.TemplateExtraction
-                ? "medium"
-                : "minimal",
+            ThinkingLevel = AiProviderRuntime.DefaultThinkingLevel(
+                connection.Provider,
+                connection.ModelId,
+                taskType),
             MediaResolution = "high",
             MaxOutputTokens = Math.Clamp(maxOutputTokens, 64, 65_536),
             ConcurrencyLimit = Math.Clamp(concurrencyLimit, 1, 16),
@@ -2702,12 +2863,16 @@ public static class AiAdminEndpoints
             "機能設定でこのプロバイダーを有効にしてから、もう一度実行してください。");
 
     private static Func<HttpContext, IResult>? ValidateConnectionRequest(
-        SaveAiConnectionRequest request)
+        SaveAiConnectionRequest request,
+        bool requireApiKey)
     {
+        var apiKeySupplied = !string.IsNullOrEmpty(request.ApiKey);
         if (!TryResolveConnectionSelection(request, out _, out _)
-            || string.IsNullOrWhiteSpace(request.ApiKey)
-            || request.ApiKey.Length is < 20 or > 512
-            || request.ApiKey.Any(char.IsControl)
+            || (requireApiKey && !apiKeySupplied)
+            || (apiKeySupplied
+                && (string.IsNullOrWhiteSpace(request.ApiKey)
+                    || request.ApiKey.Length is < 20 or > 512
+                    || request.ApiKey.Any(char.IsControl)))
             || request.TimeoutSeconds is < 5 or > 300
             || request.ConcurrencyLimit is < 1 or > 16)
         {
@@ -2750,6 +2915,14 @@ public static class AiAdminEndpoints
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
+
+    private static IResult MissingStoredSecret(HttpContext context) =>
+        ApiHelpers.Problem(
+            context,
+            StatusCodes.Status409Conflict,
+            "AI_CONNECTION_SECRET_MISSING",
+            "保存済みのAI APIキーを読み込めません",
+            "APIキーを再登録し、もう一度接続を確認してください。");
 
     private static AiConnectionSettings ToSettings(AiConnectionEntity connection) =>
         new(
@@ -2816,7 +2989,7 @@ public static class AiAdminEndpoints
     }
 
     private sealed record SaveAiConnectionRequest(
-        string ApiKey,
+        string? ApiKey,
         string? Provider,
         string? ModelId,
         int? TimeoutSeconds,

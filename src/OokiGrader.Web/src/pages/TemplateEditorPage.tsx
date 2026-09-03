@@ -53,22 +53,6 @@ interface GenerationStatus {
   detail?: string;
 }
 
-interface ProposalVerificationIssue {
-  code?: string;
-  message: string;
-  questionId?: string;
-  blocking?: boolean;
-}
-
-interface ProposalVerificationResponse {
-  revision: number;
-  verifiedQuestionCount: number;
-  verifiedAnswerCount: number;
-  skippedQuestionCount: number;
-  issues: ProposalVerificationIssue[];
-  questions: TemplateQuestion[];
-}
-
 interface PublishTestSessionResponse {
   id: string;
   name: string;
@@ -118,10 +102,6 @@ const LOCAL_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ROUTINE_VERIFICATION_WARNINGS = new Set([
   "先生による確認が必要です。",
   "未確認の解答候補があります。",
-]);
-const ROUTINE_AI_NOTICES = new Set([
-  "正答はAIによる提案です。先生が根拠資料と照合してください。",
-  "模範解答の転記候補です。原資料との照合が必要です。",
 ]);
 const BULK_CONFIRMABLE_QUESTION_TYPES = new Set([
   "multiple_choice",
@@ -176,9 +156,6 @@ export function allowNonKanjiForKanjiRequired(kanjiRequired: boolean) {
   return !kanjiRequired;
 }
 
-export const DEFAULT_AI_RUBRIC =
-  "模範解答と照合し、内容と根拠が一致する場合のみ正解とします。部分的な一致、曖昧な表現、別解の可能性がある場合は点数を確定せず、先生の確認に回します。";
-
 export function defaultsForQuestionTypeChange(
   question: Pick<
     TemplateQuestion,
@@ -192,9 +169,6 @@ export function defaultsForQuestionTypeChange(
     gradingMode,
     requiresReviewAlways: false,
   };
-  if (gradingMode === "ai_rubric" && !question.rubric?.trim()) {
-    changes.rubric = DEFAULT_AI_RUBRIC;
-  }
   return changes;
 }
 
@@ -280,6 +254,9 @@ export function newQuestionPayload(
   const order = questionCount + 1;
   return {
     displayLabel: `問${order}`,
+    majorQuestionLabel: null,
+    middleQuestionLabel: `問${order}`,
+    minorQuestionLabel: null,
     order,
     questionText: "",
     questionType: "exact_short_text",
@@ -290,9 +267,38 @@ export function newQuestionPayload(
     requiresCompleteAnswer: false,
     answerOrderInsensitive: false,
     acceptedAnswers: [],
-    rubric: DEFAULT_AI_RUBRIC,
+    rubric: "",
     requiresReviewAlways: false,
   };
+}
+
+export function normalizedQuestionHierarchy(
+  question: Pick<
+    TemplateQuestion,
+    | "displayLabel"
+    | "majorQuestionLabel"
+    | "middleQuestionLabel"
+    | "minorQuestionLabel"
+  >,
+) {
+  return {
+    majorQuestionLabel: question.majorQuestionLabel?.trim() || null,
+    middleQuestionLabel:
+      question.middleQuestionLabel?.trim() || question.displayLabel.trim(),
+    minorQuestionLabel: question.minorQuestionLabel?.trim() || null,
+  };
+}
+
+export function questionHierarchyDisplayLabel(
+  hierarchy: ReturnType<typeof normalizedQuestionHierarchy>,
+) {
+  return [
+    hierarchy.majorQuestionLabel,
+    hierarchy.middleQuestionLabel,
+    hierarchy.minorQuestionLabel,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function defaultPointIncrementMilli(maxPointsMilli: number) {
@@ -336,6 +342,7 @@ function readLocalDraft(
       ...value,
       question: {
         ...value.question,
+        ...normalizedQuestionHierarchy(value.question),
         pointIncrementMilli: value.question.pointIncrementMilli ?? 1000,
         requiresCompleteAnswer:
           value.question.requiresCompleteAnswer ?? false,
@@ -460,41 +467,10 @@ function substantiveWarnings(question: TemplateQuestion) {
   );
 }
 
-function hasBlockingTeacherNote(question: TemplateQuestion) {
-  if (!question.teacherNote?.trim()) return false;
-  return question.teacherNote
-    .split("\n")
-    .map((line) => line.trim().replace(/^\[AI確認\]\s*/u, ""))
-    .filter(Boolean)
-    .some((notice) => !ROUTINE_AI_NOTICES.has(notice));
-}
-
-function customTeacherNote(question: TemplateQuestion) {
-  return (question.teacherNote || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => {
-      const notice = line.replace(/^\[AI確認\]\s*/u, "");
-      return line && !ROUTINE_AI_NOTICES.has(notice);
-    })
-    .join("\n");
-}
-
-function mergeCustomTeacherNote(question: TemplateQuestion, value: string) {
-  const routineNotes = (question.teacherNote || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) =>
-      ROUTINE_AI_NOTICES.has(line.replace(/^\[AI確認\]\s*/u, "")),
-    );
-  return [...routineNotes, value.trim()].filter(Boolean).join("\n");
-}
-
 export function needsIndividualReview(question: TemplateQuestion) {
   if (!needsProposalVerification(question)) return false;
   if (
-    substantiveWarnings(question).length > 0 ||
-    hasBlockingTeacherNote(question)
+    substantiveWarnings(question).length > 0
   ) {
     return true;
   }
@@ -558,19 +534,16 @@ export function TemplateEditorPage() {
     Boolean(templateId && versionId),
   );
   const [questions, setQuestions] = useState<TemplateQuestion[]>([]);
+  const [editorLoadGeneration, setEditorLoadGeneration] = useState(0);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<TemplateQuestion>();
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [applyingKanjiToAll, setApplyingKanjiToAll] = useState(false);
   const [validation, setValidation] = useState<TemplateValidation>();
   const [validating, setValidating] = useState(false);
   const [showAllQuestions, setShowAllQuestions] = useState(true);
-  const [bulkVerifyOpen, setBulkVerifyOpen] = useState(false);
-  const [bulkVerifying, setBulkVerifying] = useState(false);
-  const [bulkVerification, setBulkVerification] =
-    useState<ProposalVerificationResponse>();
-  const [verifyingQuestionId, setVerifyingQuestionId] = useState("");
   const [receptionOpen, setReceptionOpen] = useState(false);
   const [startingReception, setStartingReception] = useState(false);
   const [receptionDetails, setReceptionDetails] = useState({
@@ -581,6 +554,7 @@ export function TemplateEditorPage() {
   const [actionError, setActionError] = useState<string>();
   const [recoveryDraft, setRecoveryDraft] = useState<LocalQuestionDraft>();
   const draftRef = useRef<TemplateQuestion | undefined>(undefined);
+  const saveInFlightRef = useRef(false);
   const completedGenerationRef = useRef("");
   const receptionIdempotencyKeyRef = useRef("");
   const pendingPublishReceptionRef =
@@ -590,6 +564,7 @@ export function TemplateEditorPage() {
     const data = editor.data;
     if (!data) return;
     setQuestions(data.questions);
+    setEditorLoadGeneration((current) => current + 1);
     setSelectedId((current) => {
       if (
         current &&
@@ -643,7 +618,7 @@ export function TemplateEditorPage() {
         ? readLocalDraft(templateId, versionId, question)
         : undefined,
     );
-  }, [questions, selectedId, templateId, versionId]);
+  }, [selectedId, editorLoadGeneration, templateId, versionId]);
 
   useEffect(() => {
     if (!draft || saveState !== "dirty") return;
@@ -675,23 +650,30 @@ export function TemplateEditorPage() {
   useEffect(() => {
     draftRef.current = draft;
     if (!draft || saveState !== "dirty") return;
-    const snapshot = JSON.stringify(draft);
     const timer = window.setTimeout(async () => {
+      if (saveInFlightRef.current) return;
+      const requestDraft = structuredClone(draft);
+      const snapshot = JSON.stringify(requestDraft);
+      saveInFlightRef.current = true;
       setSaveState("saving");
       try {
         const saved = await api.patch<TemplateQuestion>(
-          `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions/${encodeURIComponent(draft.id)}`,
-          questionPayload(draft),
+          `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions/${encodeURIComponent(requestDraft.id)}`,
+          questionPayload(requestDraft, true),
           {
-            etag: draft.revision ? `"rev-${draft.revision}"` : undefined,
+            etag: requestDraft.revision
+              ? `"rev-${requestDraft.revision}"`
+              : undefined,
           },
         );
+        saveInFlightRef.current = false;
         setQuestions((current) =>
           current.map((question) =>
             question.id === saved.id ? { ...question, ...saved } : question,
           ),
         );
-        if (JSON.stringify(draftRef.current) === snapshot) {
+        const latestDraft = draftRef.current;
+        if (JSON.stringify(latestDraft) === snapshot) {
           try {
             localStorage.removeItem(
               localDraftKey(templateId, versionId, saved.id),
@@ -702,10 +684,17 @@ export function TemplateEditorPage() {
           setDraft(saved);
           draftRef.current = saved;
           setSaveState("saved");
-        } else {
+        } else if (latestDraft?.id === saved.id) {
+          const rebasedDraft = {
+            ...latestDraft,
+            revision: saved.revision,
+          };
+          draftRef.current = rebasedDraft;
+          setDraft(rebasedDraft);
           setSaveState("dirty");
         }
       } catch (reason) {
+        saveInFlightRef.current = false;
         setSaveState(
           reason instanceof ApiError && reason.status === 412
             ? "conflict"
@@ -717,9 +706,12 @@ export function TemplateEditorPage() {
   }, [draft, saveState, templateId, versionId]);
 
   function changeDraft(changes: Partial<TemplateQuestion>) {
-    if (!draft) return;
-    setDraft({ ...draft, ...changes });
-    setBulkVerification(undefined);
+    setDraft((current) => {
+      if (!current) return current;
+      const changed = { ...current, ...changes };
+      draftRef.current = changed;
+      return changed;
+    });
     setSaveState("dirty");
     setValidation(undefined);
   }
@@ -750,6 +742,7 @@ export function TemplateEditorPage() {
   }
 
   async function addQuestion(copyFrom?: TemplateQuestion) {
+    if (saveState !== "saved") return;
     setActionError(undefined);
     try {
       const created = await api.post<TemplateQuestion>(
@@ -774,6 +767,7 @@ export function TemplateEditorPage() {
   }
 
   async function deleteQuestion(question: TemplateQuestion) {
+    if (saveState !== "saved") return;
     if (
       !window.confirm(
         `${question.displayLabel}を削除しますか？設定した解答欄も削除されます。`,
@@ -799,6 +793,7 @@ export function TemplateEditorPage() {
   }
 
   async function moveQuestion(index: number, direction: -1 | 1) {
+    if (saveState !== "saved") return;
     const target = index + direction;
     if (target < 0 || target >= questions.length) return;
     const reordered = [...questions];
@@ -812,6 +807,7 @@ export function TemplateEditorPage() {
       order: order + 1,
     }));
     setQuestions(normalized);
+    syncSelectedDraft(normalized);
     try {
       const saved = await api.post<
         PagedResponse<TemplateQuestion> | TemplateQuestion[]
@@ -820,98 +816,86 @@ export function TemplateEditorPage() {
         { questionIds: normalized.map((item) => item.id) },
         { idempotencyKey: newIdempotencyKey() },
       );
-      setQuestions(
-        asPaged(saved).items.sort((a, b) => a.order - b.order),
+      const savedQuestions = asPaged(saved).items.sort(
+        (a, b) => a.order - b.order,
       );
+      setQuestions(savedQuestions);
+      syncSelectedDraft(savedQuestions);
     } catch (reason) {
       setQuestions(questions);
       setActionError(errorMessage(reason, "並び順を保存できませんでした。"));
     }
   }
 
-  async function verifyAllProposals() {
-    setBulkVerifying(true);
+  function syncSelectedDraft(items: TemplateQuestion[]) {
+    const selected = items.find((question) => question.id === selectedId);
+    if (!selected) return;
+    const copy = structuredClone(selected);
+    setDraft(copy);
+    draftRef.current = copy;
+  }
+
+  async function applyKanjiRequirementToAll(kanjiRequired: boolean) {
+    if (saveState !== "saved") return;
+    setApplyingKanjiToAll(true);
     setActionError(undefined);
     try {
-      const latest = await api.get<TemplateVersionDetail>(
-        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}`,
+      const saved = await api.post<
+        PagedResponse<TemplateQuestion> | TemplateQuestion[]
+      >(
+        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions:applyKanjiRequirement`,
+        { kanjiRequired },
+        { idempotencyKey: newIdempotencyKey() },
       );
-      if (latest.revision === undefined) {
-        throw new Error("最新版の改訂番号を取得できませんでした。");
-      }
-      const result = await api.post<ProposalVerificationResponse>(
-        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions:verifyProposals`,
-        {
-          selectionMode: "all",
-          revision: latest.revision,
-        },
-        {
-          idempotencyKey: newIdempotencyKey(),
-          etag: `"rev-${latest.revision}"`,
-        },
-      );
-      const updated = [...result.questions].sort((a, b) => a.order - b.order);
+      const updated = asPaged(saved).items.sort((a, b) => a.order - b.order);
       setQuestions(updated);
-      setBulkVerification(result);
-      setBulkVerifyOpen(false);
+      const selected = updated.find((question) => question.id === selectedId);
+      if (selected) {
+        setDraft(selected);
+        draftRef.current = selected;
+      }
+      setSaveState("saved");
       setValidation(undefined);
-      const firstSkippedQuestionId = result.issues.find(
-        (issue) => issue.blocking !== false && issue.questionId,
-      )?.questionId;
-      const nextQuestion =
-        updated.find((question) => question.id === firstSkippedQuestionId) ||
-        updated.find(needsIndividualReview) ||
-        updated.find(needsProposalVerification) ||
-        updated[0];
-      setSelectedId(nextQuestion?.id || "");
-      setShowAllQuestions(
-        result.skippedQuestionCount === 0 || !updated.some(needsIndividualReview),
-      );
-      editor.reload();
     } catch (reason) {
       setActionError(
-        errorMessage(reason, "すべての問題を確認できませんでした。"),
+        errorMessage(reason, "漢字必須をすべての問題に適用できませんでした。"),
       );
-      setBulkVerifyOpen(false);
     } finally {
-      setBulkVerifying(false);
+      setApplyingKanjiToAll(false);
     }
   }
 
-  async function verifyQuestion(question: TemplateQuestion) {
-    setVerifyingQuestionId(question.id);
+  async function resolveExtractionReviewIssues() {
+    if (!draft || saveState !== "saved") return;
+    setSaveState("saving");
     setActionError(undefined);
     try {
       const saved = await api.patch<TemplateQuestion>(
-        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions/${encodeURIComponent(question.id)}`,
-        questionPayload(question, true),
+        `/templates/${encodeURIComponent(templateId)}/versions/${encodeURIComponent(versionId)}/questions/${encodeURIComponent(draft.id)}`,
         {
-          etag: question.revision ? `"rev-${question.revision}"` : undefined,
+          ...questionPayload(draft, true),
+          resolveExtractionReviewIssues: true,
+        },
+        {
+          etag: draft.revision ? `"rev-${draft.revision}"` : undefined,
         },
       );
       setQuestions((current) =>
-        current.map((item) => (item.id === saved.id ? saved : item)),
+        current.map((question) =>
+          question.id === saved.id ? { ...question, ...saved } : question,
+        ),
       );
-      const updated = questions.map((item) =>
-        item.id === saved.id ? saved : item,
-      );
-      const nextQuestion =
-        updated.find(needsIndividualReview) ||
-        updated.find(needsProposalVerification) ||
-        saved;
-      setSelectedId(nextQuestion.id);
-      if (!updated.some(needsIndividualReview)) setShowAllQuestions(true);
-      if (nextQuestion.id !== saved.id) {
-        setDraft(nextQuestion);
-        draftRef.current = nextQuestion;
-      }
+      const copy = structuredClone(saved);
+      setDraft(copy);
+      draftRef.current = copy;
       setSaveState("saved");
-      setBulkVerification(undefined);
       setValidation(undefined);
     } catch (reason) {
-      setActionError(errorMessage(reason, "この問題を確認済みにできませんでした。"));
-    } finally {
-      setVerifyingQuestionId("");
+      setSaveState(
+        reason instanceof ApiError && reason.status === 412
+          ? "conflict"
+          : "error",
+      );
     }
   }
 
@@ -1092,11 +1076,7 @@ export function TemplateEditorPage() {
     (sum, question) => sum + question.maxPointsMilli,
     0,
   );
-  const proposalQuestions = questions.filter(needsProposalVerification);
   const individualReviewQuestions = questions.filter(needsIndividualReview);
-  const bulkSkippedIssues = (bulkVerification?.issues || []).filter(
-    (issue) => issue.blocking !== false,
-  );
   const visibleQuestions =
     showAllQuestions || isReadOnly
       ? questions
@@ -1268,61 +1248,6 @@ export function TemplateEditorPage() {
           </p>
         </InlineAlert>
       ) : null}
-      {!isReadOnly && bulkVerification ? (
-        <InlineAlert
-          tone={bulkVerification.skippedQuestionCount > 0 ? "warning" : "success"}
-          title={
-            bulkVerification.skippedQuestionCount > 0
-              ? `${bulkVerification.verifiedQuestionCount}問を確認済み。${bulkVerification.skippedQuestionCount}問は確認できませんでした`
-              : `${bulkVerification.verifiedQuestionCount}問をすべて確認済みにしました`
-          }
-        >
-          <p>
-            {bulkVerification.skippedQuestionCount > 0
-              ? "入力が不足している問題は確認済みにしていません。最初の問題を表示しました。内容を直してから、もう一度「すべての問題を確認」を押してください。"
-              : "受付開始前の問題確認が完了しました。「受付を開始」から実施日を入力できます。"}
-          </p>
-          {bulkSkippedIssues.length > 0 ? (
-            <ul className="proposal-verification-issues">
-              {bulkSkippedIssues.map((issue, index) => (
-                <li key={`${issue.code || "issue"}-${issue.questionId || index}`}>
-                  {issue.questionId ? (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(issue.questionId!)}
-                    >
-                      {issue.message}
-                    </button>
-                  ) : (
-                    issue.message
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </InlineAlert>
-      ) : !isReadOnly &&
-        questions.length > 0 &&
-        !["queued", "running"].includes(generation.data?.state || "") &&
-        proposalQuestions.length > 0 ? (
-        <InlineAlert
-          tone="info"
-          title={`${proposalQuestions.length}問の内容を確認してください`}
-          action={
-            <Button
-              size="small"
-              onClick={() => setBulkVerifyOpen(true)}
-              disabled={bulkVerifying || saveState !== "saved"}
-            >
-              すべての問題を確認
-            </Button>
-          }
-        >
-          <p>
-            元の資料と問題文・正解・配点を見比べます。入力がそろっている問題は一度に確認済みにでき、不足がある問題だけ残ります。
-          </p>
-        </InlineAlert>
-      ) : null}
       {validation && !validation.valid ? (
         <div className="editor-validation" role="alert">
           <div>
@@ -1335,7 +1260,15 @@ export function TemplateEditorPage() {
                     {issue.questionId ? (
                       <button
                         type="button"
-                        onClick={() => setSelectedId(issue.questionId!)}
+                        disabled={
+                          saveState !== "saved" &&
+                          selectedId !== issue.questionId
+                        }
+                        onClick={() => {
+                          if (saveState === "saved") {
+                            setSelectedId(issue.questionId!);
+                          }
+                        }}
                       >
                         {issue.message}
                       </button>
@@ -1366,6 +1299,7 @@ export function TemplateEditorPage() {
               <IconButton
                 label="問題を追加"
                 icon="plus"
+                disabled={saveState !== "saved"}
                 onClick={() => void addQuestion()}
               />
             ) : null}
@@ -1379,7 +1313,9 @@ export function TemplateEditorPage() {
               <button
                 type="button"
                 className={showAllQuestions ? "is-active" : undefined}
+                disabled={saveState !== "saved" && !showAllQuestions}
                 onClick={() => {
+                  if (saveState !== "saved") return;
                   setShowAllQuestions(true);
                   if (!selectedId) setSelectedId(questions[0]?.id || "");
                 }}
@@ -1389,7 +1325,9 @@ export function TemplateEditorPage() {
               <button
                 type="button"
                 className={!showAllQuestions ? "is-active" : undefined}
+                disabled={saveState !== "saved" && showAllQuestions}
                 onClick={() => {
+                  if (saveState !== "saved") return;
                   setShowAllQuestions(false);
                   setSelectedId(individualReviewQuestions[0]?.id || "");
                 }}
@@ -1414,11 +1352,25 @@ export function TemplateEditorPage() {
                   >
                   <button
                     type="button"
-                    onClick={() => setSelectedId(question.id)}
+                    disabled={
+                      saveState !== "saved" && selectedId !== question.id
+                    }
+                    onClick={() => {
+                      if (
+                        saveState === "saved" ||
+                        selectedId === question.id
+                      ) {
+                        setSelectedId(question.id);
+                      }
+                    }}
                   >
                     <span className="question-list__order">{index + 1}</span>
                     <span className="question-list__copy">
-                      <strong>{question.displayLabel}</strong>
+                      <strong>
+                        {questionHierarchyDisplayLabel(
+                          normalizedQuestionHierarchy(question),
+                        )}
+                      </strong>
                       <small>
                         {question.questionText || "問題文が未入力です"}
                       </small>
@@ -1441,23 +1393,28 @@ export function TemplateEditorPage() {
                       <IconButton
                         label="上へ移動"
                         icon="arrowLeft"
-                        disabled={index === 0}
+                        disabled={index === 0 || saveState !== "saved"}
                         onClick={() => void moveQuestion(index, -1)}
                       />
                       <IconButton
                         label="下へ移動"
                         icon="arrowRight"
-                        disabled={index === questions.length - 1}
+                        disabled={
+                          index === questions.length - 1 ||
+                          saveState !== "saved"
+                        }
                         onClick={() => void moveQuestion(index, 1)}
                       />
                       <IconButton
                         label="複製"
                         icon="copy"
+                        disabled={saveState !== "saved"}
                         onClick={() => void addQuestion(question)}
                       />
                       <IconButton
                         label="削除"
                         icon="trash"
+                        disabled={saveState !== "saved"}
                         onClick={() => void deleteQuestion(question)}
                       />
                     </div>
@@ -1583,9 +1540,14 @@ export function TemplateEditorPage() {
               question={draft}
               readOnly={isReadOnly}
               onChange={changeDraft}
-              onAccept={() => void verifyQuestion(draft)}
-              accepting={verifyingQuestionId === draft.id}
-              acceptDisabled={saveState !== "saved"}
+              onApplyKanjiRequirementToAll={(required) =>
+                void applyKanjiRequirementToAll(required)
+              }
+              applyingKanjiRequirementToAll={applyingKanjiToAll}
+              disableContextChanges={saveState !== "saved"}
+              onResolveExtractionReviewIssues={() =>
+                void resolveExtractionReviewIssues()
+              }
             />
           ) : (
             <EmptyState
@@ -1596,51 +1558,6 @@ export function TemplateEditorPage() {
           )}
         </aside>
       </div>
-
-      <Modal
-        open={bulkVerifyOpen && !isReadOnly}
-        onClose={() => !bulkVerifying && setBulkVerifyOpen(false)}
-        title="すべての問題を確認済みにしますか？"
-        description="元の資料とAIの下書きを見比べたあとに実行してください。"
-        size="medium"
-        footer={
-          <>
-            <Button
-              variant="secondary"
-              onClick={() => setBulkVerifyOpen(false)}
-              disabled={bulkVerifying}
-            >
-              戻る
-            </Button>
-            <Button
-              onClick={() => void verifyAllProposals()}
-              disabled={
-                isReadOnly ||
-                bulkVerifying ||
-                proposalQuestions.length === 0
-              }
-            >
-              {bulkVerifying ? "確認しています…" : "すべての問題を確認"}
-            </Button>
-          </>
-        }
-      >
-        <dl className="proposal-verification-summary">
-          <div>
-            <dt>確認する問題</dt>
-            <dd>{proposalQuestions.length}問</dd>
-          </div>
-          <div>
-            <dt>入力不足がある問題</dt>
-            <dd>確認せず残す</dd>
-          </div>
-        </dl>
-        <InlineAlert tone="info">
-          <p>
-            問題文、正解、配点、採点方法がそろっている問題を確認済みにします。入力不足や構造上の問題がある項目は確認済みにせず、理由と件数を表示します。
-          </p>
-        </InlineAlert>
-      </Modal>
 
       <Modal
         open={receptionOpen && canStartReception}
@@ -1736,16 +1653,21 @@ export function QuestionProperties({
   question,
   readOnly,
   onChange,
-  onAccept,
-  accepting,
-  acceptDisabled,
+  onApplyKanjiRequirementToAll,
+  applyingKanjiRequirementToAll = false,
+  disableContextChanges = false,
+  onResolveExtractionReviewIssues,
 }: {
   question: TemplateQuestion;
   readOnly: boolean;
   onChange: (changes: Partial<TemplateQuestion>) => void;
-  onAccept: () => void;
-  accepting: boolean;
-  acceptDisabled: boolean;
+  onAccept?: () => void;
+  accepting?: boolean;
+  acceptDisabled?: boolean;
+  onApplyKanjiRequirementToAll?: (kanjiRequired: boolean) => void;
+  applyingKanjiRequirementToAll?: boolean;
+  disableContextChanges?: boolean;
+  onResolveExtractionReviewIssues?: () => void;
 }) {
   const [variants, setVariants] = useState(() =>
     questionAcceptedVariants(question),
@@ -1777,13 +1699,24 @@ export function QuestionProperties({
 
   const canonical = questionCanonical(question);
   const hasKanji = /[\u3400-\u9fff\uf900-\ufaff]/u.test(canonical);
+  const hierarchy = normalizedQuestionHierarchy(question);
+
+  function updateHierarchy(
+    changes: Partial<ReturnType<typeof normalizedQuestionHierarchy>>,
+  ) {
+    const next = { ...hierarchy, ...changes };
+    onChange({
+      ...next,
+      displayLabel: questionHierarchyDisplayLabel(next),
+    });
+  }
 
   return (
     <div className="properties-form">
       <div className="properties-form__heading">
         <div>
           <span>選択中の問題</span>
-          <h2>{question.displayLabel}</h2>
+          <h2>{questionHierarchyDisplayLabel(hierarchy)}</h2>
         </div>
         <div className="properties-form__badges">
           {question.answerProvenance === "provided_model_answer" ? (
@@ -1799,30 +1732,68 @@ export function QuestionProperties({
           <p>{warning}</p>
         </InlineAlert>
       ))}
-      {!readOnly && needsProposalVerification(question) ? (
-        <div className="proposal-question-action">
-          <div>
-            <strong>この問題を確認</strong>
-            <small>
-              内容を確認したら、この問題と解答候補をまとめて確認済みにします。
-            </small>
-          </div>
+      {!readOnly && substantiveWarnings(question).length > 0 ? (
+        <div className="button-row">
           <Button
             size="small"
-            onClick={onAccept}
-            disabled={accepting || acceptDisabled}
+            variant="secondary"
+            disabled={disableContextChanges}
+            onClick={onResolveExtractionReviewIssues}
           >
-            {accepting ? "確認中…" : "確認済みにする"}
+            AI警告を解決済みにする
           </Button>
+          <small>原本と修正内容を照合した後に使用します。</small>
         </div>
       ) : null}
-      <div className="form-grid form-grid--label-points">
-        <Field label="番号・ラベル" htmlFor="question-label">
+      <div className="form-grid form-grid--2">
+        <Field
+          label="大問"
+          htmlFor="major-question-label"
+          hint="任意。大問は範囲だけを表し、配点は持ちません。"
+        >
           <input
-            id="question-label"
-            value={question.displayLabel}
+            id="major-question-label"
+            value={hierarchy.majorQuestionLabel || ""}
             disabled={readOnly}
-            onChange={(event) => onChange({ displayLabel: event.target.value })}
+            placeholder="例：大問1"
+            onChange={(event) =>
+              updateHierarchy({ majorQuestionLabel: event.target.value || null })
+            }
+          />
+        </Field>
+        <Field
+          label="中問"
+          htmlFor="middle-question-label"
+          required
+          hint={
+            hierarchy.minorQuestionLabel
+              ? "この中問は小問をまとめる範囲です。"
+              : "小問がない場合、この中問に配点が付きます。"
+          }
+        >
+          <input
+            id="middle-question-label"
+            value={hierarchy.middleQuestionLabel}
+            disabled={readOnly}
+            placeholder="例：問1"
+            onChange={(event) =>
+              updateHierarchy({ middleQuestionLabel: event.target.value })
+            }
+          />
+        </Field>
+        <Field
+          label="小問"
+          htmlFor="minor-question-label"
+          hint="任意。設定した場合は小問に配点が付き、中問は範囲になります。"
+        >
+          <input
+            id="minor-question-label"
+            value={hierarchy.minorQuestionLabel || ""}
+            disabled={readOnly}
+            placeholder="例：(1)"
+            onChange={(event) =>
+              updateHierarchy({ minorQuestionLabel: event.target.value || null })
+            }
           />
         </Field>
         <Field label="配点" htmlFor="question-points">
@@ -1882,7 +1853,11 @@ export function QuestionProperties({
         </select>
       </Field>
       <Field
-        label={question.questionType === "subjective" ? "模範解答" : "正解"}
+        label={
+          question.questionType === "subjective"
+            ? "主な模範解答"
+            : "主な正解"
+        }
         htmlFor="canonical-answer"
         required
       >
@@ -1899,7 +1874,7 @@ export function QuestionProperties({
         <Field
           label="採点基準"
           htmlFor="question-rubric"
-          hint="部分点を認める場合は、点数と条件を明記します。"
+          hint="先生が追加条件や部分点を設定するときだけ入力します。AIは自動入力しません。"
         >
           <textarea
             id="question-rubric"
@@ -1988,9 +1963,9 @@ export function QuestionProperties({
             <small>通常は1点です。配点を割り切れる値にします。</small>
           </Field>
           <Field
-            label="正解として認める別表記"
+            label="別の模範解答・正解（複数可）"
             htmlFor="answer-variants"
-            hint="必要な場合だけ、1行に1つ入力します。"
+            hint="主な正解と同じく完全に正しい別解を、1行に1つ入力します。"
           >
             <textarea
               id="answer-variants"
@@ -2059,6 +2034,26 @@ export function QuestionProperties({
               </small>
             </span>
           </label>
+          {onApplyKanjiRequirementToAll ? (
+            <Button
+              type="button"
+              size="small"
+              variant="secondary"
+              disabled={
+                readOnly ||
+                applyingKanjiRequirementToAll ||
+                disableContextChanges
+              }
+              onClick={() =>
+                !disableContextChanges &&
+                onApplyKanjiRequirementToAll(isKanjiRequired(question))
+              }
+            >
+              {applyingKanjiRequirementToAll
+                ? "すべてに適用中…"
+                : "この漢字必須設定をすべての問題に適用"}
+            </Button>
+          ) : null}
           {!question.allowNonKanji ? (
             <Field
               label="漢字必須の例外（読み）"
@@ -2117,16 +2112,9 @@ export function QuestionProperties({
             <textarea
               id="teacher-note"
               rows={2}
-              value={customTeacherNote(question)}
+              value={question.teacherNote || ""}
               disabled={readOnly}
-              onChange={(event) =>
-                onChange({
-                  teacherNote: mergeCustomTeacherNote(
-                    question,
-                    event.target.value,
-                  ),
-                })
-              }
+              onChange={(event) => onChange({ teacherNote: event.target.value })}
             />
           </Field>
         </div>
@@ -2136,8 +2124,10 @@ export function QuestionProperties({
 }
 
 export function questionPayload(question: TemplateQuestion, verify = false) {
+  const hierarchy = normalizedQuestionHierarchy(question);
   return {
     displayLabel: question.displayLabel,
+    ...hierarchy,
     order: question.order,
     questionText: question.questionText,
     questionType: question.questionType,
@@ -2156,6 +2146,7 @@ export function questionPayload(question: TemplateQuestion, verify = false) {
     canonicalAnswer: question.canonicalAnswer,
     rubric: question.rubric,
     teacherNote: question.teacherNote,
+    kanjiPolicyNote: question.kanjiPolicyNote,
     requiresReviewAlways: question.requiresReviewAlways,
     teacherVerified: verify ? true : question.teacherVerified,
   };

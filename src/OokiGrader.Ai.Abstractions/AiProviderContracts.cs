@@ -16,6 +16,7 @@ public static class AiProviders
 /// </summary>
 public static partial class AiProviderCatalog
 {
+    public const string GeminiDefaultModelId = "gemini-3.7-flash";
     public const string GeminiEndpointProfile = "googleGenerativeLanguage";
     public const string OpenRouterEndpointProfile = "openRouterChatCompletions";
     public const string DeepSeekV4FlashModelId =
@@ -80,6 +81,21 @@ public static partial class AiProviderCatalog
             StringComparison.OrdinalIgnoreCase)
         || modelId.StartsWith(
             DeepSeekV4FlashModelId + ":",
+            StringComparison.OrdinalIgnoreCase);
+
+    public static bool SupportsMinimalThinking(
+        string provider,
+        string modelId) =>
+        !(provider == AiProviders.GeminiDirect
+            && IsGemini37FlashFamily(modelId));
+
+    public static bool IsGemini37FlashFamily(string modelId) =>
+        string.Equals(
+            modelId,
+            GeminiDefaultModelId,
+            StringComparison.OrdinalIgnoreCase)
+        || modelId.StartsWith(
+            GeminiDefaultModelId + "-",
             StringComparison.OrdinalIgnoreCase);
 
     public static bool IsConnectionShapeValid(

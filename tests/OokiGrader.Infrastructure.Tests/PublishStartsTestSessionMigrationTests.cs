@@ -14,6 +14,10 @@ public sealed class PublishStartsTestSessionMigrationTests
         "20260810190000_0021_BulkTranscriptExportHardening";
     private const string Migration0022 =
         "20260811000000_0022_PublishStartsTestSession";
+    private const string Migration0023 =
+        "20260827220405_0023_ConfigurableGeminiModel";
+    private const string Migration0024 =
+        "20260827223000_0024_QuestionHierarchy";
 
     [Fact]
     public async Task Migration0022IsAdditiveTriggerSafeAndRoundTripsFrom0021()
@@ -211,7 +215,9 @@ public sealed class PublishStartsTestSessionMigrationTests
             Assert.Contains(
                 Migration0022,
                 await context.Database.GetAppliedMigrationsAsync());
-            Assert.Empty(await context.Database.GetPendingMigrationsAsync());
+            Assert.Equal(
+                [Migration0023, Migration0024],
+                await context.Database.GetPendingMigrationsAsync());
             Assert.False(context.Database.HasPendingModelChanges());
         }
         finally

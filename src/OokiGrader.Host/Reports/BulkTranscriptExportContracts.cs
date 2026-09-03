@@ -115,8 +115,27 @@ internal static class BulkTranscriptSelectionResolver
         OokiGraderDbContext db,
         HttpContext context,
         BulkTranscriptExportSelector? selector,
+        CancellationToken cancellationToken) =>
+        await ResolveAsync(
+                db,
+                context,
+                selector,
+                MaximumStudents,
+                MaximumResults,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    public static async Task<BulkTranscriptSelection> ResolveAsync(
+        OokiGraderDbContext db,
+        HttpContext context,
+        BulkTranscriptExportSelector? selector,
+        int maximumStudents,
+        int maximumResults,
         CancellationToken cancellationToken)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStudents, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumResults, 1);
+
         if (selector is null)
         {
             throw Invalid(
@@ -148,7 +167,9 @@ internal static class BulkTranscriptSelectionResolver
         IReadOnlyList<string>? requestedIds = null;
         if (hasIds)
         {
-            requestedIds = ValidateSubmissionIds(selector.SubmissionIds!);
+            requestedIds = ValidateSubmissionIds(
+                selector.SubmissionIds!,
+                maximumResults);
             var ids = requestedIds.ToArray();
             query = query.Where(item => ids.Contains(item.Id));
             normalizedSelector = new
@@ -182,15 +203,15 @@ internal static class BulkTranscriptSelectionResolver
         }
 
         var rows = await query
-            .Take(MaximumResults + 1)
+            .Take(maximumResults + 1)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        if (rows.Count > MaximumResults)
+        if (rows.Count > maximumResults)
         {
             throw Invalid(
                 "bulk_export_result_limit_exceeded",
-                $"一度に出力できる結果は{MaximumResults}件までです。条件を絞り込んでください。");
+                $"一度に出力できる結果は{maximumResults}件までです。条件を絞り込んでください。");
         }
 
         var nonExportableIds = rows
@@ -243,11 +264,11 @@ internal static class BulkTranscriptSelectionResolver
             .Select(item => item.AssignedStudentId!)
             .Distinct(StringComparer.Ordinal)
             .Count();
-        if (studentCount > MaximumStudents)
+        if (studentCount > maximumStudents)
         {
             throw Invalid(
                 "bulk_export_student_limit_exceeded",
-                $"一度に出力できる生徒は{MaximumStudents}名までです。条件を絞り込んでください。");
+                $"一度に出力できる生徒は{maximumStudents}名までです。条件を絞り込んでください。");
         }
 
         var candidates = rows.Select(item =>
@@ -310,7 +331,8 @@ internal static class BulkTranscriptSelectionResolver
     }
 
     private static List<string> ValidateSubmissionIds(
-        IReadOnlyList<string> submissionIds)
+        IReadOnlyList<string> submissionIds,
+        int maximumResults)
     {
         if (submissionIds.Count == 0)
         {
@@ -319,11 +341,11 @@ internal static class BulkTranscriptSelectionResolver
                 "少なくとも1件の確定結果を選択してください。");
         }
 
-        if (submissionIds.Count > MaximumResults)
+        if (submissionIds.Count > maximumResults)
         {
             throw Invalid(
                 "bulk_export_result_limit_exceeded",
-                $"一度に出力できる結果は{MaximumResults}件までです。");
+                $"一度に出力できる結果は{maximumResults}件までです。");
         }
 
         var normalized = new List<string>(submissionIds.Count);

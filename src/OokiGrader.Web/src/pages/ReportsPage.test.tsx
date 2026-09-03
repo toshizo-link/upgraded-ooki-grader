@@ -22,6 +22,36 @@ const queryState = vi.hoisted(() => ({
     classLabel?: string;
   }>,
 }));
+const matrixState = vi.hoisted(() => ({
+  data: {
+    passMarkBasisPoints: 6000,
+    sourceFingerprint: "matrix-source",
+    students: [
+      {
+        id: "student-1",
+        displayName: "佐藤 花子",
+        studentNumber: "S001",
+        gradeLabel: "4年",
+        classLabel: "A組",
+      },
+    ],
+    tests: [
+      { id: "session-1", title: "4年理科 HOP", testDate: "2026-08-01" },
+    ],
+    results: [
+      {
+        submissionId: "submission-1",
+        studentId: "student-1",
+        testSessionId: "session-1",
+        earnedPointsMilli: 80_000,
+        possiblePointsMilli: 100_000,
+        percentageBasisPoints: 8000,
+        status: "pass",
+      },
+    ],
+  },
+  reload: vi.fn(),
+}));
 const apiState = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
@@ -32,21 +62,29 @@ vi.mock("../auth/SessionContext", () => ({
 }));
 
 vi.mock("../hooks/useApiQuery", () => ({
-  useApiQuery: () => ({
-    data: {
-      items: queryState.items,
-      nextCursor: null,
-      totalApproximate: queryState.items.length,
-      facets: {
-        students: [{ value: "student-1", label: "佐藤 花子", count: 2 }],
-        templates: [{ value: "template-1", label: "4年理科 HOP", count: 2 }],
-        subjects: [{ value: "理科", label: "理科", count: 2 }],
-      },
-    },
-    error: undefined,
-    status: "success" as const,
-    reload: vi.fn(),
-  }),
+  useApiQuery: (key: string) =>
+    key.startsWith("pass-fail-matrix:")
+      ? {
+          data: matrixState.data,
+          error: undefined,
+          status: "success" as const,
+          reload: matrixState.reload,
+        }
+      : {
+          data: {
+            items: queryState.items,
+            nextCursor: null,
+            totalApproximate: queryState.items.length,
+            facets: {
+              students: [{ value: "student-1", label: "佐藤 花子", count: 2 }],
+              templates: [{ value: "template-1", label: "4年理科 HOP", count: 2 }],
+              subjects: [{ value: "理科", label: "理科", count: 2 }],
+            },
+          },
+          error: undefined,
+          status: "success" as const,
+          reload: vi.fn(),
+        },
 }));
 
 vi.mock("../lib/api", async () => {
@@ -66,6 +104,7 @@ beforeEach(() => {
   queryState.items = [makeResult("submission-1", "4年理科 HOP")];
   apiState.get.mockReset();
   apiState.post.mockReset();
+  matrixState.reload.mockReset();
 });
 
 afterEach(() => {
@@ -75,6 +114,30 @@ afterEach(() => {
 });
 
 describe("ReportsPage bulk result export", () => {
+  it("shows a live pass/fail matrix and provides browser PDF export", () => {
+    const print = vi.fn();
+    Object.defineProperty(window, "print", {
+      configurable: true,
+      value: print,
+    });
+    renderPage();
+
+    expect(screen.getByRole("heading", { name: "合否表" })).toBeVisible();
+    expect(screen.getByText("合格 1件")).toBeVisible();
+    expect(screen.getByText("80 / 100")).toBeVisible();
+    expect(screen.getByText("合格 80%" )).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "合否表をPDF出力" }));
+    expect(print).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(
+      new CustomEvent("ooki:status", {
+        detail: { type: "submission.status" },
+      }),
+    );
+    expect(matrixState.reload).toHaveBeenCalledOnce();
+  });
+
   it("previews and confirms the exact checked result IDs before creating", async () => {
     apiState.post.mockImplementation((path: string) => {
       if (path.endsWith(":preview")) return Promise.resolve(makePreview());

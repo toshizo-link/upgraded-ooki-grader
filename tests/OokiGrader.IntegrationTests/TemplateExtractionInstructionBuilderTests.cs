@@ -6,10 +6,10 @@ namespace OokiGrader.IntegrationTests;
 public sealed class TemplateExtractionInstructionBuilderTests
 {
     [Theory]
-    [InlineData(TestType.Hop, null, TemplatePromptSystem.Standard, "system-1-standard-v1")]
-    [InlineData(TestType.Step, null, TemplatePromptSystem.Standard, "system-1-standard-v1")]
+    [InlineData(TestType.Hop, null, TemplatePromptSystem.Standard, "system-1-standard-v2")]
+    [InlineData(TestType.Step, null, TemplatePromptSystem.Standard, "system-1-standard-v2")]
     [InlineData(TestType.ClassPlacement, null, TemplatePromptSystem.ClassPlacement, "system-2-class-placement-v1")]
-    [InlineData(TestType.Other, AnswerStyle.Normal, TemplatePromptSystem.Standard, "system-1-standard-v1")]
+    [InlineData(TestType.Other, AnswerStyle.Normal, TemplatePromptSystem.Standard, "system-1-standard-v2")]
     [InlineData(TestType.Other, AnswerStyle.FillBlank, TemplatePromptSystem.FillBlank, "system-3-fill-blank-v1")]
     public void SelectsOnlyServerRoutedPromptFragment(
         TestType testType,
@@ -26,7 +26,7 @@ public sealed class TemplateExtractionInstructionBuilderTests
             rotationsWereApplied: false);
 
         Assert.Contains("orientation-gate-v1", built.UserInstruction);
-        Assert.Contains("common-extraction-core-v2", built.UserInstruction);
+        Assert.Contains("common-extraction-core-v3", built.UserInstruction);
         Assert.Contains(expectedFragment, built.UserInstruction);
         Assert.Contains("paper-name-and-grade-v1", built.UserInstruction);
         Assert.DoesNotContain("display_name", built.UserInstruction,

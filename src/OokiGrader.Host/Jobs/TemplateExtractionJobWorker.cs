@@ -9,6 +9,7 @@ using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Domain.Grading;
+using OokiGrader.Domain.Templates;
 using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
@@ -1720,6 +1721,12 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 {
                     warnings.Add("正答が未解決です。先生が入力してください。");
                 }
+                var hierarchy = new QuestionHierarchy(
+                    proposal.MajorQuestionLabel,
+                    string.IsNullOrWhiteSpace(proposal.MiddleQuestionLabel)
+                        ? proposal.DisplayLabel
+                        : proposal.MiddleQuestionLabel,
+                    proposal.MinorQuestionLabel);
 
                 var question = new QuestionEntity
                 {
@@ -1729,6 +1736,10 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                         now.AddTicks(1_000L + questionOrdinal)),
                     OrderIndex = questionOrdinal,
                     DisplayLabel = proposal.DisplayLabel,
+                    MajorQuestionLabel = hierarchy.MajorQuestionLabel,
+                    MiddleQuestionLabel = hierarchy.MiddleQuestionLabel,
+                    MinorQuestionLabel = hierarchy.MinorQuestionLabel,
+                    HierarchyPathKey = hierarchy.PathKey,
                     QuestionText = proposal.QuestionText,
                     QuestionType = proposal.QuestionType,
                     GradingMode = GradingModeFor(proposal.QuestionType),
@@ -1742,13 +1753,10 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                         proposal.RequiresCompleteAnswerSuggestion,
                     AnswerOrderInsensitive =
                         proposal.AnswerOrderInsensitiveSuggestion,
-                    RubricText =
-                        QuestionGradingDefaultPolicy.BuildDefaultRubric(
-                            proposal.QuestionType,
-                            proposal.ExpectedAnswer),
-                    KanjiPolicyNote =
-                        "AIによる表記方針の提案です。先生の確認が必要です。",
-                    TeacherNote = BoundedTeacherNote(warnings),
+                    RubricText = null,
+                    KanjiPolicyNote = null,
+                    TeacherNote = null,
+                    ExtractionReviewJson = BoundedExtractionReviewJson(warnings),
                     RequiresReviewAlways = RequiresPermanentReview(proposal),
                     AiConfidenceBasisPoints = confidence,
                     TeacherVerified = false,
@@ -2138,7 +2146,10 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             || profile.PromptVersion != bundle.PromptVersion
             || profile.SchemaVersion != bundle.SchemaVersion
             || profile.PromptContentHash != bundle.ContentHash
-            || profile.ThinkingLevel != "medium"
+            || profile.ThinkingLevel != AiProviderRuntime.DefaultThinkingLevel(
+                profile.AiConnection.Provider,
+                profile.ModelId,
+                profile.TaskType)
             || profile.ProcessingStrategy is not (
                 "queued_standard" or "expedite_standard"))
         {
@@ -2394,12 +2405,27 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             boxes. A filled name box or a handwritten score is not an answer slot.
             Cross-check every counted slot against a printed curricular prompt.
             Set detected_answer_slot_count to that inventory count, then return
-            exactly one question object for every curricular slot in visual reading
-            order. Never omit a curricular slot merely to make the count and question
-            array agree; instead re-check whether an unmatched field is administrative.
-            answer_slot_ordinal must be the consecutive 1-based slot position and
-            answer_slot_count must be 1. Never combine two blanks into one object,
-            even when they share a sentence, concept, printed number, or answer.
+            one object per point-rewarding scoring unit in visual reading order.
+            answer_slot_ordinal is the first consecutive 1-based physical slot in
+            that scoring unit. answer_slot_count is normally 1. It may be greater
+            than 1 only when one 中問 visibly scores consecutive child responses as
+            a unit (for example, a printed 完答 instruction); those child 小問 must
+            not also be returned as point-rewarding objects. When 中問 is only a
+            scope, every independently scored 小問 is its own object with count 1.
+            Never omit a curricular slot merely to make the inventory agree.
+
+            Use a unified hierarchy for every scoring unit:
+            major_question_label is the printed 大問 label or null;
+            middle_question_label is always required and is the printed 中問 label,
+            or the flat scoring label when the paper has no hierarchy;
+            minor_question_label is the printed 小問 label only when that 小問
+            independently awards points. 大問 is scope-only and never awards
+            points. If minor_question_label is null, points belong to 中問. If it
+            is present, 中問 is a scope and points belong to 小問. Never return a
+            direct 大問-to-小問 relationship. Preserve unusual original groupings
+            rather than forcing them into an example pattern. Tables, diagrams,
+            ordinary fill-ins, Q&A, choices, and mixed pages all use these same
+            rules.
 
             Preserve each visible printed Japanese question label exactly in
             display_label. Printed labels may repeat across subsections or within
@@ -2426,10 +2452,11 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             answer, handwriting, or any other visible filled response inside that
             token or elsewhere as part of question_text. Set filled_answer_removed
             true only after doing this; use true for an already-empty source slot.
-            If one printed sentence contains several blanks, emit several question
-            objects: each object focuses on one slot and replaces only its target
-            with ［　］, while other slots are described as context without copying
-            their filled responses. Do not use multi_part to merge physical slots.
+            If one printed sentence contains several independently scored blanks,
+            emit several 小問 objects: each focuses on one slot and replaces only
+            its target with ［　］. If the paper explicitly awards points to the 中問
+            only, emit one 中問 object, keep one ［　］ per represented physical slot,
+            and set answer_slot_count accordingly.
 
             Apply source-role provenance mechanically, not by judgment:
             blank_test without an authoritative answer source => ai_proposed and
@@ -2468,6 +2495,12 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             unmatched, or conflicting, return unavailable and a warning. Put any
             independent comparison only in warnings.
 
+            expected_answer is one complete model answer. accepted_variants is
+            reserved for other independently complete, equally correct model
+            answers. Never put answer fragments, components, explanations, or
+            scoring criteria in accepted_variants. The grading system treats every
+            returned variant as a valid full answer.
+
             Suggested accepted variants are unverified proposals. Use zero points
             only when printed points cannot be determined; the application will
             apply its configured default. Every AI field remains a teacher-review
@@ -2478,9 +2511,12 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             explicitly requires 完答 or otherwise explicitly says every listed
             component is required for credit. Set
             answer_order_insensitive_suggestion true only when the visible prompt
-            explicitly says 順不同 or that component order does not matter. These
-            flags are independent; do not infer either one merely because an
-            expected answer contains a list. Otherwise return false.
+            explicitly says 順不同 or that component order does not matter. Select
+            allow_non_kanji_suggestion from the visible instruction and assessed
+            response form: false for an explicit 漢字必須 instruction or a task that
+            specifically assesses writing the supplied Kanji; true when kana or
+            other non-Kanji forms are genuinely acceptable. These flags are
+            independent and must describe the original paper, not generic defaults.
 
             Finally reread every question_text against the image at high resolution.
             Remove scan noise and impossible extra kana, but do not paraphrase or
@@ -2706,7 +2742,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
         string sourceId) =>
         sources.Single(item => item.Id == sourceId).Ordinal;
 
-    private static string? BoundedTeacherNote(
+    private static string? BoundedExtractionReviewJson(
         List<string> warnings)
     {
         if (warnings.Count == 0)
@@ -2714,10 +2750,18 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             return null;
         }
 
-        var joined = string.Join(
-            "\n",
-            warnings.Select(warning => $"[AI確認] {warning}"));
-        return joined.Length <= 4_000 ? joined : joined[..4_000];
+        var lines = warnings
+            .Select(warning => $"[AI確認] {warning}")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var value = JsonSerializer.Serialize(lines);
+        while (value.Length > 20_000 && lines.Count > 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+            value = JsonSerializer.Serialize(lines);
+        }
+
+        return lines.Count == 0 ? null : value;
     }
 
     private static async Task<UsageWindow> GetUsageWindowAsync(

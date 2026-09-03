@@ -42,6 +42,7 @@ import type {
 } from "../types";
 
 type ViewerMode = "pdf" | "pages";
+type ResultListMode = "all" | "incorrect";
 
 interface WorkspaceEnvelope {
   workspace: SubmissionGradingWorkspace;
@@ -139,6 +140,19 @@ function SubmissionGradingWorkspaceView({
   const [viewerMode, setViewerMode] = useState<ViewerMode>(
     originalPdfUrl ? "pdf" : "pages",
   );
+  const [resultListMode, setResultListMode] =
+    useState<ResultListMode>("all");
+  const incorrectCount = useMemo(
+    () => sortedResults.filter((result) => result.outcome === "incorrect").length,
+    [sortedResults],
+  );
+  const visibleResults = useMemo(
+    () =>
+      resultListMode === "incorrect"
+        ? sortedResults.filter((result) => result.outcome === "incorrect")
+        : sortedResults,
+    [resultListMode, sortedResults],
+  );
   const [selectedResultId, setSelectedResultId] = useState(
     () =>
       sortedResults.find((result) => isUnresolved(result))?.resultId ||
@@ -146,8 +160,8 @@ function SubmissionGradingWorkspaceView({
       "",
   );
   const selectedResult =
-    sortedResults.find((result) => result.resultId === selectedResultId) ||
-    sortedResults[0];
+    visibleResults.find((result) => result.resultId === selectedResultId) ||
+    visibleResults[0];
   const [selectedPageNumber, setSelectedPageNumber] = useState(
     () => selectedResult?.pageNumbers[0] || sortedPages[0]?.pageNumber || 1,
   );
@@ -184,16 +198,16 @@ function SubmissionGradingWorkspaceView({
   useEffect(() => {
     if (
       selectedResultId &&
-      sortedResults.some((result) => result.resultId === selectedResultId)
+      visibleResults.some((result) => result.resultId === selectedResultId)
     ) {
       return;
     }
     setSelectedResultId(
-      sortedResults.find((result) => isUnresolved(result))?.resultId ||
-        sortedResults[0]?.resultId ||
+      visibleResults.find((result) => isUnresolved(result))?.resultId ||
+        visibleResults[0]?.resultId ||
         "",
     );
-  }, [selectedResultId, sortedResults]);
+  }, [selectedResultId, visibleResults]);
 
   useEffect(() => {
     const next = draftFromResult(selectedResult);
@@ -254,6 +268,13 @@ function SubmissionGradingWorkspaceView({
     if (result.resultId === selectedResult?.resultId) return;
     if (dirty && !window.confirm(UNSAVED_MESSAGE)) return;
     setSelectedResultId(result.resultId);
+  }
+
+  function changeResultListMode(next: ResultListMode) {
+    if (next === resultListMode) return;
+    if (dirty && !window.confirm(UNSAVED_MESSAGE)) return;
+    if (dirty) discardDraft();
+    setResultListMode(next);
   }
 
   function discardDraft() {
@@ -601,9 +622,31 @@ function SubmissionGradingWorkspaceView({
                 未確認 {unresolvedCount}
               </Badge>
             </header>
-            {sortedResults.length ? (
+            <div
+              className="submission-result-filter"
+              role="group"
+              aria-label="採点結果の絞り込み"
+            >
+              <button
+                type="button"
+                className={resultListMode === "all" ? "is-active" : ""}
+                aria-pressed={resultListMode === "all"}
+                onClick={() => changeResultListMode("all")}
+              >
+                すべて {sortedResults.length}
+              </button>
+              <button
+                type="button"
+                className={resultListMode === "incorrect" ? "is-active" : ""}
+                aria-pressed={resultListMode === "incorrect"}
+                onClick={() => changeResultListMode("incorrect")}
+              >
+                不正解のみ {incorrectCount}
+              </button>
+            </div>
+            {visibleResults.length ? (
               <div className="submission-result-list" aria-label="採点結果一覧">
-                {sortedResults.map((result) => (
+                {visibleResults.map((result) => (
                   <button
                     type="button"
                     key={result.resultId}
@@ -632,9 +675,17 @@ function SubmissionGradingWorkspaceView({
               </div>
             ) : (
               <EmptyState
-                icon="file"
-                title="採点結果がありません"
-                description="AI採点が完了すると、全問題の結果がここに表示されます。"
+                icon={resultListMode === "incorrect" ? "check" : "file"}
+                title={
+                  resultListMode === "incorrect"
+                    ? "不正解の問題はありません"
+                    : "採点結果がありません"
+                }
+                description={
+                  resultListMode === "incorrect"
+                    ? "「すべて」に戻すと全問題を確認できます。"
+                    : "AI採点が完了すると、全問題の結果がここに表示されます。"
+                }
               />
             )}
           </Card>

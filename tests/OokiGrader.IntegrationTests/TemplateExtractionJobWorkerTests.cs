@@ -168,9 +168,10 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Null(version.PublishedAt);
         Assert.False(question.TeacherVerified);
         Assert.False(question.RequiresReviewAlways);
+        Assert.Null(question.TeacherNote);
         Assert.Contains(
             "独立比較",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
         Assert.Equal("東京", canonical.AnswerText);
         Assert.Equal("provided_model_answer", canonical.AnswerProvenance);
@@ -206,7 +207,7 @@ public sealed class TemplateExtractionJobWorkerTests
     }
 
     [Fact]
-    public async Task SafeObjectiveDraftAvoidsPermanentReviewButStaysUnverified()
+    public async Task SafeObjectiveDraftIsImmediatelyEditableWithoutConfirmation()
     {
         await using var fixture = await ExtractionFixture.CreateAsync(
             request => CreateResponse(
@@ -232,6 +233,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.False(question.RequiresReviewAlways);
         Assert.False(question.TeacherVerified);
         Assert.False(answer.TeacherVerified);
+        Assert.Null(question.TeacherNote);
     }
 
     [Fact]
@@ -348,7 +350,7 @@ public sealed class TemplateExtractionJobWorkerTests
             {
                 Assert.Equal("基本①", first.DisplayLabel);
                 Assert.Equal("ai_rubric", first.GradingMode);
-                Assert.Contains("ASEAN", first.RubricText, StringComparison.Ordinal);
+                Assert.Null(first.RubricText);
                 Assert.Equal(1_000, first.PointIncrementMilli);
                 Assert.Null(first.QuestionRegionId);
                 Assert.Null(first.AnswerRegionId);
@@ -357,10 +359,7 @@ public sealed class TemplateExtractionJobWorkerTests
             {
                 Assert.Equal("発展③", second.DisplayLabel);
                 Assert.Equal("ai_rubric", second.GradingMode);
-                Assert.Contains(
-                    "天然ゴム中心から機械類中心へ変化した。",
-                    second.RubricText,
-                    StringComparison.Ordinal);
+                Assert.Null(second.RubricText);
                 Assert.Equal(1_000, second.PointIncrementMilli);
                 Assert.Null(second.QuestionRegionId);
                 Assert.Null(second.AnswerRegionId);
@@ -445,15 +444,16 @@ public sealed class TemplateExtractionJobWorkerTests
                     question.QuestionText,
                     StringComparison.Ordinal);
                 Assert.False(question.RequiresReviewAlways);
+                Assert.Null(question.TeacherNote);
                 Assert.Contains(
                     "question.filled_answer_redacted",
-                    question.TeacherNote,
+                    ExtractionReviewText(question),
                     StringComparison.Ordinal);
             });
         Assert.Equal(2, fixture.Provider.Requests.Count);
         var primaryRequest = fixture.Provider.Requests[0];
         Assert.Contains(
-            "every curricular slot",
+            "Use a unified hierarchy for every scoring unit:",
             primaryRequest.UserInstruction,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -803,16 +803,13 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.DoesNotContain("［反射］", question.QuestionText);
         Assert.Contains(
             "question.answer_slots_not_separated",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
         Assert.Contains(
             "question.additional_placeholders_redacted",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
-        Assert.Contains(
-            "question.answer_slot_inventory_mismatch",
-            question.TeacherNote,
-            StringComparison.Ordinal);
+        Assert.Null(question.TeacherNote);
     }
 
     [Fact]
@@ -836,7 +833,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.All(questions, item => Assert.False(item.RequiresReviewAlways));
         Assert.DoesNotContain(
             questions,
-            item => item.TeacherNote?.Contains(
+            item => item.ExtractionReviewJson?.Contains(
                 "question.repeated_printed_label_disambiguated",
                 StringComparison.Ordinal) == true);
     }
@@ -952,8 +949,9 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Equal("光が鏡ではね返される性質。", question.QuestionText);
         Assert.Contains(
             "question.ocr_noise_corrected",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
+        Assert.Null(question.TeacherNote);
         Assert.False(question.RequiresReviewAlways);
     }
 
@@ -980,7 +978,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Equal(original, question.QuestionText);
         Assert.DoesNotContain(
             "question.ocr_noise_corrected",
-            question.TeacherNote ?? string.Empty,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
     }
 
@@ -1078,8 +1076,9 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.False(question.RequiresReviewAlways);
         Assert.Contains(
             "answer.source_conflict_or_ambiguity",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
+        Assert.Null(question.TeacherNote);
         Assert.Equal(3, fixture.Provider.Requests.Count);
         Assert.StartsWith(
             "INTERNAL QUALITY-CONTROL PASS",
@@ -1158,8 +1157,9 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.False(question.RequiresReviewAlways);
         Assert.Contains(
             "answer.supplied_answer_missing",
-            question.TeacherNote,
+            ExtractionReviewText(question),
             StringComparison.Ordinal);
+        Assert.Null(question.TeacherNote);
         Assert.Equal(3, fixture.Provider.Requests.Count);
     }
 
@@ -1341,6 +1341,12 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Single(await db.Questions.AsNoTracking().ToListAsync());
         Assert.Single(await db.AiRequests.AsNoTracking().ToListAsync());
     }
+
+    private static string ExtractionReviewText(QuestionEntity question) =>
+        string.Join(
+            '\n',
+            JsonSerializer.Deserialize<string[]>(
+                question.ExtractionReviewJson ?? "[]") ?? []);
 
     private static AiProviderResponse CreateResponse(
         AiProviderRequest request,

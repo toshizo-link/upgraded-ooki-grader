@@ -14,6 +14,12 @@ namespace OokiGrader.Host.Api;
 
 public static class ReportsEndpoints
 {
+    // The interactive matrix is intentionally independent from ZIP export
+    // limits. It remains bounded for a single browser response while covering
+    // substantially larger school-wide cohorts.
+    private const int PassFailMatrixMaximumStudents = 2_000;
+    private const int PassFailMatrixMaximumResults = 20_000;
+
     public static IEndpointRouteBuilder MapReportsEndpoints(
         this IEndpointRouteBuilder endpoints)
     {
@@ -33,7 +39,187 @@ public static class ReportsEndpoints
                 RegenerateExport)
             .WithTags("Reports")
             .RequireAuthorization("teacher");
+        endpoints.MapGet(
+                "/api/v1/reports/pass-fail-matrix",
+                GetPassFailMatrix)
+            .WithTags("Reports")
+            .RequireAuthorization("results")
+            .RequireRateLimiting("search");
         return endpoints;
+    }
+
+    private static async Task<IResult> GetPassFailMatrix(
+        HttpContext context,
+        string? search,
+        DateOnly? from,
+        DateOnly? to,
+        string? studentId,
+        string? templateId,
+        string? subject,
+        string? category,
+        string? course,
+        string? @class,
+        int? passMarkBasisPoints,
+        OokiGraderDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var passMark = passMarkBasisPoints ?? 6_000;
+        if (passMark is < 0 or > 10_000)
+        {
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status422UnprocessableEntity,
+                "PASS_MARK_INVALID",
+                "合格基準を確認してください",
+                "合格基準は0%から100%の範囲で指定してください。");
+        }
+
+        BulkTranscriptSelection selection;
+        try
+        {
+            selection = await BulkTranscriptSelectionResolver.ResolveAsync(
+                    db,
+                    context,
+                    new BulkTranscriptExportSelector(
+                        SubmissionIds: null,
+                        Filter: new BulkTranscriptExportFilter(
+                            search,
+                            from,
+                            to,
+                            studentId,
+                            templateId,
+                            subject,
+                            category,
+                            course,
+                            @class,
+                            Sort: "studentName")),
+                    PassFailMatrixMaximumStudents,
+                    PassFailMatrixMaximumResults,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (BulkTranscriptSelectionException exception)
+            when (exception.ErrorCode == "bulk_export_selection_empty")
+        {
+            return Results.Ok(new
+            {
+                passMarkBasisPoints = passMark,
+                sourceFingerprint = string.Empty,
+                students = Array.Empty<object>(),
+                tests = Array.Empty<object>(),
+                results = Array.Empty<object>(),
+            });
+        }
+        catch (BulkTranscriptSelectionException exception)
+        {
+            return ApiHelpers.Problem(
+                context,
+                exception.StatusCode,
+                exception.ErrorCode.ToUpperInvariant(),
+                "合否表を作成できません",
+                exception.SafeDetail);
+        }
+
+        var submissionIds = selection.Candidates
+            .Select(item => item.SubmissionId)
+            .ToArray();
+        var submissions = await db.Submissions
+            .AsNoTracking()
+            .Include(item => item.AssignedStudent)
+            .Include(item => item.TestSession)
+                .ThenInclude(item => item.TemplateVersion)
+                    .ThenInclude(item => item.TestTemplate)
+            .Include(item => item.GradingRuns)
+            .Where(item => submissionIds.Contains(item.Id))
+            .ToDictionaryAsync(
+                item => item.Id,
+                StringComparer.Ordinal,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var ordered = selection.Candidates
+            .Select(item => submissions[item.SubmissionId])
+            .ToArray();
+        var students = ordered
+            .GroupBy(item => item.AssignedStudentId!, StringComparer.Ordinal)
+            .Select(group => group.First().AssignedStudent!)
+            .OrderBy(item => item.GradeLabel, StringComparer.Ordinal)
+            .ThenBy(item => item.SchoolClass, StringComparer.Ordinal)
+            .ThenBy(item => item.StudentNumberNormalized, StringComparer.Ordinal)
+            .ThenBy(item => item.DisplayName, StringComparer.Ordinal)
+            .Select(item => new
+            {
+                id = item.Id,
+                item.DisplayName,
+                item.StudentNumber,
+                item.GradeLabel,
+                classLabel = item.SchoolClass,
+            })
+            .ToArray();
+        var tests = ordered
+            .GroupBy(item => item.TestSessionId, StringComparer.Ordinal)
+            .Select(group => group.First().TestSession)
+            .OrderBy(item => item.TestDate)
+            .ThenBy(
+                item => item.TitleOverride
+                    ?? item.TemplateTitleSnapshot
+                    ?? item.TemplateVersion.TestTemplate.Title,
+                StringComparer.Ordinal)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .Select(item => new
+            {
+                id = item.Id,
+                title = item.TitleOverride
+                    ?? item.TemplateTitleSnapshot
+                    ?? item.TemplateVersion.TestTemplate.Title,
+                item.TestDate,
+            })
+            .ToArray();
+        var matrixResults = ordered
+            .GroupBy(
+                item => (item.AssignedStudentId!, item.TestSessionId))
+            .Select(group => group
+                .OrderByDescending(item => item.CanonicalForSession)
+                .ThenByDescending(item => item.FinalizedAt)
+                .ThenByDescending(item => item.Id, StringComparer.Ordinal)
+                .First())
+            .Select(item =>
+            {
+                var run = item.GradingRuns.Single(run =>
+                    run.Id == item.CurrentGradingRunId);
+                var percentage = run.PossiblePointsMilli <= 0
+                    ? (int?)null
+                    : (int)Math.Clamp(
+                        decimal.Round(
+                            run.EarnedPointsMilli * 10_000m
+                                / run.PossiblePointsMilli,
+                            0,
+                            MidpointRounding.AwayFromZero),
+                        0m,
+                        10_000m);
+                return new
+                {
+                    submissionId = item.Id,
+                    studentId = item.AssignedStudentId!,
+                    testSessionId = item.TestSessionId,
+                    run.EarnedPointsMilli,
+                    run.PossiblePointsMilli,
+                    percentageBasisPoints = percentage,
+                    status = percentage is null
+                        ? "unscored"
+                        : percentage >= passMark ? "pass" : "fail",
+                };
+            })
+            .ToArray();
+
+        context.Response.Headers.CacheControl = "private, no-store";
+        return Results.Ok(new
+        {
+            passMarkBasisPoints = passMark,
+            selection.SourceFingerprint,
+            students,
+            tests,
+            results = matrixResults,
+        });
     }
 
     private static async Task<IResult> CreateExport(

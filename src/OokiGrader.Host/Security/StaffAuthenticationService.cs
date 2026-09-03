@@ -71,6 +71,9 @@ public sealed class StaffAuthenticationService(
     TimeProvider timeProvider,
     IConfiguration configuration) : IStaffAuthenticationService
 {
+    internal const int DefaultSessionIdleMinutes = 30 * 24 * 60;
+    internal const int DefaultSessionAbsoluteHours = 90 * 24;
+
     public async Task<AuthenticatedStaff?> ResolveAsync(
         string sessionToken,
         CancellationToken cancellationToken = default)
@@ -96,12 +99,22 @@ public sealed class StaffAuthenticationService(
             return null;
         }
 
-        var idleMinutes = configuration.GetValue("Security:SessionIdleMinutes", 30);
-        if (session.LastSeenAt <= now.AddMinutes(-1))
+        var idleMinutes = GetIdleMinutes(configuration);
+        var absoluteHours = GetAbsoluteHours(configuration);
+        var usesLegacyAbsoluteLimit = session.AbsoluteExpiresAt
+            <= session.CreatedAt.AddHours(24);
+        if (usesLegacyAbsoluteLimit)
+        {
+            session.AbsoluteExpiresAt = session.CreatedAt.AddHours(
+                absoluteHours);
+        }
+
+        if (usesLegacyAbsoluteLimit
+            || session.LastSeenAt <= now.AddMinutes(-1))
         {
             session.LastSeenAt = now;
             session.IdleExpiresAt = Min(
-                now.AddMinutes(Math.Clamp(idleMinutes, 5, 720)),
+                now.AddMinutes(idleMinutes),
                 session.AbsoluteExpiresAt);
             await db.SaveChangesAsync(cancellationToken);
         }
@@ -214,14 +227,8 @@ public sealed class StaffAuthenticationService(
         }
 
         var pair = tokens.Create();
-        var idleMinutes = Math.Clamp(
-            configuration.GetValue("Security:SessionIdleMinutes", 30),
-            5,
-            720);
-        var absoluteHours = Math.Clamp(
-            configuration.GetValue("Security:SessionAbsoluteHours", 12),
-            1,
-            24);
+        var idleMinutes = GetIdleMinutes(configuration);
+        var absoluteHours = GetAbsoluteHours(configuration);
         var absoluteExpiresAt = now.AddHours(absoluteHours);
         var session = new StaffSessionEntity
         {
@@ -349,6 +356,22 @@ public sealed class StaffAuthenticationService(
             .Normalize(NormalizationForm.FormKC)
             .Trim()
             .ToUpperInvariant();
+
+    private static int GetIdleMinutes(IConfiguration configuration) =>
+        Math.Clamp(
+            configuration.GetValue(
+                "Security:SessionIdleMinutes",
+                DefaultSessionIdleMinutes),
+            DefaultSessionIdleMinutes,
+            365 * 24 * 60);
+
+    private static int GetAbsoluteHours(IConfiguration configuration) =>
+        Math.Clamp(
+            configuration.GetValue(
+                "Security:SessionAbsoluteHours",
+                DefaultSessionAbsoluteHours),
+            30 * 24,
+            365 * 24);
 
     private static AuthenticatedStaff ToAuthenticatedStaff(StaffSessionEntity session) =>
         ToAuthenticatedStaff(session, session.StaffUser);

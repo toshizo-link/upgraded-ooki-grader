@@ -3,6 +3,7 @@ using System.Text;
 using System.Globalization;
 using OokiGrader.Reports.Pdf;
 using PdfSharp.Pdf.IO;
+using PdfSharp.Pdf;
 
 namespace OokiGrader.Reports.Pdf.Tests;
 
@@ -57,6 +58,36 @@ public sealed class ResultPdfRendererTests
     }
 
     [Fact]
+    public void OriginalAnswerPagesArePrependedToTheCompactTranscript()
+    {
+        var report = CreateReport(questionCount: 3, longQuestions: false) with
+        {
+            OriginalScanSha256 = new string('a', 64),
+        };
+        var transcript = new ResultPdfRenderer().Render(report);
+        using var originalDocument = new PdfDocument();
+        originalDocument.AddPage();
+        originalDocument.AddPage();
+        using var originalBytes = new MemoryStream();
+        originalDocument.Save(originalBytes, closeStream: false);
+        originalBytes.Position = 0;
+
+        var combined = ResultPdfComposer.PrependOriginal(
+            originalBytes,
+            transcript,
+            report);
+
+        Assert.Equal(transcript.PageCount + 2, combined.PageCount);
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(combined.PdfBytes))
+                .ToLowerInvariant(),
+            combined.Sha256);
+        using var parsed = PdfReader.Open(
+            new MemoryStream(combined.PdfBytes, writable: false));
+        Assert.Equal(combined.PageCount, parsed.PageCount);
+    }
+
+    [Fact]
     public void SourceHashChangesForCorrectionButNotReportIdentifier()
     {
         var report = CreateReport(questionCount: 1, longQuestions: false);
@@ -82,6 +113,24 @@ public sealed class ResultPdfRendererTests
         Assert.NotEqual(
             ResultReportSourceHasher.Compute(report),
             ResultReportSourceHasher.Compute(correction));
+        Assert.NotEqual(
+            ResultReportSourceHasher.Compute(report),
+            ResultReportSourceHasher.Compute(report with
+            {
+                StudentClassLabel = "6年A組",
+            }));
+        Assert.NotEqual(
+            ResultReportSourceHasher.Compute(report),
+            ResultReportSourceHasher.Compute(report with
+            {
+                Questions =
+                [
+                    report.Questions[0] with
+                    {
+                        ModelAnswers = ["おおき", "たいぼく"],
+                    },
+                ],
+            }));
     }
 
     [Fact]

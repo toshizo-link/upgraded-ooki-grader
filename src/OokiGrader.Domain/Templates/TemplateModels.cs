@@ -42,6 +42,61 @@ public enum GradingMode
     Manual,
 }
 
+/// <summary>
+/// Identifies the printed question hierarchy for one point-rewarding item.
+/// 大問 is always a scope. A row without 小問 awards points at 中問; a row with
+/// 小問 awards points at 小問 and its 中問 is a scope. This makes a direct
+/// 大問-to-小問 relationship unrepresentable by design.
+/// </summary>
+public sealed record QuestionHierarchy
+{
+    public QuestionHierarchy(
+        string? majorQuestionLabel,
+        string middleQuestionLabel,
+        string? minorQuestionLabel = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(middleQuestionLabel);
+
+        MajorQuestionLabel = NormalizeOptional(majorQuestionLabel);
+        MiddleQuestionLabel = middleQuestionLabel.Trim();
+        MinorQuestionLabel = NormalizeOptional(minorQuestionLabel);
+    }
+
+    public string? MajorQuestionLabel { get; }
+
+    public string MiddleQuestionLabel { get; }
+
+    public string? MinorQuestionLabel { get; }
+
+    public bool AwardsPointsAtMiddleQuestion => MinorQuestionLabel is null;
+
+    /// <summary>
+    /// Identifies the 中問 scoring scope independently of whether points are
+    /// awarded by the 中問 itself or by one of its 小問 children.
+    /// </summary>
+    public string MiddleScopeKey => string.Join(
+        "\u001f",
+        MajorQuestionLabel ?? string.Empty,
+        MiddleQuestionLabel);
+
+    public string PathKey => string.Join(
+        "\u001f",
+        MajorQuestionLabel ?? string.Empty,
+        MiddleQuestionLabel,
+        MinorQuestionLabel ?? string.Empty);
+
+    public string DisplayPath => string.Join(
+        " ",
+        new[] { MajorQuestionLabel, MiddleQuestionLabel, MinorQuestionLabel }
+            .Where(value => value is not null));
+
+    public static QuestionHierarchy FromLegacyLabel(string displayLabel) =>
+        new(null, displayLabel);
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
 public static class QuestionGradingDefaults
 {
     public static GradingMode For(QuestionType questionType) =>

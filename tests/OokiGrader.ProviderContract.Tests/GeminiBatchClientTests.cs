@@ -130,7 +130,7 @@ public sealed class GeminiBatchClientTests
             "upload, finalize",
             requests[1].Headers["X-Goog-Upload-Command"]);
         Assert.Equal(
-            "/v1beta/models/gemini-3.5-flash-lite:batchGenerateContent",
+            $"/v1beta/models/{AiProviderCatalog.GeminiDefaultModelId}:batchGenerateContent",
             requests[2].Uri.AbsolutePath);
         Assert.DoesNotContain(
             requests[2].Headers.Keys,

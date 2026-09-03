@@ -40,6 +40,12 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         action=extract, report zero for every supplied page, and continue with the
         selected extraction system in this same response.
 
+        Preserve the paper's 大問/中問/小問 hierarchy. 大問 is always a scope.
+        Every scoring unit has a 中問; it either awards points itself or scopes
+        independently scored 小問. A 小問 can never bypass 中問. Respect the visible
+        original structure across tables, diagrams, fill-ins, Q&A, choices, and
+        unusual mixed layouts instead of imposing a preferred example layout.
+
         When the task instruction and source manifest show that no authoritative
         answer source exists, you may use your own subject-matter knowledge only
         to propose a non-authoritative expected answer. Such an answer must be
@@ -56,7 +62,9 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         every returned character with the writing inside the physical answer
         boundary: visible みず must remain みず, never 水. An expected_answer is one
         complete answer; never splice a kana proposal and a Kanji proposal into
-        a hybrid string. Return only JSON matching the
+        a hybrid string. Treat expected_answer and every accepted_variants entry
+        as separate, independently complete model answers, never as fragments of
+        one answer. Return only JSON matching the
         supplied schema, with exactly the requested opaque identifiers and no
         unknown identifiers.
         """;
@@ -96,6 +104,13 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         Use partial only when the supplied rubric permits partial credit, and
         then use a permitted intermediate increment. Do not invent a different
         point increment.
+
+        Treat grading-option fields as binding grading criteria alongside any
+        non-empty teacher rubric. Each accepted answer is a separate, complete,
+        equally valid model answer; never concatenate accepted answers or assume
+        the first is preferred. A null rubric means the teacher supplied no extra
+        criteria. Enforce Kanji, complete-answer, and order-insensitive options
+        exactly as supplied.
         """;
 
     private const string SubmissionAnalysisSystemInstruction =
@@ -504,6 +519,18 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                       "properties": {
                         "source_key": { "type": "string" },
                         "display_label": { "type": "string" },
+                        "major_question_label": {
+                          "type": ["string", "null"],
+                          "description": "Printed 大問 label when present. 大問 is scope-only and never the scoring level."
+                        },
+                        "middle_question_label": {
+                          "type": "string",
+                          "description": "Required 中問 label. This is the scoring level when minor_question_label is null; otherwise it is the immediate scope of the 小問."
+                        },
+                        "minor_question_label": {
+                          "type": ["string", "null"],
+                          "description": "Printed 小問 label only when that 小問 independently awards points. Never return 小問 without 中問."
+                        },
                         "question_text": { "type": "string" },
                         "answer_slot_ordinal": {
                           "type": "integer",
@@ -515,7 +542,7 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 20,
-                          "description": "Physical writable slots represented by this question. A safe result is exactly 1; never merge slots."
+                          "description": "Consecutive physical writable slots represented by this scoring unit. Use more than 1 only when one point-rewarding 中問 explicitly scores its child responses jointly; independently scored 小問 must each be separate."
                         },
                         "filled_answer_removed": {
                           "type": "boolean",
@@ -551,7 +578,8 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                         },
                         "accepted_variants": {
                           "type": "array",
-                          "items": { "type": "string" }
+                          "items": { "type": "string" },
+                          "description": "Other independently complete, equally correct model answers. Never fragments, answer components, notes, or rubric text."
                         },
                         "suggested_points_milli": { "type": "integer" },
                         "allow_non_kanji_suggestion": { "type": "boolean" },
@@ -567,6 +595,9 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                       "required": [
                         "source_key",
                         "display_label",
+                        "major_question_label",
+                        "middle_question_label",
+                        "minor_question_label",
                         "question_text",
                         "answer_slot_ordinal",
                         "answer_slot_count",

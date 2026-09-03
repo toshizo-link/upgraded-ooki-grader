@@ -39,7 +39,10 @@ internal sealed record CanonicalTemplateGenerationQuestion(
     bool RequiresTeacherAnswer,
     double Confidence,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<TemplateExtractionReviewIssue> ReviewIssues);
+    IReadOnlyList<TemplateExtractionReviewIssue> ReviewIssues,
+    string? MajorQuestionLabel = null,
+    string? MiddleQuestionLabel = null,
+    string? MinorQuestionLabel = null);
 
 internal static class TemplateGenerationDraftFactory
 {
@@ -79,7 +82,10 @@ internal static class TemplateGenerationDraftFactory
                         question.RequiresTeacherAnswer,
                         question.Confidence,
                         question.Warnings,
-                        question.ReviewIssues))
+                        question.ReviewIssues,
+                        question.MajorQuestionLabel,
+                        question.MiddleQuestionLabel,
+                        question.MinorQuestionLabel))
                     .ToArray()))
                 .ToArray(),
             extraction.ReviewIssues,

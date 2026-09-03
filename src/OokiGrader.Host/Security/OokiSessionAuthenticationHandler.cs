@@ -37,6 +37,20 @@ public sealed class OokiSessionAuthenticationHandler(
 
         Response.Headers["X-Session-Expires-At"] =
             staff.SessionExpiresAt.ToString("O");
+        Response.Cookies.Append(
+            cookieName,
+            token,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = configuration.GetValue(
+                    "Security:RequireSecureCookies",
+                    true),
+                SameSite = SameSiteMode.Strict,
+                Path = "/",
+                Expires = staff.SessionExpiresAt,
+                IsEssential = true,
+            });
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, staff.Id),

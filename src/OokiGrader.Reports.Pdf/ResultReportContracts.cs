@@ -14,7 +14,10 @@ public sealed record ResultReportDocument(
     IReadOnlyList<ResultReportQuestion> Questions,
     DateTimeOffset GeneratedAt,
     bool IsCorrectedGrade,
-    bool IncludeTeacherComments = true);
+    bool IncludeTeacherComments = true,
+    string? StudentGradeLabel = null,
+    string? StudentClassLabel = null,
+    string? OriginalScanSha256 = null);
 
 public sealed record ResultReportQuestion(
     string DisplayLabel,
@@ -24,7 +27,11 @@ public sealed record ResultReportQuestion(
     long MaximumPointsMilli,
     string Outcome,
     bool IsCorrected,
-    string? TeacherComment);
+    string? TeacherComment,
+    IReadOnlyList<string>? ModelAnswers = null,
+    string? MajorQuestionLabel = null,
+    string? MiddleQuestionLabel = null,
+    string? MinorQuestionLabel = null);
 
 public sealed record ResultPdfRenderResult(
     byte[] PdfBytes,

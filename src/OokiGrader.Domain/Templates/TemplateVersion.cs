@@ -253,9 +253,25 @@ public sealed class TemplateVersion
             "Logical question IDs must be unique.");
         AddDuplicateErrors(
             errors,
-            _questions.Select(question => question.DisplayLabel),
-            "template.duplicate_display_label",
-            "Display labels must be unique.");
+            _questions.Select(question => question.Hierarchy.PathKey),
+            "template.duplicate_question_hierarchy",
+            "Question hierarchy paths must be unique.");
+        foreach (var scope in _questions
+                     .GroupBy(
+                         question => question.Hierarchy.MiddleScopeKey,
+                         StringComparer.Ordinal)
+                     .Where(group =>
+                         group.Any(question =>
+                             question.Hierarchy.AwardsPointsAtMiddleQuestion)
+                         && group.Any(question =>
+                             !question.Hierarchy.AwardsPointsAtMiddleQuestion)))
+        {
+            errors.Add(
+                new DomainError(
+                    "template.mixed_middle_minor_scoring",
+                    "A middle-question scope must award points either at the middle question or through minor questions, never both.",
+                    nameof(Questions)));
+        }
         AddDuplicateErrors(
             errors,
             _questions.Select(
@@ -463,6 +479,9 @@ internal static class TemplateContentHasher
             Add(builder, question.LogicalQuestionId);
             Add(builder, question.OrderIndex);
             Add(builder, question.DisplayLabel);
+            Add(builder, question.Hierarchy.MajorQuestionLabel);
+            Add(builder, question.Hierarchy.MiddleQuestionLabel);
+            Add(builder, question.Hierarchy.MinorQuestionLabel);
             Add(builder, question.QuestionText);
             Add(builder, question.QuestionType);
             Add(builder, question.GradingMode);

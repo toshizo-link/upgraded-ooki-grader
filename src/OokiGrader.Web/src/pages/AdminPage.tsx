@@ -65,7 +65,7 @@ interface AiCapabilityProbeResult {
   checkedAt?: string;
 }
 
-const geminiDefaultModel = "gemini-3.5-flash-lite";
+const geminiDefaultModel = "gemini-3.7-flash";
 const deepSeekV4FlashModel = "deepseek/deepseek-v4-flash";
 
 interface AiTaskProfile {
@@ -955,12 +955,13 @@ function AiConfigurationView({
     const connection = connectionEditor.connection;
     const selectedModelId = modelId.trim();
     const automaticSetup = provider === "geminiDirect";
+    const replacingApiKey = apiKey.length > 0;
     setWorking(true);
     setMessage(undefined);
     setError(undefined);
     try {
       const body = {
-        apiKey,
+        ...(replacingApiKey ? { apiKey } : {}),
         provider,
         modelId: selectedModelId,
         timeoutSeconds: Number(timeoutSeconds),
@@ -983,8 +984,12 @@ function AiConfigurationView({
       setConnectionEditor(undefined);
       setMessage(
         automaticSetup
-          ? "Geminiの接続を確認して保存しました。全てのAI機能を利用できます。"
-          : "OpenRouterのAPIキーを保存しました。「再確認」を押して接続を確認してください。",
+          ? replacingApiKey
+            ? "Geminiの接続を確認して保存しました。全てのAI機能を利用できます。"
+            : "Geminiのモデルと接続設定を確認して保存しました。全てのAI機能を利用できます。"
+          : replacingApiKey
+            ? "OpenRouterのAPIキーを保存しました。「再確認」を押して接続を確認してください。"
+            : "OpenRouterのモデルと接続設定を保存しました。「再確認」を押して接続を確認してください。",
       );
       connections.reload();
       profiles.reload();
@@ -1267,13 +1272,17 @@ function AiConfigurationView({
         onClose={closeConnectionEditor}
         title={
           connectionEditor?.connection
-            ? `${aiProviderLabel(connectionEditor.provider)} APIキーを交換`
+            ? `${aiProviderLabel(connectionEditor.provider)} 接続設定を変更`
             : "AI接続を追加"
         }
         description={
           connectionEditor?.provider === "geminiDirect"
-            ? "入力したキーをすぐに接続確認し、成功した場合だけ暗号化して保存します。"
-            : "APIキーを暗号化して保存します。保存後、「再確認」で接続を確認してください。"
+            ? connectionEditor.connection
+              ? "保存済みのAPIキーを使ってモデルを確認します。APIキーを交換する場合だけ、新しいキーも入力してください。"
+              : "入力したキーをすぐに接続確認し、成功した場合だけ暗号化して保存します。"
+            : connectionEditor?.connection
+              ? "保存済みのAPIキーはそのまま利用できます。モデル変更後は「再確認」で接続を確認してください。"
+              : "APIキーを暗号化して保存します。保存後、「再確認」で接続を確認してください。"
         }
         size="small"
         footer={
@@ -1290,7 +1299,8 @@ function AiConfigurationView({
               disabled={
                 working ||
                 !connectionEditor ||
-                apiKey.length < 20 ||
+                (!connectionEditor.connection && apiKey.length < 20) ||
+                (apiKey.length > 0 && apiKey.length < 20) ||
                 !isValidAiModelId(connectionEditor.provider, modelId.trim()) ||
                 Number(timeoutSeconds) < 5 ||
                 Number(timeoutSeconds) > 300 ||
@@ -1304,7 +1314,9 @@ function AiConfigurationView({
                   : "保存中…"
                 : connectionEditor?.provider === "geminiDirect"
                   ? "接続を確認して有効化"
-                  : "暗号化して保存"}
+                  : connectionEditor?.connection && !apiKey
+                    ? "設定を保存"
+                    : "暗号化して保存"}
             </Button>
           </>
         }
@@ -1406,10 +1418,16 @@ function AiConfigurationView({
             </InlineAlert>
           ) : null}
           <Field
-            label={`${aiProviderLabel(connectionEditor?.provider)} APIキー`}
+            label={`${aiProviderLabel(connectionEditor?.provider)} APIキー${
+              connectionEditor?.connection ? "（交換する場合のみ）" : ""
+            }`}
             htmlFor="ai-connection-api-key"
-            required
-            hint="送信後、この画面にAPIキーは保存・再表示されません。"
+            required={!connectionEditor?.connection}
+            hint={
+              connectionEditor?.connection
+                ? "空欄のまま保存すると、現在のAPIキーを引き続き使用します。入力したキーは保存後に再表示されません。"
+                : "送信後、この画面にAPIキーは保存・再表示されません。"
+            }
           >
             <input
               id="ai-connection-api-key"
@@ -1504,7 +1522,7 @@ function AiConnectionCard({
           onClick={onEdit}
           disabled={loading || working}
         >
-          {connection ? "APIキーを交換" : "接続を追加"}
+          {connection ? "モデル・接続設定を変更" : "接続を追加"}
         </Button>
       </div>
       {loading ? (

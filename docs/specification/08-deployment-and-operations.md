@@ -1,8 +1,9 @@
 # Windows deployment and operations
 
-> **Current implementation note (2026-08-11):** This file retains parts of the
+> **Current implementation note (2026-08-27):** This file retains parts of the
 > original target design for traceability. The executable teacher flow uses
-> normal queued requests with Gemini (`gemini-3.5-flash-lite`) as the default;
+> normal queued requests with Gemini (`gemini-3.7-flash`) as the default and
+> permits only `LOW`, `MEDIUM`, or `HIGH` thinking for new profiles;
 > legacy Batch controls remain hidden. Normal Gemini setup tests a supplied key
 > before persistence and, only after a full capability/image-task pass,
 > atomically enables the four exact-current advisory task profiles. An optional
@@ -293,7 +294,7 @@ Technician:
 3. enters the candidate key in `管理 > AI設定` and selects
    `接続を確認して有効化`;
 4. waits while the server checks authentication/credits, pinned
-   `gemini-3.5-flash-lite`, image input, strict structured output, usage
+   `gemini-3.7-flash`, image input, strict structured output, usage
    metadata, and a synthetic image task before saving;
 5. verifies that full success encrypted/persisted the key and atomically made
    template extraction, name transcription, initial grading, and adjudication
@@ -302,7 +303,13 @@ Technician:
    working key/connection/profiles remain unchanged before correcting the cause;
 7. records the current official price snapshot and daily/monthly Ooki budget;
 8. changes folded timeout/concurrency details only for a documented need;
-9. validates one school-approved sample while keeping teacher publication and
+9. for a model-only change, edits the exact model ID, leaves the API-key field
+   blank, and verifies the same full probe succeeded while the encrypted key
+   and credential revision were reused.
+
+Changing the current default or profile never rewrites historical evaluation
+records, completed grading runs, or their model/prompt/schema provenance.
+10. validates one school-approved sample while keeping teacher publication and
    finalization gates enabled.
 
 There is no routine school step to create evaluation evidence, approve a pilot,

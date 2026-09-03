@@ -71,7 +71,11 @@ Do not use “AI is thinking,” “magic,” or an indefinite spinner without a
 - Template creation is settings-first: test type and subject are required before
   the upload control appears; `その他` also requires answer style. Upload then
   creates a visible, host-owned deterministic plan before generation.
-- Large template editing autosaves a local draft to the server after a short idle delay and shows `保存済み` with time.
+- Every ordinary template-editor modification autosaves the draft to the server
+  after a short idle delay and shows `保存中` / `保存済み` with time. The editor
+  has no per-change `保存` or `確認` button. Explicit lifecycle actions such as
+  `受付を開始`, result finalization, archive, and credential rotation remain
+  deliberate operations.
 - Generated template review defaults to unresolved exceptions. Safe proposals
   can be confirmed together; the full question list remains available on
   demand.
@@ -283,7 +287,7 @@ On 1440 px or wider:
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ Template title | v3 draft | saved | Validate | Publish       │
+│ Template title | v3 draft | 保存済み | 受付を開始             │
 ├─────────────┬──────────────────────────┬─────────────────────┤
 │ Questions   │ Complete source page     │ Selected question   │
 │ Q1          │ visual reference only    │ text/type/points     │
@@ -305,19 +309,25 @@ At narrower supported widths, the properties pane becomes a drawer. The editor i
 
 Fields:
 
-- label/order;
+- `大問` / `中問` / `小問` label path and order;
 - question text;
 - type;
 - maximum points;
 - grading mode;
-- canonical answer;
-- accepted equivalents;
-- partial-credit rubric;
+- canonical answer plus zero or more independently complete accepted answers;
+- optional teacher-authored partial-credit rubric, blank in AI drafts;
 - `完答`;
 - `順不同`;
 - `漢字必須`;
 - `常に先生の確認を必要とする`;
-- teacher-only note.
+- teacher-only note, blank in AI drafts.
+
+The hierarchy copy states that `大問` is optional scope and has no points,
+`中問` is always required, and `小問` is optional. With no `小問`, the row and
+its grading options award points at `中問`; with a `小問`, that child awards
+points and its `中問` is scope. The UI cannot create a direct `大問` → `小問`
+path. It displays the original paper structure instead of forcing an edge case
+into a standard example.
 
 Supporting copy:
 
@@ -331,6 +341,11 @@ When `漢字必須` is checked and the canonical answer contains Kanji, show:
 When it is unchecked:
 
 > 漢字でなくても、登録した読み・採点基準に一致すれば正解にできます。
+
+Beside this control, `この漢字必須設定をすべての問題に適用` copies the
+current checked/unchecked value across the draft. The resulting bulk edit uses
+the same autosave/conflict behavior and does not alter `完答`, `順不同`,
+answers, or teacher-authored rubric text.
 
 ### 6.5 Template archive and restore
 
@@ -433,7 +448,19 @@ expedite, Batch, or provider-routing controls.
 
 ### 7.2 Upload board
 
-The open session page is an ordered one-page PDF board. It reads the expected
+The test-session list begins with one `受付中テストへ一括仕分け` drop area for
+all open sessions. It accepts one-page PDFs, retains and natural-sorts printer
+filenames, and shows one visible row per file with input order, proposed
+destination, page count, status, progress, and any action needed. The browser
+streams one PDF at a time to the server, which locally aligns it with the
+published template pages of open sessions only. Weak, ambiguous, or unavailable
+visual matches display `受付先を選択してください` and a session selector instead
+of silently choosing. Once every row is resolved, `仕分け結果で受付を開始` sends
+exactly one file at a time in the shown order and surfaces completion in the
+destination `受付中` box. This classification contract does not call Gemini or
+another general AI classifier and consumes no AI tokens.
+
+The destination open-session page remains an ordered one-page PDF board. It reads the expected
 pages per answer from the selected published template: HOP shows singletons,
 each separately registered STEP variation/session shows pairs, and
 class-placement/Other draws groups of the complete published page count up to
@@ -585,7 +612,10 @@ Question row:
 - Kanji-rule badge;
 - review/override action.
 
-Filters: flagged only, incorrect/partial, all.
+Filters include `不正解のみ` and `すべて`. `不正解のみ` shows exactly the
+currently incorrect rows so a teacher can revise likely AI false negatives
+without scanning already-correct work. Filtering is view-only: switching views
+does not confirm, score, or revise any result.
 
 Paper-first is a dedicated route for exactly one submission. The left evidence
 area displays the original or locally assembled multipage PDF, including a
@@ -686,16 +716,37 @@ Graph:
 
 Different tests may have different difficulty. The UI labels the chart `得点率の推移` and does not claim learning causation. When filters mix subjects/categories, show a subtle notice.
 
+### 10.4 Live `合否表`
+
+The report page shows a pass/fail matrix for the current server-side result
+filters. Staff can change the pass mark (default 60%), see pass/fail totals, and
+inspect a student-by-test matrix whose columns remain chronologically labeled.
+Result-status events refresh the matrix, with a 30-second fallback refresh when
+no event arrives. `合否表をPDF出力` switches to the print layout and opens the
+browser dialog; the inline help tells the operator to choose `PDFとして保存`.
+Printing never changes the underlying finalized results. The interactive matrix
+has its own school-dashboard bound of 2,000 students / 20,000 finalized results,
+independent from the smaller ZIP-export limit; staff narrow the current filters
+only when that dashboard bound is exceeded.
+
 ## 11. PDF export UX
 
 From a finalized result:
 
 1. select `結果PDFを作成`;
-2. preview included fields (no scan by default);
+2. preview that retained original/assembled answer-sheet pages will precede the
+   compact transcript;
 3. enqueue render;
 4. show `作成中`;
 5. offer download when verified;
 6. after grade change, label old report `旧版` and offer regeneration.
+
+The compact transcript contains student name/number, grade/class, test/date,
+total, the necessary `大問` / `中問` / `小問` path, student answer, all accepted
+model answers, and awarded points. Repeated `大問` or `中問` scope is
+suppressed for consecutive child rows. If the retained scan has expired or is
+not a readable PDF, the same action produces transcript-only output with a
+clear availability note.
 
 Suggested filename:
 
@@ -732,8 +783,10 @@ PCs after authorized use.
 
 ### 12.1 AI configuration
 
-The normal **Official Gemini** flow is one modal. It accepts a new/replacement
-key and the primary action is `接続を確認して有効化` (`確認中…` while pending).
+The normal **Official Gemini** flow is one modal. Its default exact model is
+`gemini-3.7-flash`; new profile thinking-level choices are `LOW`, `MEDIUM`, and
+`HIGH` only. It accepts a new/replacement key and the primary action is
+`接続を確認して有効化` (`確認中…` while pending).
 The explanation states that the candidate is tested before save and is
 encrypted/persisted only on full success. The server result reports
 capabilities, never the secret:
@@ -755,6 +808,15 @@ working key and four-feature configuration were preserved and leaves the modal
 open for correction. A successful manual `接続を確認` also repairs stale
 current Gemini profiles; startup reconciliation after prompt/schema/hash bumps
 needs no ordinary administrator action.
+
+Editing an existing card does not require the API key. The model ID remains
+editable and the API-key label says `交換する場合のみ`; leaving it blank reuses
+the encrypted key while the host performs the same full capability check.
+Success copy distinguishes a model/settings change from a credential exchange.
+Failure leaves the previous model, connection, and four active profiles intact.
+The administrator re-enters the key only when rotating it. Historical model
+evaluations remain visible as immutable evidence and are not relabeled as the
+new default.
 
 Timeout, concurrency, pricing, budgets, and usage are folded under details.
 **OpenRouter** remains an optional advanced/manual card. The administrator saves

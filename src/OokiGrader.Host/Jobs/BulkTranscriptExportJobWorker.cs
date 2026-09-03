@@ -84,7 +84,10 @@ public sealed partial class BulkTranscriptExportJobWorker(
                             frozen,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    var rendered = renderer.Render(source.Document);
+                    var rendered = await RenderReportAsync(
+                            source,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await archive.AddAsync(
                             frozen,
                             source,
@@ -280,6 +283,26 @@ public sealed partial class BulkTranscriptExportJobWorker(
                     .ConfigureAwait(false);
             }
         }
+    }
+
+    private async Task<ResultPdfRenderResult> RenderReportAsync(
+        ResultReportSource source,
+        CancellationToken cancellationToken)
+    {
+        var transcript = renderer.Render(source.Document);
+        if (source.OriginalPdf is null)
+        {
+            return transcript;
+        }
+
+        await using var original = await contentStore.OpenReadAsync(
+                source.OriginalPdf.Locator,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return ResultPdfComposer.PrependOriginal(
+            original,
+            transcript,
+            source.Document);
     }
 
     private Task<JobLease?> LeaseNextAsync(CancellationToken cancellationToken)

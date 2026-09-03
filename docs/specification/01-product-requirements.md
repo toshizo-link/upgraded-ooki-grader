@@ -75,7 +75,13 @@ Administrators MUST be able to create, rename, disable, re-enable, reset, and ro
 
 ### FR-AUTH-005 — Session behavior (P0)
 
-Sessions MUST expire after 30 minutes of inactivity and after 12 hours absolute duration. A deployment MAY configure shorter values. Active edits SHOULD warn the user two minutes before expiry.
+The sliding inactivity lifetime MUST default to 30 days and MUST NOT be
+configured below 30 days. Successful authenticated activity refreshes that
+idle deadline without issuing a new credential. The absolute lifetime MUST
+default to 90 days and MAY be configured only from 30 through 365 days. Active
+edits SHOULD warn the user two minutes before the applicable deadline. A
+disabled account, password reset, explicit sign-out, or administrator
+revocation still ends the session immediately.
 
 ## 3. Student roster
 
@@ -171,7 +177,8 @@ The system MUST preserve the original, create normalized page images, detect pag
 ### FR-TPL-002 — Template metadata (P0)
 
 A template MUST include title, subject, optional grade/course/category, source,
-notes, and default point policy. Title is required. The upload flow MUST infer
+teacher-owned notes, and default point policy. Title is required. Automatic
+generation MUST leave the notes blank; only a teacher may enter them. The upload flow MUST infer
 initial title/subject values from local file names, and the extraction task MAY
 replace recognized placeholder values with high-confidence printed metadata.
 Explicit teacher values MUST NOT be overwritten. Templates have `draft`,
@@ -195,18 +202,23 @@ an editable proposed title; a teacher MUST resolve it when missing or unsafe.
 From the normalized blank/model-answer/non-model-answer/answer-key sources and
 their roles, the system MUST request a structured AI draft containing:
 
-- question number/label and ordering;
+- unified `大問` / `中問` / `小問` labels and ordering;
 - full question text suitable for later report display;
 - question type;
-- answer region and optional question region coordinates;
 - expected answer;
-- accepted variants;
+- zero or more accepted variants, each of which is an independently complete
+  acceptable answer rather than an answer fragment;
 - maximum points;
 - grading mode;
-- rubric/notes;
 - confidence and warnings;
-- default values for the complete-answer, order-insensitive, and Kanji-required
-  grading policies.
+- automatically selected values for the complete-answer, order-insensitive,
+  and Kanji-required grading policies.
+
+The generator MUST leave the teacher-only note and free-form `採点基準` fields
+blank. It may express visible printed instructions through the structured
+grading options above, but it MUST NOT generate prose for either teacher-owned
+field. Complete pages remain the visual reference; generation MUST NOT create
+or request teacher-edited question/answer coordinates.
 
 Generated content MUST remain a draft until a teacher publishes it. The default
 review experience MUST show blocking or low-confidence exceptions first. A
@@ -263,19 +275,50 @@ that an answer previously treated as authoritative cannot remain silently in
 the draft. The teacher can always correct the resulting proposal before
 publication.
 
+### FR-TPL-003D — Unified printed question hierarchy (P0)
+
+Every point-rewarding item MUST use one hierarchy contract:
+
+- `大問` is optional scope only and MUST never own points;
+- `中問` is required, including on a visually flat paper where the printed
+  scoring label becomes the middle label;
+- a row without `小問` awards its points at `中問`, and `完答`, `順不同`,
+  `漢字必須`, accepted answers, and the optional teacher rubric apply there;
+- a row with `小問` awards its points at that `小問`; the containing `中問` is
+  scope only and MUST NOT also award points;
+- a direct `大問` to `小問` relationship is invalid and unrepresentable.
+
+When the original paper scores one `中問` as a unit even though it contains
+several visible child response slots, extraction MUST emit one point-bearing
+middle item and MUST NOT emit those child `小問` as additional scoring rows.
+When the `中問` is only a heading/scope, each independently scored `小問` is a
+point-bearing row instead.
+
+Extraction MUST first preserve the original paper's visible structure, even
+for unusual layouts. Tables with writable cells, diagram fill-ins, ordinary
+fill-ins, Q&A, choices, and mixed pages follow the same contract. The model
+MUST NOT force an edge case into an example hierarchy or invent a missing
+printed level merely to normalize numbering.
+
 ### FR-TPL-004 — Manual question editor (P0)
 
 Teachers MUST be able to:
 
 - add, delete, duplicate, and reorder questions;
-- edit text, expected answers, variants, points, type, and rubric;
-- draw, move, and resize question/answer/name regions over a page preview;
+- edit hierarchy labels, text, expected answers, multiple complete accepted
+  answers, points, type, and the optional teacher rubric;
+- compare edits with the complete read-only source page;
 - split one detected question into several or merge detections;
 - set `完答`, `順不同`, and `漢字必須` independently per question;
+- apply the selected question's `漢字必須` value to every question in the draft;
 - preview the total points;
 - run validations before publish.
 
-All unsaved editing SHOULD be protected with local draft recovery.
+Ordinary modifications MUST autosave to the server after a short idle delay,
+show `保存中` / `保存済み` / conflict/error state, and retain local draft
+recovery. The editor MUST NOT require separate `保存` or `確認` actions for each
+modification. Irreversible or lifecycle transitions such as `受付を開始`,
+finalization, archive, and credential changes remain explicit actions.
 
 ### FR-TPL-005 — Complete, order, and Kanji answer policies (P0)
 
@@ -420,6 +463,25 @@ Blocking quality errors go to an operator queue. Non-blocking warnings remain vi
 
 The uploader MUST see progress and terminal/queued states: `uploading`, `validating`, `preprocessing`, `awaiting_ai`, `needs_attention`, `ready_for_review`, `finalized`, or `failed`. Closing the browser MUST NOT cancel completed chunks or server processing.
 
+### FR-UPL-006 — Cross-session `受付中` intake (P0)
+
+The test-session list MUST expose one drop area for one-page scanner PDFs across
+all open sessions. It MUST retain the printer filename, natural-sort filenames,
+submit them to a server-owned routing contract, and display a destination and
+status for every file. The router MUST compare each page locally against the
+published template pages of open sessions only. It MAY use safe filename
+evidence to rank an otherwise valid visual tie, but MUST return `needsReview`
+instead of guessing when visual evidence is weak, ambiguous, or unavailable. A
+teacher can then select one open `受付中` box.
+
+After all destinations are resolved, the client MUST process files strictly one
+at a time in the visible natural order and reuse the destination session's
+ordered-upload and page-assembly APIs. Consecutive files assigned to a
+multi-page test are grouped by that template version's expected page count.
+Progress and results remain visible in the destination `受付中` boxes. Routing
+MUST NOT upload page images to Gemini or another general classifier, consume AI
+tokens, or create a parallel grading pipeline merely to infer the destination.
+
 ## 6. Student name recognition
 
 ### FR-NAME-001 — Name region (P0)
@@ -473,6 +535,12 @@ Low-confidence, ambiguous, partial, unreadable, conflicting, unsupported, or
 explicitly `always review` results require teacher review; a clear valid AI
 proposal does not require review merely because AI produced it.
 
+The grading request MUST receive every independently complete accepted answer
+and the structured `完答`, `順不同`, and `漢字必須` options for the actual
+point-bearing `中問` or `小問`. It includes the teacher-authored free-form
+`採点基準` only when that field is non-empty. An empty teacher rubric MUST remain
+empty/null and MUST NOT be replaced with AI-authored filler.
+
 The model MUST NOT calculate the test total.
 
 ### FR-GRD-003 — Per-question output (P0)
@@ -517,6 +585,10 @@ A result enters the review queue when any of the following is true:
 
 A teacher MUST be able to view the blank-page question region, expected answer/rubric, student answer crop, AI transcription, explanation, and proposed score together. An override requires a reason code and optional note. The previous value remains immutable.
 
+The paper-first workspace MUST provide `不正解のみ` alongside the complete
+question list. Switching this filter changes only visibility: it MUST NOT mark
+items reviewed, alter points, or discard the append-only revision history.
+
 ### FR-GRD-008 — Finalization (P0)
 
 A paper can be finalized only when:
@@ -547,6 +619,18 @@ Transient failures use bounded exponential backoff with jitter. Permanent failur
 ### FR-RES-001 — Result detail (P0)
 
 Authorized staff MUST see student, test date, template/version, total, percentage, status, each question and answer result, override history, and scan availability. When a scan has been deleted, the UI states the deletion date/reason without a broken link.
+
+### FR-RES-002 — Live pass/fail matrix (P0)
+
+The report screen MUST derive a `合否表` from the current finalized-result
+filters and an adjustable pass-mark percentage. Rows represent students, test
+columns remain chronologically identifiable, cells show score/percentage and
+pass/fail, and the view shows aggregate pass/fail counts. Result-status events
+SHOULD refresh it immediately, with a bounded timed refresh fallback. The
+matrix MUST provide `合否表をPDF出力`, which opens a print-specific layout that
+can be saved as PDF through the supported browser. The source result records
+remain authoritative; printing MUST NOT persist or mutate a second set of
+grades.
 
 ### FR-PRG-001 — Date-filtered student progress (P0)
 
@@ -579,15 +663,22 @@ Student reassignment, grade override, regrade activation, result voiding, or tem
 
 Staff MUST be able to generate/download a PDF for one finalized student submission containing:
 
-- school and report title;
-- student display name;
+- the retained complete original/assembled answer-sheet PDF first, when it is
+  available as a readable PDF;
+- a compact transcript appended after the answer sheets;
+- student display name and student number;
+- grade and class;
 - test title and date;
-- total score, maximum, and percentage;
-- each question number and question text from the exact template version;
+- total score and maximum;
+- the `大問` / `中問` / `小問` path needed to identify each scoring item,
+  suppressing repeated scope labels across consecutive child rows;
 - student's recognized answer;
-- awarded/maximum points and result mark;
-- teacher-visible correction/comment when configured;
+- all independently complete accepted model answers;
+- awarded/maximum points;
 - generation timestamp and report identifier.
+
+If the retained scan has expired or is not a readable PDF, generation MUST
+fall back to the transcript instead of failing the export.
 
 ### FR-EXP-002 — Japanese rendering (P0)
 
@@ -595,7 +686,12 @@ The export MUST embed licensed Japanese fonts, line-wrap Japanese text, prevent 
 
 ### FR-EXP-003 — Export privacy and provenance (P0)
 
-The PDF MUST NOT include internal confidence, model prompts, API key/cost, private staff notes, or the original scan unless explicitly selected in a future feature. It MUST show that a corrected grade is the current grade without exposing staff identity unless policy enables it.
+The PDF MUST NOT include internal confidence, model prompts, API key/cost,
+teacher-only notes, or a teacher-only free-form rubric. The retained original
+scan is included only as the answer-sheet portion described by FR-EXP-001; no
+other private working artifacts or hidden crops are added. It MUST show that a
+corrected grade is the current grade without exposing staff identity unless
+policy enables it.
 
 ### FR-EXP-004 — Reproducibility (P0)
 
@@ -721,12 +817,22 @@ Gemini-only. OpenRouter tests exact model and endpoint parameter support with
 
 ### FR-ADM-002 — Model and prompt configuration (P0)
 
-The direct-Gemini default is `gemini-3.5-flash-lite`; successful one-step setup
+The direct-Gemini default is `gemini-3.7-flash`. New Gemini 3.7 profiles accept
+only `LOW`, `MEDIUM`, or `HIGH` thinking levels; `MINIMAL` is rejected.
+Successful one-step setup
 selects the checked-in exact-current profile for template extraction, name
 recognition, initial grading, and adjudication without normal-UI evaluation,
 pilot-approval, or manual-activation controls. Capability-gated activation only
 enables AI drafts and review support: template publication, student assignment,
 and result finalization remain explicit teacher actions.
+
+For an existing connection, an administrator MAY submit a new exact model ID
+with no API key. The host MUST lease the currently encrypted credential, run
+the same full model/image/structured-output/usage/representative-task probe,
+and update the model/current profiles without changing the credential revision
+only on full success. Failure or an ambiguous outcome leaves the prior model,
+connection, and current profiles unchanged. The key is required only for a new
+connection or credential rotation.
 
 The OpenRouter default remains a separately validated model slug.
 Administrators/technical operators can use the advanced profile, evaluation,
@@ -735,6 +841,8 @@ backward-compatible data. A provider/model/routing change in that path requires
 capability plus accuracy validation and creates a configuration revision.
 Requested model, actual returned model/provider where available, endpoint,
 prompt, schema, and pipeline versions are captured for every AI result.
+Default/profile changes MUST NOT rewrite historical evaluations, profile
+snapshots, grading runs, or their requested/actual-model provenance.
 
 ### FR-ADM-003 — Provider selection and validated failover (P0)
 

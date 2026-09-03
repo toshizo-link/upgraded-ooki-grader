@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using OokiGrader.Application.Abstractions;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Reports.Pdf;
@@ -24,6 +25,7 @@ internal static class ResultReportSourceLoader
             .Include(item => item.GradingRuns)
                 .ThenInclude(item => item.QuestionResults)
                     .ThenInclude(item => item.Question)
+                        .ThenInclude(item => item.AcceptedAnswers)
             .Include(item => item.GradingRuns)
                 .ThenInclude(item => item.QuestionResults)
                     .ThenInclude(item => item.Revisions)
@@ -71,6 +73,35 @@ internal static class ResultReportSourceLoader
             .AsNoTracking()
             .SingleAsync(cancellationToken)
             .ConfigureAwait(false);
+        ResultReportScanSource? originalPdf = null;
+        if (submission.ScanPayloadState == "scan_available"
+            && submission.OriginalFileObjectId is { } originalFileObjectId)
+        {
+            var fileObject = await db.FileObjects
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    item => item.Id == originalFileObjectId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (fileObject is
+                {
+                    State: "available",
+                    VerifiedMime: "application/pdf",
+                    Extension: "pdf",
+                }
+                && Enum.TryParse<ContentStorageClass>(
+                    fileObject.StorageClass,
+                    ignoreCase: false,
+                    out var storageClass))
+            {
+                originalPdf = new ResultReportScanSource(
+                    new ContentObjectLocator(
+                        storageClass,
+                        fileObject.Sha256,
+                        fileObject.Bytes,
+                        fileObject.Extension));
+            }
+        }
         var questionRows = run.QuestionResults
             .OrderBy(item => item.Question.OrderIndex)
             .ThenBy(item => item.QuestionId, StringComparer.Ordinal)
@@ -89,7 +120,19 @@ internal static class ResultReportSourceLoader
                     item.MaximumPointsMilli,
                     current.Outcome,
                     current.Source != "initial",
-                    includeTeacherComments ? current.TeacherNote : null);
+                    includeTeacherComments ? current.TeacherNote : null,
+                    item.Question.AcceptedAnswers
+                        .OrderBy(answer => answer.VariantType == "canonical" ? 0 : 1)
+                        .ThenBy(answer => answer.Id, StringComparer.Ordinal)
+                        .Select(answer => answer.AnswerText)
+                        .Where(answer => !string.IsNullOrWhiteSpace(answer))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray(),
+                    item.Question.MajorQuestionLabel,
+                    string.IsNullOrWhiteSpace(item.Question.MiddleQuestionLabel)
+                        ? item.Question.DisplayLabel
+                        : item.Question.MiddleQuestionLabel,
+                    item.Question.MinorQuestionLabel);
             })
             .ToArray();
         var earned = questionRows.Aggregate(
@@ -124,7 +167,12 @@ internal static class ResultReportSourceLoader
             questionRows,
             generatedAt,
             questionRows.Any(item => item.IsCorrected),
-            includeTeacherComments);
+            includeTeacherComments,
+            submission.AssignedStudent.GradeLabel
+                ?? submission.TestSession.TemplateGradeLabelSnapshot,
+            submission.AssignedStudent.SchoolClass
+                ?? submission.TestSession.ClassLabel,
+            originalPdf?.Locator.Sha256);
         return new ResultReportSource(
             document,
             submission.Id,
@@ -133,6 +181,7 @@ internal static class ResultReportSourceLoader
             run.ResultSourceRevision,
             version.Id,
             version.VersionNumber,
+            originalPdf,
             ResultReportSourceHasher.Compute(document));
     }
 }
@@ -145,7 +194,10 @@ internal sealed record ResultReportSource(
     long ResultSourceRevision,
     string TemplateVersionId,
     int TemplateVersionNumber,
+    ResultReportScanSource? OriginalPdf,
     string SourceHash);
+
+internal sealed record ResultReportScanSource(ContentObjectLocator Locator);
 
 internal sealed class ResultReportSourceException(
     string errorCode,

@@ -1,6 +1,6 @@
 # Implementation status
 
-Snapshot: **2026-08-11**.
+Snapshot: **2026-08-27**.
 
 This page separates code that is executable in this repository from evidence
 that still must be collected before a school deployment. It is not a
@@ -46,6 +46,12 @@ here supersede the older Batch/priority controls in the baseline
   reconciliation makes complete-answer partial awards zero/incorrect while
   preserving review, and order-insensitive comparison preserves duplicate
   component counts across explicit Japanese/ASCII separators.
+- Printed question structure uses one `大問` / `中問` / `小問` path. `大問` is
+  scope-only, `中問` is required, and either the `中問` or its `小問` children
+  award points, never both. AI generation leaves teacher notes/free-form rubric
+  blank, returns multiple accepted answers as complete alternatives, and
+  proposes the three grading options. Template changes autosave, and the current
+  `漢字必須` value can be applied across the draft.
 - Template removal is an audited, revision-protected soft archive with restore.
   Default lists and new test sessions exclude archived templates, while
   published versions and historical sessions/results remain readable. Archive
@@ -115,6 +121,12 @@ here supersede the older Batch/priority controls in the baseline
   has no identifier and occupies the correct template role, so consecutive
   per-student scanning is an explicit operational requirement. Migration
   `_0018_OrderedScanAssembly` is additive and trigger-safe.
+- The test-session list adds one cross-session intake drop area. It natural-sorts
+  retained printer filenames, locally aligns each one-page PDF with published
+  template pages from open sessions, exposes each proposed destination/status,
+  requires a teacher choice for weak/ambiguous/unavailable evidence, and
+  processes one file at a time through the destination's existing ordered
+  assembly contract. This routing consumes no Gemini tokens.
 - Japanese-first teacher/operator UI, scan-operator least privilege, live
   event updates, keyboard-oriented review, draft recovery, session-expiry
   recovery, one-step Gemini setup, budgets, advanced evaluation evidence,
@@ -149,12 +161,17 @@ here supersede the older Batch/priority controls in the baseline
 ### AI provider and grading path
 
 - Official Google Gemini direct client fixed to the configured
-  model identifier (`gemini-3.5-flash-lite` in the checked-in flow), Google-host
+  model identifier (`gemini-3.7-flash` in the checked-in flow), Google-host
   allow-listing, bounded requests/responses, structured JSON schemas,
   task-specific thinking/media-resolution controls, usage metadata, safe
   failure classification, and capability probes. The current template profile
   uses `medium` thinking and `high` media resolution; grading remains on its
   separately versioned current profile.
+- Existing Gemini connections can change model without resubmitting the API key.
+  The host leases the encrypted credential, runs the same full capability probe,
+  and commits the new model/current profiles only on success. New Gemini 3.7
+  profiles accept `LOW`, `MEDIUM`, or `HIGH`, not `MINIMAL`; historical
+  evaluations and completed-run provenance remain unchanged.
 - Official OpenRouter Chat Completions client with a fixed HTTPS endpoint,
   bearer-key isolation, bounded multimodal messages, strict JSON Schema,
   `require_parameters`, data-collection denial, required Zero Data Retention,
@@ -253,7 +270,14 @@ here supersede the older Batch/priority controls in the baseline
 
 - Deterministic Japanese per-student result PDFs with embedded fonts, stable
   hashing, background generation, status/regeneration/download APIs, and
-  renderer tests.
+  renderer tests. When a retained original PDF is available, the composer places
+  its answer-sheet pages before a compact hierarchy-aware transcript; otherwise
+  transcript-only export remains available. Paper-first review includes a
+  view-only `不正解のみ` filter.
+- The reports page includes a live, filter-bound `合否表` with adjustable pass
+  percentage, result-event plus timed refresh, print CSS, and browser
+  print-to-PDF export. Its 2,000-student / 20,000-result read bound is
+  independent from ZIP-export limits.
 - Durable bulk student-result export previews either exact checked submission
   IDs or the server-resolved current report filters. A fingerprinted job
   revalidates every current finalized result and packages at most 100 students

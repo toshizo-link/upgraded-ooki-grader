@@ -261,12 +261,18 @@ function Assert-MediaChecksums {
     }
 }
 
-Assert-OokiWindows
+if (-not $AllowChecksumVerifiedUnsignedOnSitePackage) {
+    Assert-OokiWindows
+}
 $packageEvidence = Assert-OokiReleasePackage `
     -PackageRoot $PackageRoot `
     -ExpectedVersion $Version `
     -ExpectedSignerThumbprint $ExpectedSignerThumbprint `
     -AllowUnsignedDevelopmentBuild:$AllowChecksumVerifiedUnsignedOnSitePackage
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -and
+    $packageEvidence.ProductionSigningClaimed) {
+    throw 'Production-signed release packages must be verified on Windows before host media is built.'
+}
 if (-not $AllowChecksumVerifiedUnsignedOnSitePackage -and
     -not $packageEvidence.ProductionSigningClaimed) {
     throw 'A signed media build requires a production-signed release package.'

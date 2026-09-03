@@ -9,6 +9,7 @@ using OokiGrader.Ai.Abstractions;
 using OokiGrader.Ai.Gemini;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Host.Services;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 
@@ -315,12 +316,12 @@ public sealed partial class AiBatchJobWorker : BackgroundService
             {
                 schemaVersion = 1,
                 provider = AiProviders.GeminiDirect,
-                modelId = connection.ModelId,
+                modelId = profile.ModelId,
                 payload.CompatibilityKey,
                 connectionId = connection.Id,
-                connectionRevision = connection.CredentialRevision,
+                connectionRevision = profile.ConnectionRevision,
                 profileId = profile.Id,
-                profileRevision = profile.Revision,
+                profileRevision = firstRequest.TaskProfileRevision,
                 requests = manifestItems,
             });
             var manifestHash = Sha256(Encoding.UTF8.GetBytes(manifestJson));
@@ -328,11 +329,11 @@ public sealed partial class AiBatchJobWorker : BackgroundService
             {
                 Id = batchId,
                 Provider = AiProviders.GeminiDirect,
-                ModelId = connection.ModelId,
+                ModelId = profile.ModelId,
                 AiConnectionId = connection.Id,
-                ConnectionRevision = connection.CredentialRevision,
+                ConnectionRevision = profile.ConnectionRevision,
                 AiTaskProfileId = profile.Id,
-                TaskProfileRevision = profile.Revision,
+                TaskProfileRevision = firstRequest.TaskProfileRevision,
                 CompatibilityKey = payload.CompatibilityKey,
                 ManifestJson = manifestJson,
                 ManifestHash = manifestHash,
@@ -724,8 +725,8 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 .ConfigureAwait(false);
             var batch = await db.AiBatches
                 .Include(item => item.AiConnection)
-                .Include(item => item.AiTaskProfile)
                 .Include(item => item.Requests)
+                    .ThenInclude(item => item.AiRequest)
                 .SingleOrDefaultAsync(item => item.Id == batchId, token)
                 .ConfigureAwait(false);
             if (batch is null)
@@ -765,7 +766,11 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 || ordered.Any(item =>
                     item.Ordinal is null
                     || item.ProviderRequestJson is null
-                    || item.State is not ("prepared" or "submitted")))
+                    || item.State is not ("prepared" or "submitted")
+                    || item.AiRequest.AiTaskProfileId
+                        != batch.AiTaskProfileId
+                    || item.AiRequest.TaskProfileRevision
+                        != batch.TaskProfileRevision))
             {
                 FailJob(job, now, "ai_batch_manifest_inconsistent");
                 batch.State = "manual_review";
@@ -787,7 +792,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 batch.ProviderInputFileName,
                 jsonLines,
                 hash,
-                ToConnection(batch.AiConnection),
+                ToConnection(batch),
                 batch.AiConnection.SecretReference);
         }, cancellationToken);
     }
@@ -1155,12 +1160,14 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 return null;
             }
 
+            ValidateBatchConfiguration(batch);
+
             return new RemoteClaim(
                 batch.Id,
                 batch.ProviderBatchName,
                 batch.ProviderInputFileName,
                 batch.AiConnection.SecretReference,
-                ToConnection(batch.AiConnection));
+                ToConnection(batch));
         }, cancellationToken);
     }
 
@@ -2118,6 +2125,8 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 return null;
             }
 
+            ValidateBatchConfiguration(batch);
+
             return new ReconcileClaim(
                 batch.Id,
                 batch.DisplayName,
@@ -2125,7 +2134,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 batch.ReconciliationDeadlineAt
                     ?? batch.CreatedAt.Add(_options.ReconciliationWindow),
                 batch.AiConnection.SecretReference,
-                ToConnection(batch.AiConnection));
+                ToConnection(batch));
         }, cancellationToken);
     }
 
@@ -2314,19 +2323,18 @@ public sealed partial class AiBatchJobWorker : BackgroundService
         var first = candidates[0].AiRequest;
         var profile = first.AiTaskProfile;
         var connection = profile.AiConnection;
-        if (!profile.Active
-            || profile.ProcessingStrategy != "gemini_batch"
-            || profile.ModelId != connection.ModelId
-            || connection.State != "active"
-            || connection.LastCapabilityProbeState != "passed"
-            || connection.LastBatchCapabilityProbeState != "passed"
-            || connection.LastBatchCapabilityProbeCredentialRevision
-                != connection.CredentialRevision
+        if (profile.ProcessingStrategy != "gemini_batch"
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
+            || !AiProviderCatalog.IsModelIdValid(
+                AiProviders.GeminiDirect,
+                profile.ModelId)
             || connection.Provider != AiProviders.GeminiDirect
             || profile.ConnectionRevision != connection.CredentialRevision
             || candidates.Any(item =>
                 item.AiRequest.AiTaskProfileId != profile.Id
-                || item.AiRequest.TaskProfileRevision != profile.Revision
+                || item.AiRequest.TaskProfileRevision
+                    != first.TaskProfileRevision
                 || item.AiRequest.State != "prepared"))
         {
             throw new InvalidOperationException(
@@ -2337,18 +2345,14 @@ public sealed partial class AiBatchJobWorker : BackgroundService
     private static void ValidateBatchConfiguration(AiBatchEntity batch)
     {
         if (batch.Provider != AiProviders.GeminiDirect
-            || batch.ModelId != batch.AiConnection.ModelId
-            || batch.AiConnection.Provider != AiProviders.GeminiDirect
-            || batch.AiConnection.State != "active"
-            || batch.AiConnection.LastCapabilityProbeState != "passed"
-            || batch.AiConnection.LastBatchCapabilityProbeState != "passed"
-            || batch.AiConnection
-                    .LastBatchCapabilityProbeCredentialRevision
-                != batch.AiConnection.CredentialRevision
+            || !AiProviderCatalog.IsModelIdValid(
+                AiProviders.GeminiDirect,
+                batch.ModelId)
+            || batch.AiConnection.Provider != batch.Provider
             || batch.AiConnection.CredentialRevision
                 != batch.ConnectionRevision
-            || batch.AiTaskProfile.Revision != batch.TaskProfileRevision
-            || batch.AiTaskProfile.ProcessingStrategy != "gemini_batch")
+            || string.IsNullOrWhiteSpace(batch.AiTaskProfileId)
+            || batch.TaskProfileRevision < 1)
         {
             throw new InvalidOperationException(
                 "The prepared batch configuration is stale.");
@@ -2356,13 +2360,13 @@ public sealed partial class AiBatchJobWorker : BackgroundService
     }
 
     private static AiConnectionSettings ToConnection(
-        AiConnectionEntity connection) =>
+        AiBatchEntity batch) =>
         new(
-            connection.Id,
-            connection.Provider,
+            batch.AiConnectionId,
+            batch.Provider,
             GeminiBaseAddress,
-            connection.ModelId,
-            TimeSpan.FromSeconds(connection.TimeoutSeconds));
+            batch.ModelId,
+            TimeSpan.FromSeconds(batch.AiConnection.TimeoutSeconds));
 
     private static void EnqueueBatchJob(
         OokiGraderDbContext db,

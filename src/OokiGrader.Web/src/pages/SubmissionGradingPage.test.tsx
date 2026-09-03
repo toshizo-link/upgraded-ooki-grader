@@ -362,6 +362,47 @@ describe("SubmissionGradingPage workflow", () => {
     expect(screen.getByLabelText("読み取り結果")).toHaveValue("未保存の訂正");
     expect(screen.getByRole("heading", { name: "植物の働きを答えなさい" })).toBeVisible();
   });
+
+  it("lets a teacher review only questions marked incorrect", () => {
+    renderPage();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "不正解のみ 1" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "不正解のみ 1" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /大問1/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /大問2/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "植物の働きを答えなさい" }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "すべて 2" }));
+    expect(screen.getByRole("button", { name: /大問2/ })).toBeVisible();
+  });
+
+  it("does not change the wrong-answer filter when an edit would be discarded", () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("読み取り結果"), {
+      target: { value: "未保存の訂正" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "不正解のみ 1" }),
+    );
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "採点の編集内容が保存されていません。変更を破棄して移動しますか？",
+    );
+    expect(screen.getByRole("button", { name: "すべて 2" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("読み取り結果")).toHaveValue("未保存の訂正");
+  });
 });
 
 function renderPage() {

@@ -236,6 +236,45 @@ public sealed class BulkTranscriptExportTests
     }
 
     [Fact]
+    public async Task InteractiveSelectionCanUseLimitsIndependentFromZipExport()
+    {
+        await using var app = await BulkExportTestApplication.CreateAsync();
+        _ = await app.SeedFinalizedResultAsync(
+            "S-191",
+            "大木 一郎",
+            "算数 1",
+            new DateOnly(2026, 8, 20));
+        _ = await app.SeedFinalizedResultAsync(
+            "S-192",
+            "大木 二郎",
+            "算数 2",
+            new DateOnly(2026, 8, 21));
+        var filter = new BulkTranscriptExportFilter(
+            Search: null,
+            From: null,
+            To: null,
+            StudentId: null,
+            TemplateId: null,
+            Subject: null,
+            Category: null,
+            Course: null,
+            Class: null,
+            Sort: "studentName");
+
+        var resolved = await app.ResolveFilterIdsAsync(
+            filter,
+            maximumStudents: 2,
+            maximumResults: 2);
+
+        Assert.Equal(2, resolved.Count);
+        await Assert.ThrowsAsync<BulkTranscriptSelectionException>(() =>
+            app.ResolveFilterIdsAsync(
+                filter,
+                maximumStudents: 1,
+                maximumResults: 1));
+    }
+
+    [Fact]
     public async Task CreateReplayAndWorkerRedeliveryAreIdempotent()
     {
         await using var app = await BulkExportTestApplication.CreateAsync();
@@ -1025,14 +1064,24 @@ public sealed class BulkTranscriptExportTests
         }
 
         public async Task<IReadOnlyList<string>> ResolveFilterIdsAsync(
-            BulkTranscriptExportFilter filter)
+            BulkTranscriptExportFilter filter,
+            int? maximumStudents = null,
+            int? maximumResults = null)
         {
             await using var db = await CreateDbAsync();
-            var selection = await BulkTranscriptSelectionResolver.ResolveAsync(
-                db,
-                new DefaultHttpContext(),
-                new BulkTranscriptExportSelector(null, filter),
-                CancellationToken.None);
+            var selection = maximumStudents.HasValue && maximumResults.HasValue
+                ? await BulkTranscriptSelectionResolver.ResolveAsync(
+                    db,
+                    new DefaultHttpContext(),
+                    new BulkTranscriptExportSelector(null, filter),
+                    maximumStudents.Value,
+                    maximumResults.Value,
+                    CancellationToken.None)
+                : await BulkTranscriptSelectionResolver.ResolveAsync(
+                    db,
+                    new DefaultHttpContext(),
+                    new BulkTranscriptExportSelector(null, filter),
+                    CancellationToken.None);
             return selection.Candidates.Select(item => item.SubmissionId).ToArray();
         }
 

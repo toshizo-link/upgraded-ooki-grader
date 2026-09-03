@@ -1055,6 +1055,12 @@ public sealed class TemplateGenerationFinalizationService
             {
                 reviewNotes.Add("正答が未解決です。先生が入力してください。");
             }
+            var hierarchy = new QuestionHierarchy(
+                proposal.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(proposal.MiddleQuestionLabel)
+                    ? proposal.DisplayLabel
+                    : proposal.MiddleQuestionLabel,
+                proposal.MinorQuestionLabel);
 
             var question = new QuestionEntity
             {
@@ -1063,6 +1069,10 @@ public sealed class TemplateGenerationFinalizationService
                 LogicalQuestionId = _ids.NewId(),
                 OrderIndex = questionOrdinal,
                 DisplayLabel = proposal.DisplayLabel,
+                MajorQuestionLabel = hierarchy.MajorQuestionLabel,
+                MiddleQuestionLabel = hierarchy.MiddleQuestionLabel,
+                MinorQuestionLabel = hierarchy.MinorQuestionLabel,
+                HierarchyPathKey = hierarchy.PathKey,
                 QuestionText = proposal.QuestionText,
                 QuestionType = proposal.QuestionType,
                 GradingMode = GradingModeFor(proposal.QuestionType),
@@ -1076,12 +1086,10 @@ public sealed class TemplateGenerationFinalizationService
                     proposal.RequiresCompleteAnswerSuggestion,
                 AnswerOrderInsensitive =
                     proposal.AnswerOrderInsensitiveSuggestion,
-                RubricText = QuestionGradingDefaultPolicy.BuildDefaultRubric(
-                    proposal.QuestionType,
-                    proposal.ExpectedAnswer),
-                KanjiPolicyNote =
-                    "AIによる表記方針の提案です。先生の確認が必要です。",
-                TeacherNote = BoundedTeacherNote(reviewNotes),
+                RubricText = null,
+                KanjiPolicyNote = null,
+                TeacherNote = null,
+                ExtractionReviewJson = BoundedExtractionReviewJson(reviewNotes),
                 RequiresReviewAlways = RequiresPermanentReview(proposal),
                 AiConfidenceBasisPoints = confidence,
                 TeacherVerified = false,
@@ -2202,19 +2210,25 @@ public sealed class TemplateGenerationFinalizationService
             : normalized[..MaximumTeacherNoteLength];
     }
 
-    private static string? BoundedTeacherNote(List<string> warnings)
+    private static string? BoundedExtractionReviewJson(List<string> warnings)
     {
         if (warnings.Count == 0)
         {
             return null;
         }
 
-        var value = string.Join(
-            "\n",
-            warnings.Select(item => $"[AI確認] {item}"));
-        return value.Length <= MaximumTeacherNoteLength
-            ? value
-            : value[..MaximumTeacherNoteLength];
+        var lines = warnings
+            .Select(item => $"[AI確認] {item}")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var value = JsonSerializer.Serialize(lines);
+        while (value.Length > 20_000 && lines.Count > 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+            value = JsonSerializer.Serialize(lines);
+        }
+
+        return lines.Count == 0 ? null : value;
     }
 
     private static bool RequiresPermanentReview(

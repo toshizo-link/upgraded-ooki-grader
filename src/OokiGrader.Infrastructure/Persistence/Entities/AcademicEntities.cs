@@ -230,6 +230,10 @@ public sealed class QuestionEntity : IRevisionedEntity, IUpdatedEntity
     public string LogicalQuestionId { get; set; } = string.Empty;
     public int OrderIndex { get; set; }
     public string DisplayLabel { get; set; } = string.Empty;
+    public string? MajorQuestionLabel { get; set; }
+    public string MiddleQuestionLabel { get; set; } = string.Empty;
+    public string? MinorQuestionLabel { get; set; }
+    public string HierarchyPathKey { get; set; } = string.Empty;
     public string QuestionText { get; set; } = string.Empty;
     public string QuestionType { get; set; } = string.Empty;
     public string GradingMode { get; set; } = string.Empty;
@@ -241,6 +245,12 @@ public sealed class QuestionEntity : IRevisionedEntity, IUpdatedEntity
     public string? KanjiPolicyNote { get; set; }
     public string? RubricText { get; set; }
     public string? TeacherNote { get; set; }
+    /// <summary>
+    /// Machine-owned extraction warnings and review findings. These are kept
+    /// separate from TeacherNote so AI generation never writes into a teacher's
+    /// Notes field.
+    /// </summary>
+    public string? ExtractionReviewJson { get; set; }
     public string? QuestionRegionId { get; set; }
     public string? AnswerRegionId { get; set; }
     public bool RequiresReviewAlways { get; set; }

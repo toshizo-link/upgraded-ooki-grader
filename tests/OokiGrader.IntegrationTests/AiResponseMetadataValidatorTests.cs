@@ -6,11 +6,14 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class AiResponseMetadataValidatorTests
 {
+    private const string HistoricalGeminiModel =
+        "gemini-3.5-flash-lite";
+
     [Theory]
     [InlineData(null)]
-    [InlineData("gemini-3.5-flash-lite")]
-    [InlineData("gemini-3.5-flash-lite-001")]
-    [InlineData("gemini-3.5-flash-lite-20260721")]
+    [InlineData(AiProviderCatalog.GeminiDefaultModelId)]
+    [InlineData(AiProviderCatalog.GeminiDefaultModelId + "-001")]
+    [InlineData(AiProviderCatalog.GeminiDefaultModelId + "-20260721")]
     public void AcceptsSelectedAliasAndNumericProviderRevisions(
         string? actualModel)
     {
@@ -19,13 +22,27 @@ public sealed class AiResponseMetadataValidatorTests
     }
 
     [Theory]
-    [InlineData("gemini-3.5-flash-lite-preview")]
-    [InlineData("gemini-3.5-flash")]
-    [InlineData("gemini-3.5-flash-lite-001-extra")]
+    [InlineData(AiProviderCatalog.GeminiDefaultModelId + "-preview")]
+    [InlineData(HistoricalGeminiModel)]
+    [InlineData(AiProviderCatalog.GeminiDefaultModelId + "-001-extra")]
     public void RejectsUnexpectedActualModels(string actualModel)
     {
         Assert.False(AiResponseMetadataValidator.IsAccepted(
             Response(actualModel)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(HistoricalGeminiModel)]
+    [InlineData(HistoricalGeminiModel + "-001")]
+    [InlineData(HistoricalGeminiModel + "-20260721")]
+    public void AcceptsHistoricalAliasWhenItWasTheSelectedModel(
+        string? actualModel)
+    {
+        Assert.True(AiResponseMetadataValidator.IsAccepted(
+            Response(actualModel, HistoricalGeminiModel),
+            AiProviders.GeminiDirect,
+            HistoricalGeminiModel));
     }
 
     [Fact]
@@ -88,12 +105,13 @@ public sealed class AiResponseMetadataValidatorTests
     }
 
     private static AiProviderResponse Response(
-        string? actualModel = "gemini-3.5-flash-lite")
+        string? actualModel = AiProviderCatalog.GeminiDefaultModelId,
+        string requestedModel = AiProviderCatalog.GeminiDefaultModelId)
     {
         using var document = JsonDocument.Parse("""{"ok":true}""");
         return new AiProviderResponse(
             AiProviders.GeminiDirect,
-            "gemini-3.5-flash-lite",
+            requestedModel,
             actualModel,
             "response-id",
             "STOP",

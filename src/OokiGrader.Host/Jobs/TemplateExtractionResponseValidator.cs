@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using OokiGrader.Domain.Templates;
 
 namespace OokiGrader.Host.Jobs;
 
@@ -39,6 +40,13 @@ internal static class TemplateExtractionResponseValidator
         "unavailable",
     ];
 
+    private static readonly string[] QuestionHierarchyProperties =
+    [
+        "major_question_label",
+        "middle_question_label",
+        "minor_question_label",
+    ];
+
     private static readonly HashSet<string> SlotStructureIssueCodes =
     [
         "template.answer_slot_inventory_mismatch",
@@ -61,7 +69,8 @@ internal static class TemplateExtractionResponseValidator
     {
         ArgumentNullException.ThrowIfNull(extraction);
         return extraction.Pages.Any(page =>
-                page.DetectedAnswerSlotCount != page.Questions.Count
+                page.DetectedAnswerSlotCount != page.Questions.Sum(
+                    question => question.AnswerSlotCount)
                 || (page.Questions.Count > 1
                     && page.Questions.Any(question =>
                         question.IsEmbeddedFillBlank)))
@@ -174,7 +183,8 @@ internal static class TemplateExtractionResponseValidator
     {
         ArgumentNullException.ThrowIfNull(extraction);
         return extraction.Pages.Any(page =>
-                page.DetectedAnswerSlotCount != page.Questions.Count)
+                page.DetectedAnswerSlotCount != page.Questions.Sum(
+                    question => question.AnswerSlotCount))
             || extraction.ReviewIssues.Any(issue =>
                 SlotStructureIssueCodes.Contains(issue.Code))
             || extraction.Pages.Any(page => page.Questions.Any(question =>
@@ -333,7 +343,15 @@ internal static class TemplateExtractionResponseValidator
                             Blocking: true));
                 }
 
-                if (!answerSlotOrdinals.Add(question.AnswerSlotOrdinal))
+                var overlapsAnotherQuestion = false;
+                for (var slotOffset = 0;
+                     slotOffset < question.AnswerSlotCount;
+                     slotOffset++)
+                {
+                    overlapsAnotherQuestion |= !answerSlotOrdinals.Add(
+                        question.AnswerSlotOrdinal + slotOffset);
+                }
+                if (overlapsAnotherQuestion)
                 {
                     question.ReviewIssues.Add(
                         new TemplateExtractionReviewIssue(
@@ -357,6 +375,13 @@ internal static class TemplateExtractionResponseValidator
                         suffix = checked(suffix + 1);
                     }
                     while (!displayLabels.Add(question.DisplayLabel));
+                    if (!question.HasExplicitHierarchy)
+                    {
+                        question = question with
+                        {
+                            MiddleQuestionLabel = question.DisplayLabel,
+                        };
+                    }
                     question.ReviewIssues.Add(
                         new TemplateExtractionReviewIssue(
                             "question.repeated_printed_label_disambiguated",
@@ -372,18 +397,20 @@ internal static class TemplateExtractionResponseValidator
 
             ResolveUnambiguousMultiPlaceholderTargets(questions);
 
+            var representedAnswerSlotCount = questions.Sum(
+                question => question.AnswerSlotCount);
             var expectedOrdinals = Enumerable.Range(
                     1,
-                    questions.Count)
+                    representedAnswerSlotCount)
                 .ToHashSet();
-            if (detectedAnswerSlotCount != questions.Count
+            if (detectedAnswerSlotCount != representedAnswerSlotCount
                 || !answerSlotOrdinals.SetEquals(expectedOrdinals))
             {
                 var message =
                     $"ページ{pageNumber}で検出した解答欄は" +
-                    $"{detectedAnswerSlotCount}個ですが、" +
-                    $"個別問題は{questions.Count}件です。" +
-                    "解答欄の分割と順番を確認してください。";
+                    $"{detectedAnswerSlotCount}個ですが、採点単位が表す解答欄は" +
+                    $"{representedAnswerSlotCount}個です。" +
+                    "中問・小問の採点単位と解答欄順を確認してください。";
                 reviewIssues.Add(
                     new TemplateExtractionReviewIssue(
                         "template.answer_slot_inventory_mismatch",
@@ -410,6 +437,34 @@ internal static class TemplateExtractionResponseValidator
         if (totalQuestions == 0)
         {
             throw Invalid("template_extract_questions_missing");
+        }
+
+        var hierarchies = pages
+            .SelectMany(page => page.Questions)
+            .Select(question => new QuestionHierarchy(
+                question.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+                    ? question.DisplayLabel
+                    : question.MiddleQuestionLabel,
+                question.MinorQuestionLabel))
+            .ToArray();
+        if (hierarchies
+            .GroupBy(hierarchy => hierarchy.PathKey, StringComparer.Ordinal)
+            .Any(group => group.Count() > 1))
+        {
+            throw Invalid("template_extract_question_hierarchy_duplicate");
+        }
+
+        if (hierarchies
+            .GroupBy(
+                hierarchy => hierarchy.MiddleScopeKey,
+                StringComparer.Ordinal)
+            .Any(group =>
+                group.Any(hierarchy => hierarchy.AwardsPointsAtMiddleQuestion)
+                && group.Any(hierarchy =>
+                    !hierarchy.AwardsPointsAtMiddleQuestion)))
+        {
+            throw Invalid("template_extract_hierarchy_scoring_mode_invalid");
         }
 
         if (targetTotalPointsMilli is > 0
@@ -510,8 +565,11 @@ internal static class TemplateExtractionResponseValidator
         var hasAnswerOrderInsensitive = element.TryGetProperty(
             "answer_order_insensitive_suggestion",
             out _);
+        var hierarchyPropertyCount = QuestionHierarchyProperties
+            .Count(name => element.TryGetProperty(name, out _));
         if (hasRequiresCompleteAnswer != hasAnswerOrderInsensitive
-            || (requireGradingRuleFlags && !hasRequiresCompleteAnswer))
+            || (requireGradingRuleFlags && !hasRequiresCompleteAnswer)
+            || hierarchyPropertyCount is not (0 or 3))
         {
             throw Invalid("template_extract_question_shape_invalid");
         }
@@ -541,6 +599,12 @@ internal static class TemplateExtractionResponseValidator
             expectedProperties.Add("requires_complete_answer_suggestion");
             expectedProperties.Add("answer_order_insensitive_suggestion");
         }
+        if (hierarchyPropertyCount == 3)
+        {
+            expectedProperties.Add("major_question_label");
+            expectedProperties.Add("middle_question_label");
+            expectedProperties.Add("minor_question_label");
+        }
 
         RequireExactProperties(
             element,
@@ -556,6 +620,27 @@ internal static class TemplateExtractionResponseValidator
             "display_label",
             100,
             "template_extract_display_label_invalid");
+        var majorQuestionLabel = hierarchyPropertyCount == 3
+            ? ReadNullableString(
+                element,
+                "major_question_label",
+                100,
+                "template_extract_question_hierarchy_invalid")
+            : null;
+        var middleQuestionLabel = hierarchyPropertyCount == 3
+            ? RequireString(
+                element,
+                "middle_question_label",
+                100,
+                "template_extract_question_hierarchy_invalid")
+            : displayLabel;
+        var minorQuestionLabel = hierarchyPropertyCount == 3
+            ? ReadNullableString(
+                element,
+                "minor_question_label",
+                100,
+                "template_extract_question_hierarchy_invalid")
+            : null;
         var questionText = RequireString(
             element,
             "question_text",
@@ -731,7 +816,8 @@ internal static class TemplateExtractionResponseValidator
                     Blocking: true));
         }
 
-        if (isEmbeddedFillBlank && blankAnalysis.PlaceholderCount > 1)
+        if (isEmbeddedFillBlank
+            && blankAnalysis.PlaceholderCount != answerSlotCount)
         {
             reviewIssues.Add(
                 new TemplateExtractionReviewIssue(
@@ -740,12 +826,23 @@ internal static class TemplateExtractionResponseValidator
                     Blocking: true));
         }
 
-        if (answerSlotCount != 1)
+        // Legacy payloads represented every row as a single grading unit and must
+        // keep that invariant.  The v5 hierarchy can intentionally keep multiple
+        // blanks together only when the point-bearing unit is the middle question;
+        // a minor question is always one independently graded unit.
+        var answerSlotsMustBeSeparated = answerSlotCount <= 0
+            || (answerSlotCount != 1
+                && (hierarchyPropertyCount == 0
+                    || minorQuestionLabel is not null));
+        if (answerSlotsMustBeSeparated)
         {
             reviewIssues.Add(
                 new TemplateExtractionReviewIssue(
                     "question.answer_slots_not_separated",
-                    $"{displayLabel}が{answerSlotCount}個の解答欄をまとめている可能性があります。",
+                    answerSlotCount <= 0
+                        ? $"{displayLabel}に採点対象の解答欄がありません。"
+                        : $"{displayLabel}が{answerSlotCount}個の解答欄をまとめています。" +
+                          "小問は個別の採点単位に分けてください。",
                     Blocking: true));
         }
 
@@ -758,12 +855,13 @@ internal static class TemplateExtractionResponseValidator
                     Blocking: true));
         }
 
-        if (isEmbeddedFillBlank && blankAnalysis.PlaceholderCount != 1)
+        if (isEmbeddedFillBlank
+            && blankAnalysis.PlaceholderCount != answerSlotCount)
         {
             reviewIssues.Add(
                 new TemplateExtractionReviewIssue(
                     "question.fill_blank_placeholder_invalid",
-                    $"{displayLabel}の問題文にある対象空欄を1個に分離できませんでした。",
+                    $"{displayLabel}の採点単位と対象空欄の数が一致しません。",
                     Blocking: true));
         }
 
@@ -825,7 +923,11 @@ internal static class TemplateExtractionResponseValidator
             requiresTeacherAnswer,
             confidence,
             warnings,
-            reviewIssues);
+            reviewIssues,
+            majorQuestionLabel,
+            middleQuestionLabel,
+            minorQuestionLabel,
+            hierarchyPropertyCount == 3);
     }
 
     private static void ResolveUnambiguousMultiPlaceholderTargets(
@@ -837,6 +939,14 @@ internal static class TemplateExtractionResponseValidator
             var placeholderCount = CountOccurrences(
                 question.QuestionText,
                 CanonicalBlankToken);
+            if (question.AnswerSlotCount > 1
+                && placeholderCount == question.AnswerSlotCount
+                && question.HasExplicitHierarchy
+                && question.MinorQuestionLabel is null)
+            {
+                index++;
+                continue;
+            }
             if (!question.IsEmbeddedFillBlank || placeholderCount <= 1)
             {
                 index++;
@@ -886,6 +996,16 @@ internal static class TemplateExtractionResponseValidator
                 }
                 else
                 {
+                    if (!candidate.ReviewIssues.Any(issue => issue.Code ==
+                            "question.additional_placeholders_redacted"))
+                    {
+                        candidate.ReviewIssues.Add(
+                            new TemplateExtractionReviewIssue(
+                                "question.additional_placeholders_redacted",
+                                $"{candidate.DisplayLabel}の対象外の空欄を問題文から省略しました。" +
+                                "対象欄を原稿で確認してください。",
+                                Blocking: true));
+                    }
                     questions[index + offset] = candidate with
                     {
                         QuestionText = RetainOnlyFirstPlaceholder(
@@ -1412,7 +1532,11 @@ internal sealed record ValidatedTemplateQuestion(
     bool RequiresTeacherAnswer,
     double Confidence,
     IReadOnlyList<string> Warnings,
-    List<TemplateExtractionReviewIssue> ReviewIssues);
+    List<TemplateExtractionReviewIssue> ReviewIssues,
+    string? MajorQuestionLabel = null,
+    string? MiddleQuestionLabel = null,
+    string? MinorQuestionLabel = null,
+    bool HasExplicitHierarchy = false);
 
 internal sealed record ValidatedTemplatePage(
     string SourceId,

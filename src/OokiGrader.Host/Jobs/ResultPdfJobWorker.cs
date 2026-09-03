@@ -51,7 +51,11 @@ public sealed partial class ResultPdfJobWorker(
 
             await MarkRenderingAsync(lease, payload.ExportId, cancellationToken)
                 .ConfigureAwait(false);
-            var rendered = renderer.Render(preparation.Source!.Document);
+            var reportSource = preparation.Source!;
+            var rendered = await RenderReportAsync(
+                    reportSource,
+                    cancellationToken)
+                .ConfigureAwait(false);
             await using var source = new MemoryStream(
                 rendered.PdfBytes,
                 writable: false);
@@ -71,7 +75,7 @@ public sealed partial class ResultPdfJobWorker(
 
             await CompleteWithArtifactAsync(
                     lease,
-                    preparation.Source,
+                    reportSource,
                     rendered,
                     stored,
                     cancellationToken)
@@ -155,6 +159,26 @@ public sealed partial class ResultPdfJobWorker(
                     .ConfigureAwait(false);
             }
         }
+    }
+
+    private async Task<ResultPdfRenderResult> RenderReportAsync(
+        ResultReportSource source,
+        CancellationToken cancellationToken)
+    {
+        var transcript = renderer.Render(source.Document);
+        if (source.OriginalPdf is null)
+        {
+            return transcript;
+        }
+
+        await using var original = await contentStore.OpenReadAsync(
+                source.OriginalPdf.Locator,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return ResultPdfComposer.PrependOriginal(
+            original,
+            transcript,
+            source.Document);
     }
 
     private Task<JobLease?> LeaseNextAsync(CancellationToken cancellationToken)

@@ -374,6 +374,16 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             }));
     options.AddPolicy(
+        OrderedScanRoutingEndpoints.ClassificationRateLimitPolicy,
+        _ => RateLimitPartition.GetConcurrencyLimiter(
+            "ordered-scan-routing-site",
+            _ => new ConcurrencyLimiterOptions
+            {
+                PermitLimit = 2,
+                QueueLimit = 8,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            }));
+    options.AddPolicy(
         BulkTranscriptExportEndpoints.CreateRateLimitPolicy,
         _ => RateLimitPartition.GetTokenBucketLimiter(
             "bulk-transcript-export-site",
@@ -486,6 +496,7 @@ app.MapTemplateGenerationBatchEndpoints();
 app.MapTestSessionsEndpoints();
 app.MapUploadsEndpoints();
 app.MapOrderedScanBatchEndpoints();
+app.MapOrderedScanRoutingEndpoints();
 app.MapSubmissionsEndpoints();
 app.MapReviewEndpoints();
 app.MapResultsEndpoints();

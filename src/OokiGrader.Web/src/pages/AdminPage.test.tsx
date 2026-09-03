@@ -184,7 +184,7 @@ describe("AdminPage AI configuration", () => {
       expect.objectContaining({
         apiKey: "AIza-test-gemini-key-1234567890",
         provider: "geminiDirect",
-        modelId: "gemini-3.5-flash-lite",
+        modelId: "gemini-3.7-flash",
         timeoutSeconds: 75,
         concurrencyLimit: 2,
         testAndEnable: true,
@@ -334,6 +334,53 @@ describe("AdminPage AI configuration", () => {
     ).toBeVisible();
   });
 
+  it("changes the Gemini model while reusing the saved API key", async () => {
+    queryState.connections = [configuredGeminiConnection()];
+    renderPage();
+
+    const geminiCard = screen
+      .getByRole("heading", { name: "Gemini接続" })
+      .closest(".card");
+    fireEvent.click(
+      within(geminiCard as HTMLElement).getByRole("button", {
+        name: "モデル・接続設定を変更",
+      }),
+    );
+    expect(
+      screen.getByText(/保存済みのAPIキーを使ってモデルを確認します/),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("Gemini APIキー（交換する場合のみ）"),
+    ).not.toBeRequired();
+
+    fireEvent.change(screen.getByLabelText(/GeminiモデルID/), {
+      target: { value: "gemini-3.7-flash-preview" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "接続を確認して有効化" }),
+    );
+
+    await waitFor(() => expect(apiState.put).toHaveBeenCalledOnce());
+    const call = apiState.put.mock.calls.at(0);
+    expect(call).toBeDefined();
+    const [path, body] = call!;
+    expect(path).toBe("/admin/ai-connections/connection-gemini");
+    expect(body).toEqual(
+      expect.objectContaining({
+        provider: "geminiDirect",
+        modelId: "gemini-3.7-flash-preview",
+        revision: 3,
+        testAndEnable: true,
+      }),
+    );
+    expect(body).not.toHaveProperty("apiKey");
+    expect(
+      await screen.findByText(
+        "Geminiのモデルと接続設定を確認して保存しました。全てのAI機能を利用できます。",
+      ),
+    ).toBeVisible();
+  });
+
   it("requires every backend capability before reporting recheck success", async () => {
     queryState.connections = [configuredGeminiConnection()];
     apiState.post.mockResolvedValue({
@@ -413,7 +460,7 @@ function configuredGeminiConnection() {
     id: "connection-gemini",
     provider: "geminiDirect",
     configured: true,
-    modelId: "gemini-3.5-flash-lite",
+    modelId: "gemini-3.7-flash",
     state: "active",
     timeoutSeconds: 75,
     concurrencyLimit: 2,

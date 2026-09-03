@@ -7,6 +7,7 @@ using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
 using OokiGrader.Host.Api;
 using OokiGrader.Host.Jobs;
+using OokiGrader.Host.Reports;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Infrastructure.Storage;
@@ -447,31 +448,13 @@ public sealed class ResultPdfJobWorkerTests
 
             var exportId = UlidId.New(now);
             var jobId = UlidId.New(now);
-            var document = new ResultReportDocument(
+            var reportSource = await ResultReportSourceLoader.LoadAsync(
+                db,
+                submission.Id,
                 exportId,
-                "大木学習塾",
-                student.DisplayName,
-                student.StudentNumber,
-                template.Title,
-                session.TestDate,
-                version.VersionNumber,
-                run.ResultSourceRevision,
-                1_000,
-                1_000,
-                [
-                    new ResultReportQuestion(
-                        question.DisplayLabel,
-                        question.QuestionText,
-                        result.TranscribedAnswer,
-                        1_000,
-                        1_000,
-                        "correct",
-                        IsCorrected: false,
-                        TeacherComment: null),
-                ],
                 now,
-                IsCorrectedGrade: false,
-                IncludeTeacherComments: false);
+                includeTeacherComments: false,
+                CancellationToken.None);
             var job = new BackgroundJobEntity
             {
                 Id = jobId,
@@ -498,7 +481,7 @@ public sealed class ResultPdfJobWorkerTests
                 TemplateVersionNumber = version.VersionNumber,
                 ExportRevision = 1,
                 RendererVersion = ResultPdfRenderer.CurrentRendererVersion,
-                SourceHash = ResultReportSourceHasher.Compute(document),
+                SourceHash = reportSource.SourceHash,
                 BackgroundJobId = job.Id,
                 State = "queued",
                 CreatedByStaffUserId = staff.Id,

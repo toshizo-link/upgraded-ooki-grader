@@ -19,16 +19,18 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Application.Abstractions;
+using OokiGrader.Application.Identifiers;
 using OokiGrader.Host.Api;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Infrastructure.Persistence;
+using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Infrastructure.Security;
 
 namespace OokiGrader.IntegrationTests;
 
 public sealed class AiAdminConnectionEndpointsTests
 {
-    private const string GeminiModel = "gemini-3.5-flash-lite";
+    private const string GeminiModel = AiProviderCatalog.GeminiDefaultModelId;
     private const string OpenRouterModel = "google/gemini-3.1-flash-lite";
 
     [Fact]
@@ -125,7 +127,173 @@ public sealed class AiAdminConnectionEndpointsTests
                 Assert.Equal("test-prompt-v1", profile.PromptVersion);
                 Assert.Equal("test-schema-v1", profile.SchemaVersion);
                 Assert.Equal(new string('a', 64), profile.PromptContentHash);
+                Assert.Equal(
+                    profile.TaskType == AiTaskTypes.TemplateExtraction
+                        ? "medium"
+                        : "low",
+                    profile.ThinkingLevel);
             });
+        });
+    }
+
+    [Fact]
+    public async Task GeminiModelCanChangeWithoutReplacingStoredApiKey()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        const string apiKey = "AIza-model-change-gemini-key-1234567890";
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                apiKey,
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision")
+            .GetInt64();
+        string originalSecretReference = string.Empty;
+        string originalFingerprint = string.Empty;
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections.AsNoTracking().SingleAsync();
+            originalSecretReference = connection.SecretReference;
+            originalFingerprint = connection.KeyFingerprint;
+        });
+
+        const string updatedModel = "gemini-3.7-flash-preview";
+        var updated = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            new
+            {
+                provider = AiProviders.GeminiDirect,
+                modelId = updatedModel,
+                timeoutSeconds = 90,
+                concurrencyLimit = 3,
+                revision,
+                testAndEnable = true,
+            });
+
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        using var updatedDocument = await ReadJsonAsync(updated);
+        Assert.Equal(
+            updatedModel,
+            updatedDocument.RootElement.GetProperty("modelId").GetString());
+        Assert.Equal(
+            "active",
+            updatedDocument.RootElement.GetProperty("state").GetString());
+        Assert.Equal(2, application.GeminiClient.ProbeCount);
+        Assert.Equal(updatedModel, application.GeminiClient.LastConnection?.ModelId);
+        Assert.Equal(1, application.StoredSecretCount);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections.AsNoTracking().SingleAsync();
+            Assert.Equal(1, connection.CredentialRevision);
+            Assert.Equal(originalSecretReference, connection.SecretReference);
+            Assert.Equal(originalFingerprint, connection.KeyFingerprint);
+            Assert.Equal(apiKey, await application.ReadStoredSecretAsync(
+                connection.SecretReference));
+            var activeProfiles = await db.AiTaskProfiles
+                .AsNoTracking()
+                .Where(profile => profile.Active)
+                .ToArrayAsync();
+            Assert.Equal(4, activeProfiles.Length);
+            Assert.All(activeProfiles, profile =>
+            {
+                Assert.Equal(updatedModel, profile.ModelId);
+                Assert.Equal(
+                    profile.TaskType == AiTaskTypes.TemplateExtraction
+                        ? "medium"
+                        : "low",
+                    profile.ThinkingLevel);
+            });
+        });
+    }
+
+    [Theory]
+    [InlineData(false, "pending_probe", 1)]
+    [InlineData(true, "active", 2)]
+    public async Task ActiveRemoteBatchDoesNotBlockModelOnlySwitch(
+        bool testAndEnable,
+        string expectedState,
+        int expectedProbeCount)
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var (connectionId, revision) =
+            await CreateGeminiConnectionWithActiveBatchAsync(application);
+        const string updatedModel = "gemini-3.7-flash-preview";
+
+        var response = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            new
+            {
+                provider = AiProviders.GeminiDirect,
+                modelId = updatedModel,
+                timeoutSeconds = 90,
+                concurrencyLimit = 3,
+                revision,
+                testAndEnable,
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var responseDocument = await ReadJsonAsync(response);
+        Assert.Equal(
+            updatedModel,
+            responseDocument.RootElement.GetProperty("modelId").GetString());
+        Assert.Equal(
+            expectedState,
+            responseDocument.RootElement.GetProperty("state").GetString());
+        Assert.Equal(expectedProbeCount, application.GeminiClient.ProbeCount);
+        Assert.Equal(1, application.StoredSecretCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(updatedModel, connection.ModelId);
+            Assert.Equal(1, connection.CredentialRevision);
+            var batch = await db.AiBatches.AsNoTracking().SingleAsync();
+            Assert.Equal(GeminiModel, batch.ModelId);
+            Assert.Equal(1, batch.ConnectionRevision);
+            Assert.Equal("running", batch.State);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActiveRemoteBatchStillBlocksCredentialReplacement(
+        bool testAndEnable)
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var (connectionId, revision) =
+            await CreateGeminiConnectionWithActiveBatchAsync(application);
+
+        var response = await application.PutAsync(
+            $"/api/v1/admin/ai-connections/{connectionId}",
+            ConnectionBody(
+                "AIza-replacement-gemini-key-1234567890",
+                AiProviders.GeminiDirect,
+                "gemini-3.7-flash-preview",
+                revision,
+                testAndEnable));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(
+            "AI_KEY_ROTATION_BATCH_IN_PROGRESS",
+            await ProblemCodeAsync(response));
+        Assert.Equal(1, application.GeminiClient.ProbeCount);
+        Assert.Equal(1, application.StoredSecretCount);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == connectionId);
+            Assert.Equal(GeminiModel, connection.ModelId);
+            Assert.Equal(1, connection.CredentialRevision);
         });
     }
 
@@ -867,7 +1035,7 @@ public sealed class AiAdminConnectionEndpointsTests
             "保存済みのAI APIキーを読み込めません",
             problem.RootElement.GetProperty("title").GetString());
         Assert.Equal(
-            "「APIキーを交換」からAPIキーを再登録し、もう一度接続を確認してください。",
+            "APIキーを再登録し、もう一度接続を確認してください。",
             problem.RootElement.GetProperty("detail").GetString());
         Assert.DoesNotContain("test-secret:", responseBody, StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -901,6 +1069,63 @@ public sealed class AiAdminConnectionEndpointsTests
             revision,
             testAndEnable,
         };
+
+    private static async Task<(string ConnectionId, long Revision)>
+        CreateGeminiConnectionWithActiveBatchAsync(
+            AiAdminTestApplication application)
+    {
+        var created = await application.PostAsync(
+            "/api/v1/admin/ai-connections",
+            ConnectionBody(
+                "AIza-active-batch-gemini-key-1234567890",
+                AiProviders.GeminiDirect,
+                GeminiModel,
+                testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdDocument = await ReadJsonAsync(created);
+        var connectionId = Assert.IsType<string>(createdDocument.RootElement
+            .GetProperty("id").GetString());
+        var revision = createdDocument.RootElement.GetProperty("revision")
+            .GetInt64();
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var connection = await db.AiConnections.SingleAsync(
+                item => item.Id == connectionId);
+            var profile = await db.AiTaskProfiles
+                .OrderBy(item => item.TaskType)
+                .FirstAsync(item => item.AiConnectionId == connectionId);
+            var now = DateTimeOffset.UtcNow;
+            db.AiBatches.Add(new AiBatchEntity
+            {
+                Id = UlidId.New(now),
+                Provider = AiProviders.GeminiDirect,
+                ModelId = connection.ModelId,
+                AiConnectionId = connection.Id,
+                ConnectionRevision = connection.CredentialRevision,
+                AiTaskProfileId = profile.Id,
+                TaskProfileRevision = profile.Revision,
+                CompatibilityKey = new string('b', 64),
+                ManifestJson = "{}",
+                ManifestHash = new string('c', 64),
+                DisplayName = $"ooki-test-active-{connection.Id}",
+                State = "running",
+                SubmissionEpoch = 1,
+                CreateAttemptCount = 1,
+                ProviderBatchName = $"batches/test-{connection.Id}",
+                InputJsonLinesSha256 = new string('d', 64),
+                InputJsonLinesBytes = 1,
+                RequestCount = 1,
+                PendingRequestCount = 1,
+                CleanupState = "not_started",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+
+        return (connectionId, revision);
+    }
 
     private static object PricingBody(string sourceUrl) => new
     {

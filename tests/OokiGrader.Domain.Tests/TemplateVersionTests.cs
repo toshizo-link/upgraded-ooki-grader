@@ -170,7 +170,7 @@ public sealed class TemplateVersionTests
     }
 
     [Fact]
-    public void DuplicateQuestionLabelsBlockPublish()
+    public void DuplicateQuestionHierarchyPathsBlockPublish()
     {
         var draft = TemplateVersion.CreateDraft(
             "version-1",
@@ -189,7 +189,53 @@ public sealed class TemplateVersionTests
 
         Assert.Contains(
             validation.Errors,
-            error => error.Code == "template.duplicate_display_label");
+            error => error.Code == "template.duplicate_question_hierarchy");
+    }
+
+    [Fact]
+    public void RepeatedPrintedLabelsAreValidAcrossDistinctMinorQuestions()
+    {
+        var draft = TemplateVersion.CreateDraft(
+            "version-1",
+            "template-1",
+            1,
+            "pipeline-v1",
+            [
+                TestQuestionFactory.ExactText(
+                    hierarchy: new QuestionHierarchy("大問1", "中問1", "(1)")),
+                TestQuestionFactory.ExactText(
+                    id: "q-2",
+                    orderIndex: 1,
+                    hierarchy: new QuestionHierarchy("大問1", "中問1", "(2)")),
+            ]);
+
+        Assert.True(draft.ValidateForPublish().IsValid);
+        Assert.False(draft.Questions[0].Hierarchy.AwardsPointsAtMiddleQuestion);
+        Assert.Equal("大問1 中問1 (2)", draft.Questions[1].Hierarchy.DisplayPath);
+    }
+
+    [Fact]
+    public void MiddleQuestionCannotAwardPointsAlongsideItsMinorQuestions()
+    {
+        var draft = TemplateVersion.CreateDraft(
+            "version-1",
+            "template-1",
+            1,
+            "pipeline-v1",
+            [
+                TestQuestionFactory.ExactText(
+                    hierarchy: new QuestionHierarchy("大問1", "中問1")),
+                TestQuestionFactory.ExactText(
+                    id: "q-2",
+                    orderIndex: 1,
+                    hierarchy: new QuestionHierarchy("大問1", "中問1", "(1)")),
+            ]);
+
+        var validation = draft.ValidateForPublish();
+
+        Assert.Contains(
+            validation.Errors,
+            error => error.Code == "template.mixed_middle_minor_scoring");
     }
 
     [Fact]

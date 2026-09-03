@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import {
   Button,
@@ -60,6 +60,8 @@ export function TemplateGenerationFinalCheckPage() {
   const [confirmedBatch, setConfirmedBatch] = useState<TemplateGenerationBatch>();
   const [rowConflict, setRowConflict] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  const draftsRef = useRef<Record<string, UnitDraft>>({});
+  const editGenerationRef = useRef(new Map<string, number>());
   const batch = confirmedBatch ?? batchQuery.data;
 
   useEffect(() => {
@@ -77,6 +79,7 @@ export function TemplateGenerationFinalCheckPage() {
           grade: selectableGrade(unit.resolvedGrade),
         };
       }
+      draftsRef.current = next;
       return next;
     });
   }, [batch]);
@@ -95,10 +98,18 @@ export function TemplateGenerationFinalCheckPage() {
   );
 
   function updateUnitDraft(unitId: string, changes: Partial<UnitDraft>) {
-    setDrafts((current) => ({
-      ...current,
-      [unitId]: { ...current[unitId], ...changes } as UnitDraft,
-    }));
+    setDrafts((current) => {
+      const next = {
+        ...current,
+        [unitId]: { ...current[unitId], ...changes } as UnitDraft,
+      };
+      draftsRef.current = next;
+      return next;
+    });
+    editGenerationRef.current.set(
+      unitId,
+      (editGenerationRef.current.get(unitId) ?? 0) + 1,
+    );
     setDirtyUnits((current) => new Set(current).add(unitId));
   }
 
@@ -120,7 +131,12 @@ export function TemplateGenerationFinalCheckPage() {
           }),
           grade: bulkGrade,
         };
+        editGenerationRef.current.set(
+          unit.id,
+          (editGenerationRef.current.get(unit.id) ?? 0) + 1,
+        );
       }
+      draftsRef.current = next;
       return next;
     });
     setDirtyUnits((current) => {
@@ -132,35 +148,67 @@ export function TemplateGenerationFinalCheckPage() {
 
   async function saveUnit(unit: TemplateGenerationUnit) {
     if (!batch || savingKey) return;
-    const draft = drafts[unit.id];
+    const draft = draftsRef.current[unit.id] ?? drafts[unit.id];
     if (!draft?.grade || (batch.testType === "other" && !draft.baseTestName.trim())) {
       return;
     }
+    const requestDraft = { ...draft };
+    const requestGeneration = editGenerationRef.current.get(unit.id) ?? 0;
     setSavingKey(`unit:${unit.id}`);
     setActionError(undefined);
     try {
-      await templateGenerationApi.updateUnit(batch.batchId, unit.id, {
-        ...(batch.testType === "other"
-          ? { baseTestName: draft.baseTestName.trim() }
-          : {}),
-        resolvedGrade: draft.grade,
-        gradeConfirmedByUser:
-          hasWarning(unit, "GRADE_CONFLICT") ||
-          hasWarning(unit, "FILENAME_GRADE_CONFLICT"),
-        expectedRowVersion: unit.rowVersion,
-      });
+      const savedBatch = await templateGenerationApi.updateUnit(
+        batch.batchId,
+        unit.id,
+        {
+          ...(batch.testType === "other"
+            ? { baseTestName: requestDraft.baseTestName.trim() }
+            : {}),
+          resolvedGrade: requestDraft.grade as SelectableGrade,
+          gradeConfirmedByUser:
+            hasWarning(unit, "GRADE_CONFLICT") ||
+            hasWarning(unit, "FILENAME_GRADE_CONFLICT"),
+          expectedRowVersion: unit.rowVersion,
+        },
+      );
+      setConfirmedBatch(savedBatch);
       setDirtyUnits((current) => {
         const next = new Set(current);
-        next.delete(unit.id);
+        if ((editGenerationRef.current.get(unit.id) ?? 0) === requestGeneration) {
+          next.delete(unit.id);
+        }
         return next;
       });
-      batchQuery.reload();
     } catch (reason) {
       handleMutationError(reason);
     } finally {
       setSavingKey(undefined);
     }
   }
+
+  useEffect(() => {
+    if (
+      !batch ||
+      batch.status !== "needsFinalCheck" ||
+      savingKey ||
+      rowConflict ||
+      dirtyUnits.size === 0
+    ) {
+      return undefined;
+    }
+    const unit = batch.units.find((candidate) => {
+      if (!dirtyUnits.has(candidate.id)) return false;
+      const draft = drafts[candidate.id];
+      return Boolean(
+        draft?.grade &&
+          (batch.testType !== "other" || draft.baseTestName.trim()),
+      );
+    });
+    if (!unit) return undefined;
+
+    const timer = window.setTimeout(() => void saveUnit(unit), 500);
+    return () => window.clearTimeout(timer);
+  }, [batch, dirtyUnits, drafts, rowConflict, savingKey]);
 
   async function confirmTemplates() {
     if (!batch || !validation.confirmable || confirming) return;
@@ -190,6 +238,8 @@ export function TemplateGenerationFinalCheckPage() {
 
   function reloadAfterConflict() {
     setDrafts({});
+    draftsRef.current = {};
+    editGenerationRef.current.clear();
     setDirtyUnits(new Set());
     setRowConflict(false);
     setActionError(undefined);
@@ -404,7 +454,7 @@ export function TemplateGenerationFinalCheckPage() {
                       id={`unit-name-${unit.id}`}
                       aria-label="テスト名"
                       value={draft.baseTestName}
-                      disabled={readOnly || Boolean(savingKey)}
+                      disabled={readOnly}
                       onChange={(event) =>
                         updateUnitDraft(unit.id, { baseTestName: event.target.value })
                       }
@@ -428,7 +478,7 @@ export function TemplateGenerationFinalCheckPage() {
                     id={`unit-grade-${unit.id}`}
                     aria-label="学年"
                     value={draft.grade}
-                    disabled={readOnly || Boolean(savingKey)}
+                    disabled={readOnly}
                     onChange={(event) =>
                       updateUnitDraft(unit.id, {
                         grade: event.target.value as SelectableGrade | "",
@@ -496,21 +546,12 @@ export function TemplateGenerationFinalCheckPage() {
               {!readOnly ? (
                 <div className="template-final-unit-actions">
                   <span>
-                    {dirtyUnits.has(unit.id) ? "未保存の変更があります" : "保存済み"}
+                    {savingKey === `unit:${unit.id}`
+                      ? "自動保存しています"
+                      : dirtyUnits.has(unit.id)
+                        ? "まもなく自動保存します"
+                        : "自動保存済み"}
                   </span>
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    disabled={
-                      !dirtyUnits.has(unit.id) ||
-                      !draft.grade ||
-                      (batch.testType === "other" && !draft.baseTestName.trim()) ||
-                      Boolean(savingKey)
-                    }
-                    onClick={() => void saveUnit(unit)}
-                  >
-                    {savingKey === `unit:${unit.id}` ? "保存しています" : "変更を保存"}
-                  </Button>
                 </div>
               ) : null}
             </Card>
@@ -521,7 +562,7 @@ export function TemplateGenerationFinalCheckPage() {
       {batch.status !== "completed" ? (
         <Card className="template-final-confirm-card">
           <div>
-            <strong>すべての内容を確認してください</strong>
+            <strong>テンプレートを作成</strong>
             {validation.reasons.length ? (
               <ul>
                 {validation.reasons.map((reason) => (
@@ -538,7 +579,7 @@ export function TemplateGenerationFinalCheckPage() {
             disabled={!validation.confirmable || confirming}
             onClick={() => void confirmTemplates()}
           >
-            {confirming ? "テンプレートを作成しています" : "確認してテンプレートを作成"}
+            {confirming ? "テンプレートを作成しています" : "テンプレートを作成"}
           </Button>
         </Card>
       ) : null}
@@ -599,7 +640,7 @@ export function validateFinalCheck(
     reasons.push("重複しているテンプレート名を変更してください。");
   }
   if (dirtyUnits.size) {
-    reasons.push("未保存の変更を保存してください。");
+    reasons.push("変更の自動保存が完了するまでお待ちください。");
   }
   if (rowConflict) {
     reasons.push("最新の内容を読み直してください。");

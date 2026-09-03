@@ -25,7 +25,7 @@ import {
   SkeletonRows,
   StatusBadge,
 } from "../components/ui";
-import { useApiQuery } from "../hooks/useApiQuery";
+import { useApiQuery, type ApiQuery } from "../hooks/useApiQuery";
 import { useListQueryState } from "../hooks/useListQueryState";
 import { ApiError, api, asPaged, newIdempotencyKey } from "../lib/api";
 import {
@@ -93,6 +93,32 @@ interface TranscriptExportStatus {
   safeErrorDetail?: string;
   fileUrl?: string;
   normalizedSelector?: TranscriptSelector;
+}
+
+interface PassFailMatrix {
+  passMarkBasisPoints: number;
+  sourceFingerprint: string;
+  students: Array<{
+    id: string;
+    displayName: string;
+    studentNumber?: string | null;
+    gradeLabel?: string | null;
+    classLabel?: string | null;
+  }>;
+  tests: Array<{
+    id: string;
+    title: string;
+    testDate: string;
+  }>;
+  results: Array<{
+    submissionId: string;
+    studentId: string;
+    testSessionId: string;
+    earnedPointsMilli: number;
+    possiblePointsMilli: number;
+    percentageBasisPoints?: number | null;
+    status: "pass" | "fail" | "unscored" | string;
+  }>;
 }
 
 type ExportMode = "rows" | "filtered";
@@ -175,6 +201,7 @@ export function ReportsPage() {
   const [pollError, setPollError] = useState<Error>();
   const [recoveryError, setRecoveryError] = useState<Error>();
   const [acknowledged, setAcknowledged] = useState(false);
+  const [passMarkPercent, setPassMarkPercent] = useState(60);
   const selectPageRef = useRef<HTMLInputElement>(null);
   const createIdempotencyKeyRef = useRef<string | undefined>(undefined);
   const lastPreviewSelectorRef = useRef<TranscriptSelector | undefined>(undefined);
@@ -209,6 +236,46 @@ export function ReportsPage() {
         ),
       ),
   );
+  const matrix = useApiQuery<PassFailMatrix>(
+    `pass-fail-matrix:${list.filterFingerprint}:${passMarkPercent}`,
+    (signal) =>
+      api.get(
+        "/reports/pass-fail-matrix",
+        {
+          search: searchParams.get("q"),
+          from: from || undefined,
+          to: to || undefined,
+          studentId: studentId || undefined,
+          templateId: templateId || undefined,
+          subject: subject || undefined,
+          category: category || undefined,
+          course: course || undefined,
+          class: classFilter || undefined,
+          passMarkBasisPoints: Math.round(passMarkPercent * 100),
+        },
+        signal,
+      ),
+  );
+
+  useEffect(() => {
+    function handleStatus(event: Event) {
+      const type = (event as CustomEvent<{ type?: string }>).detail?.type;
+      if (
+        type === "submission.status" ||
+        type === "session.summaryChanged" ||
+        type === "export.status"
+      ) {
+        matrix.reload();
+      }
+    }
+
+    window.addEventListener("ooki:status", handleStatus);
+    const timer = window.setInterval(matrix.reload, 30_000);
+    return () => {
+      window.removeEventListener("ooki:status", handleStatus);
+      window.clearInterval(timer);
+    };
+  }, [matrix.reload]);
 
   useEffect(() => {
     setSelectedRows(new Map());
@@ -527,7 +594,7 @@ export function ReportsPage() {
   );
 
   return (
-    <div className="page">
+    <div className="page reports-page">
       <PageHeader
         eyebrow="結果・帳票"
         title="帳票"
@@ -600,6 +667,11 @@ export function ReportsPage() {
           <p>重複作成を防ぐため、同じ操作を再確認してから続けてください。</p>
         </InlineAlert>
       ) : null}
+      <PassFailMatrixCard
+        matrix={matrix}
+        passMarkPercent={passMarkPercent}
+        onPassMarkChange={setPassMarkPercent}
+      />
       <Card>
         <div className="list-toolbar reports-toolbar">
           <SearchInput
@@ -1020,6 +1092,173 @@ export function ReportsPage() {
         ) : null}
       </Modal>
     </div>
+  );
+}
+
+function PassFailMatrixCard({
+  matrix,
+  passMarkPercent,
+  onPassMarkChange,
+}: {
+  matrix: ApiQuery<PassFailMatrix>;
+  passMarkPercent: number;
+  onPassMarkChange: (value: number) => void;
+}) {
+  const students = Array.isArray(matrix.data?.students)
+    ? matrix.data.students
+    : [];
+  const tests = Array.isArray(matrix.data?.tests) ? matrix.data.tests : [];
+  const matrixResults = Array.isArray(matrix.data?.results)
+    ? matrix.data.results
+    : [];
+  const byStudentAndTest = useMemo(
+    () =>
+      new Map(
+        matrixResults.map((result) => [
+          `${result.studentId}\u0000${result.testSessionId}`,
+          result,
+        ]),
+      ),
+    [matrixResults],
+  );
+  const passCount = matrixResults.filter((result) => result.status === "pass").length;
+  const failCount = matrixResults.filter((result) => result.status === "fail").length;
+
+  return (
+    <Card className="pass-fail-matrix-card">
+      <div className="pass-fail-matrix-heading">
+        <div>
+          <div className="pass-fail-matrix-title-row">
+            <h2>合否表</h2>
+            <Badge tone="success">自動更新</Badge>
+          </div>
+          <p>
+            現在の絞り込みに一致する確定結果を、生徒×テストの表で表示します。
+          </p>
+        </div>
+        <div className="pass-fail-matrix-actions">
+          <label>
+            <span>合格基準</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              value={passMarkPercent}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isFinite(value)) {
+                  onPassMarkChange(Math.min(100, Math.max(0, value)));
+                }
+              }}
+              aria-label="合格基準（パーセント）"
+            />
+            <span>%</span>
+          </label>
+          <Button
+            type="button"
+            variant="secondary"
+            leadingIcon="reports"
+            onClick={() => window.print()}
+            disabled={!students.length || !tests.length}
+          >
+            合否表をPDF出力
+          </Button>
+        </div>
+      </div>
+
+      {matrix.status === "loading" ? (
+        <LoadingState label="合否表を更新しています" />
+      ) : matrix.status === "error" ? (
+        <ErrorState error={matrix.error} onRetry={matrix.reload} compact />
+      ) : students.length && tests.length ? (
+        <>
+          <div className="pass-fail-matrix-summary" aria-label="合否集計">
+            <span>生徒 {students.length}名</span>
+            <span>テスト {tests.length}件</span>
+            <strong>合格 {passCount}件</strong>
+            <strong>不合格 {failCount}件</strong>
+          </div>
+          <div className="table-scroll pass-fail-matrix-scroll">
+            <table className="pass-fail-matrix-table">
+              <thead>
+                <tr>
+                  <th>学年・クラス</th>
+                  <th>番号</th>
+                  <th>生徒</th>
+                  {tests.map((test) => (
+                    <th key={test.id}>
+                      <span>{test.title}</span>
+                      <small>{formatDate(test.testDate)}</small>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((student) => (
+                  <tr key={student.id}>
+                    <td>
+                      {[student.gradeLabel, student.classLabel]
+                        .filter(Boolean)
+                        .join("・") || "—"}
+                    </td>
+                    <td>{student.studentNumber || "—"}</td>
+                    <th scope="row">{student.displayName}</th>
+                    {tests.map((test) => {
+                      const result = byStudentAndTest.get(
+                        `${student.id}\u0000${test.id}`,
+                      );
+                      return (
+                        <td
+                          key={test.id}
+                          className={
+                            result?.status === "pass"
+                              ? "is-pass"
+                              : result?.status === "fail"
+                                ? "is-fail"
+                                : ""
+                          }
+                        >
+                          {result ? (
+                            <Link to={`/results/${encodeURIComponent(result.submissionId)}`}>
+                              <strong>
+                                {formatPoints(result.earnedPointsMilli)} / {formatPoints(result.possiblePointsMilli)}
+                              </strong>
+                              <span>
+                                {result.status === "pass"
+                                  ? "合格"
+                                  : result.status === "fail"
+                                    ? "不合格"
+                                    : "判定なし"}
+                                {result.percentageBasisPoints !== null &&
+                                result.percentageBasisPoints !== undefined
+                                  ? ` ${formatPercentageBasisPoints(result.percentageBasisPoints)}`
+                                  : ""}
+                              </span>
+                            </Link>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="pass-fail-print-note">
+            「合否表をPDF出力」を押し、印刷画面で「PDFとして保存」を選択してください。
+          </p>
+        </>
+      ) : (
+        <EmptyState
+          icon="reports"
+          title="合否表に表示できる結果がありません"
+          description="答案を確定するか、絞り込み条件を変更してください。"
+        />
+      )}
+    </Card>
   );
 }
 

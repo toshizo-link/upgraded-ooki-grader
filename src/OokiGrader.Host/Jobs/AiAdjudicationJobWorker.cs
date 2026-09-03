@@ -572,6 +572,7 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
                 inputManifestHash,
                 profile.MaxOutputTokens,
                 ToMediaResolution(profile.MediaResolution),
+                AiProviderRuntime.ToProviderThinkingLevel(profile.ThinkingLevel),
                 profile.AiConnection.SecretReference,
                 new AiConnectionSettings(
                     profile.AiConnection.Id,
@@ -635,7 +636,8 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
             claim.Bundle.ResponseJsonSchema,
             media,
             claim.MaxOutputTokens,
-            claim.MediaResolution);
+            claim.MediaResolution,
+            claim.ThinkingLevel);
     }
 
     private Task MarkDispatchingAsync(
@@ -1108,7 +1110,10 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
             || profile.PromptVersion != bundle.PromptVersion
             || profile.SchemaVersion != bundle.SchemaVersion
             || profile.PromptContentHash != bundle.ContentHash
-            || profile.ThinkingLevel != "minimal"
+            || profile.ThinkingLevel != AiProviderRuntime.DefaultThinkingLevel(
+                profile.AiConnection.Provider,
+                profile.ModelId,
+                profile.TaskType)
             || profile.ProcessingStrategy is not (
                 "queued_standard" or "expedite_standard"))
         {
@@ -1294,7 +1299,13 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
             printed question label and question text below. Do not infer or return
             student identity. Do not assume the first grader was correct; it is
             intentionally omitted. Transcribe exactly, preserving Japanese script,
-            and grade only against the teacher-supplied rubric. Return this one
+            and grade only against the supplied grading options, accepted answers,
+            and optional teacher rubric. Every accepted_answers entry is a
+            complete, equally valid model answer; never combine entries or prefer
+            the first. rubric_text may be null, meaning no additional teacher
+            criteria. When allow_non_kanji is false and a model answer contains
+            Kanji, a kana-only rendering is not correct unless separately accepted.
+            Return this one
             question either once in results or once in missing_question_ids. When
             requires_complete_answer is true, award either zero or the full
             maximum; do not turn genuine unreadable or ambiguous evidence into an
@@ -1885,6 +1896,7 @@ public sealed partial class AiAdjudicationJobWorker : BackgroundService
         string InputManifestHash,
         int MaxOutputTokens,
         string MediaResolution,
+        string ThinkingLevel,
         string SecretReference,
         AiConnectionSettings Connection,
         AiPromptBundle Bundle,

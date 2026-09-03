@@ -126,6 +126,11 @@ public static class TemplatesEndpoints
                 ReorderQuestions)
             .RequireAuthorization("teacher");
         group.MapPost(
+                "/{templateId}/versions/{versionId}/questions:applyKanjiRequirement",
+                ApplyKanjiRequirementToAllQuestions)
+            .RequireAuthorization("teacher")
+            .RequireIdempotency();
+        group.MapPost(
                 "/{templateId}/versions/{versionId}/questions",
                 CreateQuestion)
             .RequireAuthorization("teacher");
@@ -1763,6 +1768,12 @@ public static class TemplatesEndpoints
                 }
             }
 
+            if (selectionMode == "all"
+                && ResolveQuestionScopedExtractionReview(question))
+            {
+                changed = true;
+            }
+
             if (!changed)
             {
                 continue;
@@ -2012,9 +2023,19 @@ public static class TemplatesEndpoints
                 authorityErrors);
         }
 
+        var hierarchy = BuildQuestionHierarchy(request, request.DisplayLabel!);
+        if (HasHierarchyScoringModeConflict(version.Questions, hierarchy))
+        {
+            return Conflict(
+                context,
+                "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
+                "中問の採点単位が重複しています",
+                "同じ中問では、中問そのものに配点するか、小問ごとに配点するかのどちらか一方を選んでください。");
+        }
+
         if (version.Questions.Any(question =>
                 question.OrderIndex == order
-                || question.DisplayLabel == request.DisplayLabel!.Trim()))
+                || question.HierarchyPathKey == hierarchy.PathKey))
         {
             return Conflict(
                 context,
@@ -2027,16 +2048,7 @@ public static class TemplatesEndpoints
         var questionType = request.QuestionType ?? "exact_short_text";
         var gradingMode = request.GradingMode
             ?? QuestionGradingDefaultPolicy.GradingModeFor(questionType);
-        var canonicalAnswer = answerInputs
-            .FirstOrDefault(answer => answer.VariantType == "canonical")
-            ?.Text;
         var rubricText = TrimOrNull(request.Rubric);
-        if (gradingMode == "ai_rubric" && rubricText is null)
-        {
-            rubricText = QuestionGradingDefaultPolicy.BuildDefaultRubric(
-                questionType,
-                canonicalAnswer);
-        }
 
         var question = new QuestionEntity
         {
@@ -2045,6 +2057,10 @@ public static class TemplatesEndpoints
             LogicalQuestionId = UlidId.New(now.AddTicks(1)),
             OrderIndex = order,
             DisplayLabel = request.DisplayLabel!.Trim(),
+            MajorQuestionLabel = hierarchy.MajorQuestionLabel,
+            MiddleQuestionLabel = hierarchy.MiddleQuestionLabel,
+            MinorQuestionLabel = hierarchy.MinorQuestionLabel,
+            HierarchyPathKey = hierarchy.PathKey,
             QuestionText = request.QuestionText?.Trim() ?? string.Empty,
             QuestionType = questionType,
             GradingMode = gradingMode,
@@ -2121,6 +2137,80 @@ public static class TemplatesEndpoints
             ToQuestionResponse(created));
     }
 
+    private static async Task<IResult> ApplyKanjiRequirementToAllQuestions(
+        string templateId,
+        string versionId,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        [FromBody] ApplyKanjiRequirementApiRequest request,
+        OokiGraderDbContext db,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        var version = await FindVersionAsync(
+            db,
+            templateId,
+            versionId,
+            tracking: true,
+            cancellationToken);
+        if (version is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (version.TestTemplate.State == "archived")
+        {
+            return Archived(context);
+        }
+
+        if (version.State != "draft")
+        {
+            return Immutable(context);
+        }
+
+        var allowNonKanji = !request.KanjiRequired;
+        var changed = version.Questions
+            .Where(question => question.AllowNonKanji != allowNonKanji)
+            .ToArray();
+        if (changed.Length > 0)
+        {
+            var now = timeProvider.GetUtcNow();
+            foreach (var question in changed)
+            {
+                question.AllowNonKanji = allowNonKanji;
+            }
+
+            TouchVersion(db, version, now);
+            AddAudit(
+                db,
+                now,
+                principal,
+                context,
+                "template.kanji_requirement_applied_to_all",
+                "template_version",
+                version.Id,
+                new
+                {
+                    request.KanjiRequired,
+                    changedQuestionCount = changed.Length,
+                });
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        var items = version.Questions
+            .OrderBy(question => question.OrderIndex)
+            .ThenBy(question => question.Id)
+            .Select(ToQuestionResponse)
+            .ToArray();
+        return Results.Ok(new
+        {
+            items,
+            nextCursor = (string?)null,
+            totalApproximate = items.Length,
+            revision = version.Revision,
+        });
+    }
+
     private static async Task<IResult> UpdateQuestion(
         string templateId,
         string versionId,
@@ -2183,11 +2273,30 @@ public static class TemplatesEndpoints
                 writeErrors);
         }
 
+        var hierarchy = HasQuestionHierarchyInput(request)
+            ? BuildQuestionHierarchy(request, request.DisplayLabel ?? question.DisplayLabel)
+            : new QuestionHierarchy(
+                question.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+                    ? question.DisplayLabel
+                    : question.MiddleQuestionLabel,
+                question.MinorQuestionLabel);
+        if (HasHierarchyScoringModeConflict(
+                version.Questions,
+                hierarchy,
+                questionId))
+        {
+            return Conflict(
+                context,
+                "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
+                "中問の採点単位が重複しています",
+                "同じ中問では、中問そのものに配点するか、小問ごとに配点するかのどちらか一方を選んでください。");
+        }
+
         if (version.Questions.Any(item =>
                 item.Id != questionId
                 && (item.OrderIndex == order
-                    || item.DisplayLabel
-                        == (request.DisplayLabel ?? question.DisplayLabel).Trim())))
+                    || item.HierarchyPathKey == hierarchy.PathKey)))
         {
             return Conflict(
                 context,
@@ -2227,6 +2336,10 @@ public static class TemplatesEndpoints
                 : question.GradingMode);
         question.OrderIndex = order;
         question.DisplayLabel = (request.DisplayLabel ?? question.DisplayLabel).Trim();
+        question.MajorQuestionLabel = hierarchy.MajorQuestionLabel;
+        question.MiddleQuestionLabel = hierarchy.MiddleQuestionLabel;
+        question.MinorQuestionLabel = hierarchy.MinorQuestionLabel;
+        question.HierarchyPathKey = hierarchy.PathKey;
         question.QuestionText = (request.QuestionText ?? question.QuestionText).Trim();
         question.QuestionType = nextQuestionType;
         question.GradingMode = nextGradingMode;
@@ -2259,21 +2372,6 @@ public static class TemplatesEndpoints
         if (request.Rubric is not null)
         {
             question.RubricText = TrimOrNull(request.Rubric);
-        }
-        else if (question.GradingMode == "ai_rubric"
-                 && string.IsNullOrWhiteSpace(question.RubricText)
-                 && (questionTypeChanged || request.GradingMode == "ai_rubric"))
-        {
-            var canonicalAnswer = answerInputs?
-                .FirstOrDefault(answer => answer.VariantType == "canonical")
-                ?.Text
-                ?? question.AcceptedAnswers
-                    .FirstOrDefault(answer => answer.VariantType == "canonical")
-                    ?.AnswerText;
-            question.RubricText =
-                QuestionGradingDefaultPolicy.BuildDefaultRubric(
-                    question.QuestionType,
-                    canonicalAnswer);
         }
 
         if (request.TeacherNote is not null)
@@ -2317,6 +2415,10 @@ public static class TemplatesEndpoints
             ApplyAcceptedAnswers(db, question, answerInputs, version, now);
         }
 
+        var extractionReviewResolved =
+            request.ResolveExtractionReviewIssues == true
+            && ResolveQuestionScopedExtractionReview(question);
+
         db.Entry(question).Property(item => item.Revision).IsModified = true;
         TouchVersion(db, version, now);
         AddAudit(
@@ -2327,7 +2429,12 @@ public static class TemplatesEndpoints
             "template.question_updated",
             "template_version",
             version.Id,
-            new { questionId = question.Id, previousRevision = expectedRevision });
+            new
+            {
+                questionId = question.Id,
+                previousRevision = expectedRevision,
+                extractionReviewResolved,
+            });
 
         try
         {
@@ -2465,6 +2572,12 @@ public static class TemplatesEndpoints
             return Results.NotFound();
         }
 
+        // The editor no longer requires a separate confirmation action. Safe,
+        // non-blocked AI proposals are treated as verified for validation so the
+        // existing publish/reception action remains one step. This query is
+        // untracked, so validation itself never persists the transition.
+        _ = AutoVerifySafeGeneratedProposals(version, updatedAt: null);
+
         var report = await BuildValidationReportAsync(
             version,
             db,
@@ -2553,6 +2666,26 @@ public static class TemplatesEndpoints
             return Immutable(context);
         }
 
+        var now = timeProvider.GetUtcNow();
+        var autoVerified = AutoVerifySafeGeneratedProposals(version, now);
+        if (autoVerified.QuestionCount > 0
+            || autoVerified.AnswerCount > 0)
+        {
+            AddAudit(
+                db,
+                now,
+                principal,
+                context,
+                "template.proposals_auto_verified_for_publish",
+                "template_version",
+                version.Id,
+                new
+                {
+                    autoVerified.QuestionCount,
+                    autoVerified.AnswerCount,
+                });
+        }
+
         var report = await BuildValidationReportAsync(
             version,
             db,
@@ -2605,7 +2738,6 @@ public static class TemplatesEndpoints
                 exception.Errors.Select(ToProblemError).ToArray());
         }
 
-        var now = timeProvider.GetUtcNow();
         var testDate = request?.TestDate
             ?? await ResolveSiteLocalDateAsync(db, now, cancellationToken);
         var published = domainVersion.Publish(ApiHelpers.StaffId(principal), now);
@@ -2635,6 +2767,16 @@ public static class TemplatesEndpoints
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return Immutable(context);
+            }
+
+            // Persist proposal verification while the version is still a draft.
+            // The immutability triggers intentionally reject question/answer
+            // updates after the version state changes to published; the outer
+            // transaction keeps this write atomic with publication and reception.
+            if (autoVerified.QuestionCount > 0
+                || autoVerified.AnswerCount > 0)
+            {
+                await db.SaveChangesAsync(cancellationToken);
             }
 
             version.ExpectedSubmissionPageCount = expectedSubmissionPageCount;
@@ -3146,9 +3288,21 @@ public static class TemplatesEndpoints
             warnings.Add("未確認の解答候補があります。");
         }
 
+        warnings.AddRange(
+            ExtractionReviewLines(question)
+                .Select(line => line.StartsWith("[AI確認] ", StringComparison.Ordinal)
+                    ? line["[AI確認] ".Length..]
+                    : line)
+                .Where(line => !AcknowledgementOnlyAiNotices.Contains(line)));
+
         return new TemplateQuestionResponse(
             question.Id,
             question.DisplayLabel,
+            question.MajorQuestionLabel,
+            string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+                ? question.DisplayLabel
+                : question.MiddleQuestionLabel,
+            question.MinorQuestionLabel,
             question.OrderIndex,
             question.QuestionText,
             question.QuestionType,
@@ -3275,6 +3429,55 @@ public static class TemplatesEndpoints
                 .ToArray());
     }
 
+    private static AutoVerifiedProposalCounts AutoVerifySafeGeneratedProposals(
+        TemplateVersionEntity version,
+        DateTimeOffset? updatedAt)
+    {
+        if (string.IsNullOrWhiteSpace(version.AiGenerationProvenanceId))
+        {
+            return new AutoVerifiedProposalCounts(0, 0);
+        }
+
+        var assessment = AssessProposalVerification(
+            version,
+            acknowledgeReviewableIssues: false);
+        var questionCount = 0;
+        var answerCount = 0;
+        foreach (var question in assessment.EligibleQuestions)
+        {
+            var questionChanged = false;
+            if (!question.TeacherVerified)
+            {
+                question.TeacherVerified = true;
+                questionChanged = true;
+                questionCount++;
+            }
+
+            foreach (var answer in question.AcceptedAnswers)
+            {
+                if (answer.TeacherVerified)
+                {
+                    continue;
+                }
+
+                answer.TeacherVerified = true;
+                answerCount++;
+                questionChanged = true;
+                if (updatedAt is { } answerUpdatedAt)
+                {
+                    answer.UpdatedAt = answerUpdatedAt;
+                }
+            }
+
+            if (questionChanged && updatedAt is { } questionUpdatedAt)
+            {
+                question.UpdatedAt = questionUpdatedAt;
+            }
+        }
+
+        return new AutoVerifiedProposalCounts(questionCount, answerCount);
+    }
+
     private static List<TemplateValidationIssue> AssessQuestionProposal(
         QuestionEntity question,
         TemplateVersionEntity version,
@@ -3328,19 +3531,11 @@ public static class TemplatesEndpoints
         }
 
         if (!acknowledgeReviewableIssues
-            && HasBlockingProposalNotice(question.TeacherNote))
+            && HasBlockingProposalNotice(question))
         {
             AddIssue(
                 "question.ai_warning",
                 $"{question.DisplayLabel}にAIの警告または解答の競合があります。");
-        }
-
-        if (question.GradingMode == "ai_rubric"
-            && string.IsNullOrWhiteSpace(question.RubricText))
-        {
-            AddIssue(
-                "question.rubric_required",
-                $"{question.DisplayLabel}の採点基準を入力してください。");
         }
 
         var answers = question.AcceptedAnswers.ToArray();
@@ -3422,17 +3617,15 @@ public static class TemplatesEndpoints
         && (long)region.YMillionths + region.HeightMillionths <= 1_000_000
         && region.RotationDegrees is 0 or 90 or 180 or 270;
 
-    private static bool HasBlockingProposalNotice(string? teacherNote)
+    private static bool HasBlockingProposalNotice(QuestionEntity question)
     {
-        if (string.IsNullOrWhiteSpace(teacherNote))
+        var notices = ExtractionReviewLines(question).ToArray();
+        if (notices.Length == 0)
         {
             return false;
         }
 
-        return teacherNote
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries
-                | StringSplitOptions.TrimEntries)
-            .Any(IsBlockingAiNotice);
+        return notices.Any(IsBlockingAiNotice);
     }
 
     private static bool IsBlockingAiNotice(string line)
@@ -3474,21 +3667,20 @@ public static class TemplatesEndpoints
         var issues = new List<TemplateValidationIssue>();
         foreach (var duplicate in version.Questions
                      .GroupBy(
-                         question => question.DisplayLabel,
+                         question => string.IsNullOrWhiteSpace(
+                             question.HierarchyPathKey)
+                             ? QuestionHierarchy.FromLegacyLabel(
+                                 question.DisplayLabel).PathKey
+                             : question.HierarchyPathKey,
                          StringComparer.Ordinal)
-                     .Where(group => string.IsNullOrWhiteSpace(group.Key)
-                         || group.Count() > 1))
+                     .Where(group => group.Count() > 1))
         {
             foreach (var question in duplicate)
             {
                 issues.Add(
                     new TemplateValidationIssue(
-                        string.IsNullOrWhiteSpace(duplicate.Key)
-                            ? "question.display_label_missing"
-                            : "template.duplicate_display_label",
-                        string.IsNullOrWhiteSpace(duplicate.Key)
-                            ? "問題番号を確認できない設問があります。"
-                            : $"問題番号「{duplicate.Key}」が重複しています。",
+                        "template.duplicate_question_hierarchy",
+                        $"問題階層「{QuestionHierarchyLabel(question)}」が重複しています。",
                         question.Id,
                         true));
             }
@@ -3497,12 +3689,14 @@ public static class TemplatesEndpoints
         foreach (var question in version.Questions)
         {
             var extractionNotes = ParseExtractionReviewNotes(question).ToArray();
-            // A teacher confirmation resolves question/answer-scoped extraction
-            // findings. Template-scoped inventory findings remain global publish
-            // gates, and duplicate labels / point totals are recomputed below
-            // from the current persisted graph.
+            // Verification alone must never hide an unresolved blocking machine
+            // finding. Non-blocking question notes can be acknowledged by normal
+            // proposal verification; blocking findings remain until the explicit
+            // `all` resolution path removes them. Template-scoped findings are
+            // always retained and graph-derived checks are recomputed below.
             issues.AddRange(question.TeacherVerified
-                ? extractionNotes.Where(issue => issue.QuestionId is null)
+                ? extractionNotes.Where(issue =>
+                    issue.QuestionId is null || issue.Blocking)
                 : extractionNotes);
             if (question.TeacherVerified)
             {
@@ -3555,15 +3749,7 @@ public static class TemplatesEndpoints
     private static IEnumerable<TemplateValidationIssue>
         ParseExtractionReviewNotes(QuestionEntity question)
     {
-        if (string.IsNullOrWhiteSpace(question.TeacherNote))
-        {
-            yield break;
-        }
-
-        foreach (var line in question.TeacherNote.Split(
-                     '\n',
-                     StringSplitOptions.RemoveEmptyEntries
-                     | StringSplitOptions.TrimEntries))
+        foreach (var line in ExtractionReviewLines(question))
         {
             var markerStart = line.IndexOf("] [", StringComparison.Ordinal);
             if (markerStart < 0)
@@ -3596,6 +3782,117 @@ public static class TemplatesEndpoints
                 ExtractionIssueIsBlocking(code));
         }
     }
+
+    private static IEnumerable<string> ExtractionReviewLines(
+        QuestionEntity question)
+    {
+        if (!string.IsNullOrWhiteSpace(question.ExtractionReviewJson))
+        {
+            string[]? lines = null;
+            try
+            {
+                lines = JsonSerializer.Deserialize<string[]>(
+                    question.ExtractionReviewJson);
+            }
+            catch (JsonException)
+            {
+                // A malformed machine-owned warning payload is ignored here;
+                // publication still runs all graph-derived validation below.
+            }
+
+            if (lines is not null)
+            {
+                foreach (var line in lines
+                             .Where(item => !string.IsNullOrWhiteSpace(item))
+                             .SelectMany(item => item.Split(
+                                 '\n',
+                                 StringSplitOptions.RemoveEmptyEntries
+                                 | StringSplitOptions.TrimEntries)))
+                {
+                    yield return line.Trim();
+                }
+
+                yield break;
+            }
+        }
+
+        // Backward compatibility for drafts generated before AI review metadata
+        // was separated from the teacher's Notes field.
+        if (!string.IsNullOrWhiteSpace(question.TeacherNote))
+        {
+            foreach (var line in question.TeacherNote.Split(
+                         '\n',
+                         StringSplitOptions.RemoveEmptyEntries
+                         | StringSplitOptions.TrimEntries))
+            {
+                if (line.StartsWith("[AI確認]", StringComparison.Ordinal))
+                {
+                    yield return line;
+                }
+            }
+        }
+    }
+
+    private static bool ResolveQuestionScopedExtractionReview(
+        QuestionEntity question)
+    {
+        var retainedMachineLines = ExtractionReviewLines(question)
+            .Where(line => ExtractionReviewCode(line) is { } code
+                && code.StartsWith("template.", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var nextReviewJson = retainedMachineLines.Length == 0
+            ? null
+            : JsonSerializer.Serialize(retainedMachineLines);
+        var changed = !string.Equals(
+            question.ExtractionReviewJson,
+            nextReviewJson,
+            StringComparison.Ordinal);
+        question.ExtractionReviewJson = nextReviewJson;
+
+        if (!string.IsNullOrWhiteSpace(question.TeacherNote))
+        {
+            var teacherLines = question.TeacherNote.Split(
+                    '\n',
+                    StringSplitOptions.RemoveEmptyEntries
+                    | StringSplitOptions.TrimEntries)
+                .Where(line =>
+                    !line.StartsWith("[AI確認]", StringComparison.Ordinal))
+                .ToArray();
+            var nextTeacherNote = teacherLines.Length == 0
+                ? null
+                : string.Join('\n', teacherLines);
+            changed |= !string.Equals(
+                question.TeacherNote,
+                nextTeacherNote,
+                StringComparison.Ordinal);
+            question.TeacherNote = nextTeacherNote;
+        }
+
+        return changed;
+    }
+
+    private static string? ExtractionReviewCode(string line)
+    {
+        var notice = line.StartsWith("[AI確認] ", StringComparison.Ordinal)
+            ? line["[AI確認] ".Length..]
+            : line;
+        if (!notice.StartsWith('['))
+        {
+            return null;
+        }
+
+        var markerEnd = notice.IndexOf(']');
+        return markerEnd > 1 ? notice[1..markerEnd] : null;
+    }
+
+    private static string QuestionHierarchyLabel(QuestionEntity question) =>
+        new QuestionHierarchy(
+            question.MajorQuestionLabel,
+            string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+                ? question.DisplayLabel
+                : question.MiddleQuestionLabel,
+            question.MinorQuestionLabel).DisplayPath;
 
     private static bool ExtractionIssueIsBlocking(string code) =>
         code is
@@ -3752,16 +4049,6 @@ public static class TemplatesEndpoints
                         true));
             }
 
-            if (question.GradingMode == "ai_rubric"
-                && string.IsNullOrWhiteSpace(question.RubricText))
-            {
-                issues.Add(
-                    new TemplateValidationIssue(
-                        "question.rubric_required",
-                        $"{question.DisplayLabel}の採点基準を入力してください。",
-                        question.Id,
-                        true));
-            }
         }
 
         try
@@ -4444,7 +4731,13 @@ public static class TemplatesEndpoints
             choicePolicy: choicePolicy,
             kanjiPolicyNote: entity.KanjiPolicyNote,
             requiresCompleteAnswer: entity.RequiresCompleteAnswer,
-            answerOrderInsensitive: entity.AnswerOrderInsensitive);
+            answerOrderInsensitive: entity.AnswerOrderInsensitive,
+            hierarchy: new QuestionHierarchy(
+                entity.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(entity.MiddleQuestionLabel)
+                    ? entity.DisplayLabel
+                    : entity.MiddleQuestionLabel,
+                entity.MinorQuestionLabel));
     }
 
     private static AcceptedAnswer BuildDomainAnswer(
@@ -4510,6 +4803,17 @@ public static class TemplatesEndpoints
                 LogicalQuestionId = sourceQuestion.LogicalQuestionId,
                 OrderIndex = sourceQuestion.OrderIndex,
                 DisplayLabel = sourceQuestion.DisplayLabel,
+                MajorQuestionLabel = sourceQuestion.MajorQuestionLabel,
+                MiddleQuestionLabel = string.IsNullOrWhiteSpace(
+                    sourceQuestion.MiddleQuestionLabel)
+                    ? sourceQuestion.DisplayLabel
+                    : sourceQuestion.MiddleQuestionLabel,
+                MinorQuestionLabel = sourceQuestion.MinorQuestionLabel,
+                HierarchyPathKey = string.IsNullOrWhiteSpace(
+                    sourceQuestion.HierarchyPathKey)
+                    ? QuestionHierarchy.FromLegacyLabel(
+                        sourceQuestion.DisplayLabel).PathKey
+                    : sourceQuestion.HierarchyPathKey,
                 QuestionText = sourceQuestion.QuestionText,
                 QuestionType = sourceQuestion.QuestionType,
                 GradingMode = sourceQuestion.GradingMode,
@@ -4521,6 +4825,7 @@ public static class TemplatesEndpoints
                 KanjiPolicyNote = sourceQuestion.KanjiPolicyNote,
                 RubricText = sourceQuestion.RubricText,
                 TeacherNote = sourceQuestion.TeacherNote,
+                ExtractionReviewJson = sourceQuestion.ExtractionReviewJson,
                 RequiresReviewAlways = sourceQuestion.RequiresReviewAlways,
                 AiConfidenceBasisPoints = sourceQuestion.AiConfidenceBasisPoints,
                 TeacherVerified = sourceQuestion.TeacherVerified,
@@ -4873,6 +5178,10 @@ public static class TemplatesEndpoints
                 .Select(question => new
                 {
                     question.Id,
+                    question.MajorQuestionLabel,
+                    question.MiddleQuestionLabel,
+                    question.MinorQuestionLabel,
+                    question.HierarchyPathKey,
                     question.PointIncrementMilli,
                     question.RubricText,
                     question.TeacherNote,
@@ -4976,6 +5285,31 @@ public static class TemplatesEndpoints
             AddRequired(errors, "displayLabel", request.DisplayLabel, 100);
         }
 
+        AddOptionalLength(
+            errors,
+            "majorQuestionLabel",
+            request.MajorQuestionLabel,
+            100);
+        AddOptionalLength(
+            errors,
+            "middleQuestionLabel",
+            request.MiddleQuestionLabel,
+            100);
+        AddOptionalLength(
+            errors,
+            "minorQuestionLabel",
+            request.MinorQuestionLabel,
+            100);
+        if (!string.IsNullOrWhiteSpace(request.MinorQuestionLabel)
+            && string.IsNullOrWhiteSpace(request.MiddleQuestionLabel))
+        {
+            errors.Add(
+                FieldError(
+                    "middleQuestionLabel",
+                    "REQUIRED_FOR_MINOR_QUESTION",
+                    "小問を設定するときは中問も設定してください。"));
+        }
+
         if (order < 0)
         {
             errors.Add(
@@ -5057,6 +5391,46 @@ public static class TemplatesEndpoints
 
         return errors;
     }
+
+    private static bool HasQuestionHierarchyInput(QuestionWriteRequest request) =>
+        request.MajorQuestionLabel is not null
+        || request.MiddleQuestionLabel is not null
+        || request.MinorQuestionLabel is not null;
+
+    private static QuestionHierarchy BuildQuestionHierarchy(
+        QuestionWriteRequest request,
+        string fallbackDisplayLabel) =>
+        new(
+            request.MajorQuestionLabel,
+            string.IsNullOrWhiteSpace(request.MiddleQuestionLabel)
+                ? fallbackDisplayLabel.Trim()
+                : request.MiddleQuestionLabel.Trim(),
+            request.MinorQuestionLabel);
+
+    private static bool HasHierarchyScoringModeConflict(
+        IEnumerable<QuestionEntity> questions,
+        QuestionHierarchy candidate,
+        string? excludedQuestionId = null) =>
+        questions.Any(question =>
+        {
+            if (question.Id == excludedQuestionId)
+            {
+                return false;
+            }
+
+            var existing = new QuestionHierarchy(
+                question.MajorQuestionLabel,
+                string.IsNullOrWhiteSpace(question.MiddleQuestionLabel)
+                    ? question.DisplayLabel
+                    : question.MiddleQuestionLabel,
+                question.MinorQuestionLabel);
+            return string.Equals(
+                    existing.MiddleScopeKey,
+                    candidate.MiddleScopeKey,
+                    StringComparison.Ordinal)
+                && existing.AwardsPointsAtMiddleQuestion
+                    != candidate.AwardsPointsAtMiddleQuestion;
+        });
 
     private static void ValidateRegionWrite(
         List<object> errors,
@@ -5530,6 +5904,11 @@ public static class TemplatesEndpoints
         public IReadOnlyList<string>? QuestionIds { get; init; }
     }
 
+    private sealed record ApplyKanjiRequirementApiRequest
+    {
+        public bool KanjiRequired { get; init; }
+    }
+
     private sealed record PublishTemplateApiRequest
     {
         public long? Revision { get; init; }
@@ -5542,6 +5921,12 @@ public static class TemplatesEndpoints
     private sealed record QuestionWriteRequest
     {
         public string? DisplayLabel { get; init; }
+
+        public string? MajorQuestionLabel { get; init; }
+
+        public string? MiddleQuestionLabel { get; init; }
+
+        public string? MinorQuestionLabel { get; init; }
 
         public int? Order { get; init; }
 
@@ -5582,6 +5967,8 @@ public static class TemplatesEndpoints
         public bool? RequiresReviewAlways { get; init; }
 
         public bool? TeacherVerified { get; init; }
+
+        public bool? ResolveExtractionReviewIssues { get; init; }
 
         public long? Revision { get; init; }
     }
@@ -5717,6 +6104,9 @@ public static class TemplatesEndpoints
     private sealed record TemplateQuestionResponse(
         string Id,
         string DisplayLabel,
+        string? MajorQuestionLabel,
+        string MiddleQuestionLabel,
+        string? MinorQuestionLabel,
         int Order,
         string QuestionText,
         string QuestionType,
@@ -5779,6 +6169,10 @@ public static class TemplatesEndpoints
         IReadOnlyList<QuestionEntity> EligibleQuestions,
         int BlockedQuestionCount,
         IReadOnlyList<TemplateValidationIssue> Issues);
+
+    private sealed record AutoVerifiedProposalCounts(
+        int QuestionCount,
+        int AnswerCount);
 
     private sealed record VerifyQuestionProposalsResponse(
         long Revision,

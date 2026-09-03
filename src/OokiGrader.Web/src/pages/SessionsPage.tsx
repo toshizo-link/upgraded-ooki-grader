@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "../router";
 import { useSession } from "../auth/SessionContext";
 import { Icon } from "../components/Icon";
+import { CrossSessionScanIntake } from "../components/CrossSessionScanIntake";
 import { TemplateSessionMetadata } from "../components/TemplateSessionMetadata";
 import {
   ActiveFilterSummary,
@@ -69,6 +70,31 @@ export async function loadActiveTemplates(signal: AbortSignal) {
   } satisfies PagedResponse<TemplateSummary>;
 }
 
+export async function loadOpenReceptionSessions(signal: AbortSignal) {
+  const items: TestSessionSummary[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  do {
+    const page = asPaged(
+      await api.get<PagedResponse<TestSessionSummary> | TestSessionSummary[]>(
+        "/test-sessions",
+        { state: "open", sort: "name", cursor, pageSize: 200 },
+        signal,
+      ),
+    );
+    items.push(...page.items);
+    const nextCursor = page.nextCursor || undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+  return {
+    items,
+    nextCursor: null,
+    totalApproximate: items.length,
+  } satisfies PagedResponse<TestSessionSummary>;
+}
+
 const SESSION_QUERY_OPTIONS = {
   allowedSorts: [
     "-testDate",
@@ -131,6 +157,10 @@ export function SessionsPage() {
         ),
       ),
   );
+  const openReceptionSessions = useApiQuery<PagedResponse<TestSessionSummary>>(
+    "open-reception-sessions-for-routing",
+    loadOpenReceptionSessions,
+  );
   const templates = facetOptions(
     sessions.data?.facets,
     "templates",
@@ -189,6 +219,13 @@ export function SessionsPage() {
             </Button>
           ) : undefined
         }
+      />
+      <CrossSessionScanIntake
+        openSessions={openReceptionSessions.data?.items || []}
+        onChanged={() => {
+          sessions.reload();
+          openReceptionSessions.reload();
+        }}
       />
       <Card>
         <div className="list-toolbar">

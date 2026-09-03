@@ -1393,6 +1393,86 @@ public sealed class TemplateWorkflowTests
     }
 
     [Fact]
+    public async Task PublishAutoVerifiesSafeAiDraftWithoutSeparateConfirmAction()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(
+            application,
+            addBlankSource: false);
+        var source = await AddCompletedTemplateSourceUploadAsync(
+            application,
+            "自動生成_問題用紙.pdf",
+            'f');
+        var attached = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/sources",
+            "teacher",
+            new
+            {
+                uploadId = source.UploadId,
+                sourceRole = "blankTest",
+                displayName = "自動生成_問題用紙.pdf",
+            });
+        Assert.Equal(HttpStatusCode.Created, attached.StatusCode);
+
+        var created = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            AiProposedQuestionRequest(
+                displayLabel: "問1",
+                order: 1,
+                questionText: "東南アジア諸国連合の略称を書きなさい。"));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var questionId = RequiredString(await ReadJsonAsync(created), "id");
+        await application.WithDatabaseAsync(async db =>
+        {
+            var version = await db.TemplateVersions
+                .Include(item => item.Questions)
+                .SingleAsync(item => item.Id == versionId);
+            version.AiGenerationProvenanceId = "ai-request-safe-auto-publish";
+            version.Questions.Single().AiConfidenceBasisPoints = 9_800;
+            await db.SaveChangesAsync();
+        });
+
+        var validationResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:validate",
+            "teacher",
+            new { });
+        Assert.True((await ReadJsonAsync(validationResponse))
+            .GetProperty("valid")
+            .GetBoolean());
+
+        var current = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{templateId}/versions/{versionId}",
+            "teacher");
+        var published = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}:publish",
+            "teacher",
+            new { },
+            RequiredEtag(current));
+        Assert.Equal(HttpStatusCode.OK, published.StatusCode);
+
+        await application.WithDatabaseAsync(async db =>
+        {
+            var question = await db.Questions
+                .AsNoTracking()
+                .Include(item => item.AcceptedAnswers)
+                .SingleAsync(item => item.Id == questionId);
+            Assert.True(question.TeacherVerified);
+            Assert.All(
+                question.AcceptedAnswers,
+                answer => Assert.True(answer.TeacherVerified));
+            Assert.True(await db.AuditEvents.AsNoTracking().AnyAsync(item =>
+                item.EventType ==
+                    "template.proposals_auto_verified_for_publish"));
+        });
+    }
+
+    [Fact]
     public async Task QuestionPersistsDefaultPointsRubricNotesAndRegions()
     {
         await using var application = await TemplateTestApplication.CreateAsync();
@@ -1489,7 +1569,7 @@ public sealed class TemplateWorkflowTests
     [InlineData("semantic_short_text")]
     [InlineData("multi_part")]
     [InlineData("subjective")]
-    public async Task QuestionCreationDefaultsSupportedTypesToAiRubric(
+    public async Task QuestionCreationDefaultsSupportedTypesToAiWithoutPrefillingTeacherRubric(
         string questionType)
     {
         await using var application = await TemplateTestApplication.CreateAsync();
@@ -1512,12 +1592,111 @@ public sealed class TemplateWorkflowTests
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var question = await ReadJsonAsync(response);
         Assert.Equal("ai_rubric", RequiredString(question, "gradingMode"));
-        Assert.Contains(
-            "模範解答",
-            RequiredString(question, "rubric"),
-            StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, question.GetProperty("rubric").ValueKind);
         Assert.Equal(250, question.GetProperty("pointIncrementMilli").GetInt64());
         Assert.False(question.GetProperty("requiresReviewAlways").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ApiRejectsMixingMiddleAndMinorScoringRowsWithinOneScope()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
+
+        var middle = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "大問1 中問1",
+                majorQuestionLabel = "大問1",
+                middleQuestionLabel = "中問1",
+                minorQuestionLabel = (string?)null,
+                order = 1,
+                questionText = "まとめて答えなさい。",
+                questionType = "subjective",
+                gradingMode = "manual",
+                maxPointsMilli = 2_000,
+                teacherVerified = true,
+            });
+        Assert.Equal(HttpStatusCode.Created, middle.StatusCode);
+
+        var conflictingMinor = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "大問1 中問1 (1)",
+                majorQuestionLabel = "大問1",
+                middleQuestionLabel = "中問1",
+                minorQuestionLabel = "(1)",
+                order = 2,
+                questionText = "答えなさい。",
+                questionType = "subjective",
+                gradingMode = "manual",
+                maxPointsMilli = 1_000,
+                teacherVerified = true,
+            });
+        Assert.Equal(HttpStatusCode.Conflict, conflictingMinor.StatusCode);
+        Assert.Equal(
+            "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
+            RequiredString(await ReadJsonAsync(conflictingMinor), "code"));
+
+        var firstMinor = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "大問1 中問2 (1)",
+                majorQuestionLabel = "大問1",
+                middleQuestionLabel = "中問2",
+                minorQuestionLabel = "(1)",
+                order = 2,
+                questionText = "一つ目を答えなさい。",
+                questionType = "subjective",
+                gradingMode = "manual",
+                maxPointsMilli = 1_000,
+                teacherVerified = true,
+            });
+        var secondMinor = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
+            "teacher",
+            new
+            {
+                displayLabel = "大問1 中問2 (2)",
+                majorQuestionLabel = "大問1",
+                middleQuestionLabel = "中問2",
+                minorQuestionLabel = "(2)",
+                order = 3,
+                questionText = "二つ目を答えなさい。",
+                questionType = "subjective",
+                gradingMode = "manual",
+                maxPointsMilli = 1_000,
+                teacherVerified = true,
+            });
+        Assert.Equal(HttpStatusCode.Created, firstMinor.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, secondMinor.StatusCode);
+
+        var moveMiddleIntoMinorScope = await application.SendAsync(
+            HttpMethod.Patch,
+            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/" +
+            RequiredString(await ReadJsonAsync(middle), "id"),
+            "teacher",
+            new
+            {
+                majorQuestionLabel = "大問1",
+                middleQuestionLabel = "中問2",
+                minorQuestionLabel = (string?)null,
+            },
+            RequiredEtag(middle));
+        Assert.Equal(HttpStatusCode.Conflict, moveMiddleIntoMinorScope.StatusCode);
+        Assert.Equal(
+            "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
+            RequiredString(await ReadJsonAsync(moveMiddleIntoMinorScope), "code"));
     }
 
     [Fact]
@@ -1561,10 +1740,7 @@ public sealed class TemplateWorkflowTests
         var changedType = await ReadJsonAsync(changedTypeResponse);
         Assert.Equal("ai_rubric", RequiredString(changedType, "gradingMode"));
         Assert.False(changedType.GetProperty("requiresReviewAlways").GetBoolean());
-        Assert.Contains(
-            "答え",
-            RequiredString(changedType, "rubric"),
-            StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, changedType.GetProperty("rubric").ValueKind);
 
         var explicitModeResponse = await application.SendAsync(
             HttpMethod.Patch,
@@ -1583,7 +1759,7 @@ public sealed class TemplateWorkflowTests
     }
 
     [Fact]
-    public async Task DefaultSubjectiveAiRubricCanBePublished()
+    public async Task SubjectiveAiQuestionCanBePublishedWithBlankTeacherRubric()
     {
         await using var application = await TemplateTestApplication.CreateAsync();
         var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
@@ -2206,6 +2382,82 @@ public sealed class TemplateWorkflowTests
         Assert.Equal(HttpStatusCode.OK, publishedResponse.StatusCode);
         var published = await ReadJsonAsync(publishedResponse);
         Assert.Equal("published", RequiredString(published, "state"));
+    }
+
+    [Fact]
+    public async Task TeacherVerifiedDoesNotHideUnresolvedMachineBlockers()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var seeded = await SeedGeneratedPublicationVersionAsync(
+            application,
+            TestType.Hop);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var questions = await db.Questions
+                .Include(question => question.AcceptedAnswers)
+                .Where(question =>
+                    question.TemplateVersionId == seeded.VersionId)
+                .ToArrayAsync();
+            foreach (var question in questions)
+            {
+                question.TeacherVerified = true;
+                foreach (var answer in question.AcceptedAnswers)
+                {
+                    answer.TeacherVerified = true;
+                }
+            }
+
+            await db.SaveChangesAsync();
+        });
+
+        var unresolvedResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:validate",
+            "teacher",
+            new { });
+        var unresolved = await ReadJsonAsync(unresolvedResponse);
+        Assert.False(unresolved.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            unresolved.GetProperty("issues").EnumerateArray(),
+            issue => RequiredString(issue, "code") ==
+                "question.filled_answer_removal_unconfirmed");
+
+        var currentResponse = await application.SendAsync(
+            HttpMethod.Get,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/{seeded.VersionId}",
+            "teacher");
+        var current = await ReadJsonAsync(currentResponse);
+        foreach (var question in current.GetProperty("questions").EnumerateArray())
+        {
+            var questionId = RequiredString(question, "id");
+            var revision = question.GetProperty("revision").GetInt64();
+            var resolvedResponse = await application.SendAsync(
+                HttpMethod.Patch,
+                $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                    $"{seeded.VersionId}/questions/{questionId}",
+                "teacher",
+                new
+                {
+                    teacherVerified = true,
+                    resolveExtractionReviewIssues = true,
+                },
+                $"\"rev-{revision}\"");
+            Assert.Equal(HttpStatusCode.OK, resolvedResponse.StatusCode);
+        }
+
+        var resolvedValidationResponse = await application.SendAsync(
+            HttpMethod.Post,
+            $"/api/v1/templates/{seeded.TemplateId}/versions/" +
+                $"{seeded.VersionId}:validate",
+            "teacher",
+            new { });
+        var resolvedValidation = await ReadJsonAsync(resolvedValidationResponse);
+        Assert.True(resolvedValidation.GetProperty("valid").GetBoolean());
+        Assert.DoesNotContain(
+            resolvedValidation.GetProperty("issues").EnumerateArray(),
+            issue => RequiredString(issue, "code") ==
+                "question.filled_answer_removal_unconfirmed");
     }
 
     [Fact]

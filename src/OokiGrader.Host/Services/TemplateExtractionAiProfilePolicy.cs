@@ -68,7 +68,10 @@ internal static class TemplateExtractionAiProfilePolicy
             && profile.PromptVersion == bundle.PromptVersion
             && profile.SchemaVersion == bundle.SchemaVersion
             && profile.PromptContentHash == bundle.ContentHash
-            && profile.ThinkingLevel == "medium"
+            && profile.ThinkingLevel == AiProviderRuntime.DefaultThinkingLevel(
+                profile.AiConnection.Provider,
+                profile.ModelId,
+                profile.TaskType)
             && profile.ProcessingStrategy is
                 "queued_standard" or "expedite_standard";
     }

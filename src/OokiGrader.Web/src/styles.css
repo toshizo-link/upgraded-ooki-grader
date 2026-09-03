@@ -5299,6 +5299,178 @@ td > small {
   padding: 11px;
 }
 
+.cross-session-intake {
+  display: grid;
+  gap: 14px;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.cross-session-intake__header,
+.cross-session-intake__summary,
+.cross-session-intake__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cross-session-intake__header h2,
+.cross-session-intake__header p {
+  margin: 0;
+}
+
+.cross-session-intake__header h2 {
+  font-size: 1rem;
+}
+
+.cross-session-intake__header p {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.cross-session-drop-zone {
+  position: relative;
+  display: grid;
+  min-height: 158px;
+  align-content: center;
+  justify-items: center;
+  gap: 7px;
+  border: 2px dashed #a9c7be;
+  border-radius: 12px;
+  background: #f5faf8;
+  color: var(--color-brand-700);
+  text-align: center;
+}
+
+.cross-session-drop-zone.is-dragging {
+  border-color: var(--color-brand-600);
+  background: var(--color-brand-50);
+}
+
+.cross-session-drop-zone > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.cross-session-drop-zone strong {
+  color: #29443c;
+  font-size: 0.84rem;
+}
+
+.cross-session-drop-zone span {
+  color: var(--color-muted);
+  font-size: 0.66rem;
+}
+
+.cross-session-intake__workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.cross-session-intake__summary {
+  min-height: 38px;
+  justify-content: flex-start;
+}
+
+.cross-session-intake__summary strong {
+  font-size: 0.8rem;
+}
+
+.cross-session-intake__summary span {
+  flex: 1;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.cross-session-routing-list {
+  display: grid;
+  max-height: 520px;
+  gap: 0;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cross-session-routing-list > li {
+  display: grid;
+  min-height: 72px;
+  align-items: center;
+  grid-template-columns: 34px minmax(150px, 1fr) minmax(240px, 1.2fr) minmax(115px, auto);
+  gap: 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: #fff;
+  padding: 9px 12px;
+}
+
+.cross-session-routing-list > li:last-child {
+  border-bottom: 0;
+}
+
+.cross-session-routing-list > li.is-needsReview,
+.cross-session-routing-list > li.is-failed {
+  background: #fffaf0;
+}
+
+.cross-session-routing-list > li.is-completed {
+  background: #f1f9f5;
+}
+
+.cross-session-routing-list__ordinal {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #edf2ef;
+  color: var(--color-muted);
+  font-size: 0.67rem;
+  font-weight: 800;
+}
+
+.cross-session-routing-list__file,
+.cross-session-routing-list label,
+.cross-session-routing-list__status {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.cross-session-routing-list__file strong {
+  overflow: hidden;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cross-session-routing-list small {
+  color: var(--color-muted);
+  font-size: 0.62rem;
+}
+
+.cross-session-routing-list select {
+  width: 100%;
+  min-height: 36px;
+  font-size: 0.69rem;
+}
+
+.cross-session-routing-list__status {
+  justify-items: end;
+  text-align: right;
+}
+
+.cross-session-intake__actions {
+  justify-content: flex-end;
+}
+
 .ordered-scan-board > .inline-alert {
   margin: 18px;
 }
@@ -6386,6 +6558,175 @@ kbd {
   margin: 0;
   color: var(--color-muted);
   font-size: 0.7rem;
+}
+
+.pass-fail-matrix-card {
+  overflow: hidden;
+  padding: 0;
+}
+
+.pass-fail-matrix-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid var(--color-border);
+  padding: 16px 18px;
+}
+
+.pass-fail-matrix-heading > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.pass-fail-matrix-heading h2,
+.pass-fail-matrix-heading p {
+  margin: 0;
+}
+
+.pass-fail-matrix-heading p {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.pass-fail-matrix-title-row,
+.pass-fail-matrix-actions,
+.pass-fail-matrix-actions label {
+  display: flex;
+  align-items: center;
+}
+
+.pass-fail-matrix-title-row {
+  gap: 8px;
+}
+
+.pass-fail-matrix-title-row h2 {
+  font-size: 1rem;
+}
+
+.pass-fail-matrix-actions {
+  flex: 0 0 auto;
+  gap: 9px;
+}
+
+.pass-fail-matrix-actions label {
+  min-height: 38px;
+  gap: 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 9px;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.pass-fail-matrix-actions input {
+  width: 54px;
+  min-height: 30px;
+  border: 0;
+  padding: 0 3px;
+  text-align: right;
+  box-shadow: none;
+}
+
+.pass-fail-matrix-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: #f8faf8;
+  padding: 9px 18px;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.pass-fail-matrix-summary strong:nth-last-child(2) {
+  color: var(--color-green);
+}
+
+.pass-fail-matrix-summary strong:last-child {
+  color: var(--color-red);
+}
+
+.pass-fail-matrix-scroll {
+  max-height: 520px;
+}
+
+.pass-fail-matrix-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.68rem;
+}
+
+.pass-fail-matrix-table th,
+.pass-fail-matrix-table td {
+  min-width: 100px;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: #fff;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.pass-fail-matrix-table thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--color-brand-800);
+  color: #fff;
+  vertical-align: bottom;
+}
+
+.pass-fail-matrix-table thead th span,
+.pass-fail-matrix-table thead th small {
+  display: block;
+}
+
+.pass-fail-matrix-table thead th small {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 500;
+}
+
+.pass-fail-matrix-table tbody th[scope="row"] {
+  min-width: 130px;
+  text-align: left;
+}
+
+.pass-fail-matrix-table td.is-pass {
+  background: #edf8f2;
+}
+
+.pass-fail-matrix-table td.is-fail {
+  background: #fff0ee;
+}
+
+.pass-fail-matrix-table td a {
+  display: grid;
+  gap: 2px;
+  color: inherit;
+}
+
+.pass-fail-matrix-table td a strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.pass-fail-matrix-table td.is-pass a span {
+  color: var(--color-green);
+}
+
+.pass-fail-matrix-table td.is-fail a span {
+  color: var(--color-red);
+}
+
+.pass-fail-print-note {
+  margin: 0;
+  padding: 9px 18px 12px;
+  color: var(--color-muted);
+  font-size: 0.64rem;
 }
 
 .result-hero {
@@ -7878,6 +8219,50 @@ kbd {
     break-inside: avoid;
     box-shadow: none;
   }
+
+  .reports-page > :not(.pass-fail-matrix-card) {
+    display: none !important;
+  }
+
+  .pass-fail-matrix-card {
+    overflow: visible;
+    border: 0;
+    break-inside: auto;
+  }
+
+  .pass-fail-matrix-heading {
+    padding: 0 0 10px;
+  }
+
+  .pass-fail-matrix-actions,
+  .pass-fail-print-note,
+  .pass-fail-matrix-title-row .badge {
+    display: none !important;
+  }
+
+  .pass-fail-matrix-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .pass-fail-matrix-table {
+    width: 100%;
+    font-size: 7pt;
+  }
+
+  .pass-fail-matrix-table thead th {
+    position: static;
+    background: #e8ecea !important;
+    color: #111 !important;
+  }
+
+  .pass-fail-matrix-table thead th small {
+    color: #444;
+  }
+
+  .pass-fail-matrix-table tr {
+    break-inside: avoid;
+  }
 }
 .session-expiry-warning {
   display: flex;
@@ -8186,6 +8571,31 @@ kbd {
 
 .submission-result-list-card > header {
   align-items: center;
+}
+
+.submission-result-filter {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--color-border);
+  background: #f8faf8;
+  padding: 8px 12px;
+}
+
+.submission-result-filter button {
+  min-height: 31px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: #fff;
+  padding: 0 12px;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.submission-result-filter button.is-active {
+  border-color: var(--color-brand-700);
+  background: var(--color-brand-700);
+  color: #fff;
 }
 
 .submission-result-list {

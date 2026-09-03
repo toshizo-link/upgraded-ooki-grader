@@ -104,6 +104,13 @@ function Assert-OokiDisjointPaths {
             -Path ([string] $entry.Value) -Purpose ([string] $entry.Key)
     }
 
+    $comparison = if ([Environment]::OSVersion.Platform -eq
+        [PlatformID]::Win32NT) {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    $separator = [IO.Path]::DirectorySeparatorChar
     $names = @($resolved.Keys)
     for ($leftIndex = 0; $leftIndex -lt $names.Count; $leftIndex++) {
         for ($rightIndex = $leftIndex + 1;
@@ -111,15 +118,19 @@ function Assert-OokiDisjointPaths {
             $rightIndex++) {
             $leftName = $names[$leftIndex]
             $rightName = $names[$rightIndex]
-            $left = ([string] $resolved[$leftName]).TrimEnd('\')
-            $right = ([string] $resolved[$rightName]).TrimEnd('\')
-            if ($left.Equals($right, [StringComparison]::OrdinalIgnoreCase) -or
-                ($left + '\').StartsWith(
-                    $right + '\',
-                    [StringComparison]::OrdinalIgnoreCase) -or
-                ($right + '\').StartsWith(
-                    $left + '\',
-                    [StringComparison]::OrdinalIgnoreCase)) {
+            $left = ([string] $resolved[$leftName]).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar)
+            $right = ([string] $resolved[$rightName]).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar)
+            if ($left.Equals($right, $comparison) -or
+                ($left + $separator).StartsWith(
+                    $right + $separator,
+                    $comparison) -or
+                ($right + $separator).StartsWith(
+                    $left + $separator,
+                    $comparison)) {
                 throw "$leftName and $rightName must be separate, non-overlapping roots."
             }
         }

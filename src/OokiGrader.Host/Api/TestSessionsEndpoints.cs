@@ -457,6 +457,7 @@ public static class TestSessionsEndpoints
                     session.subject,
                     session.gradeLabel,
                     session.category,
+                    session.expectedSubmissionPageCount,
                     session.TestDate,
                     session.ClassLabel,
                     session.Course,

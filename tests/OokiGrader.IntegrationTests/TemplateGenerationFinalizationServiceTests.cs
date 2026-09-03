@@ -340,7 +340,7 @@ public sealed class TemplateGenerationFinalizationServiceTests
     [InlineData("exact_short_text")]
     [InlineData("semantic_short_text")]
     [InlineData("subjective")]
-    public async Task ConfirmationDefaultsSupportedQuestionsToAiRubric(
+    public async Task ConfirmationDefaultsSupportedQuestionsToAiWithoutTeacherRubric(
         string questionType)
     {
         await using var fixture = await FinalizationFixture.CreateAsync();
@@ -366,7 +366,8 @@ public sealed class TemplateGenerationFinalizationServiceTests
             .SingleAsync();
         Assert.Equal(questionType, question.QuestionType);
         Assert.Equal("ai_rubric", question.GradingMode);
-        Assert.Contains("模範解答", question.RubricText, StringComparison.Ordinal);
+        Assert.Null(question.RubricText);
+        Assert.Null(question.TeacherNote);
         Assert.Equal(1_000, question.PointIncrementMilli);
         Assert.False(question.RequiresReviewAlways);
     }
@@ -424,7 +425,7 @@ public sealed class TemplateGenerationFinalizationServiceTests
             .AsNoTracking()
             .ToArrayAsync();
         var inventoryReviewQuestions = questions
-            .Where(item => item.TeacherNote?.Contains(
+            .Where(item => item.ExtractionReviewJson?.Contains(
                 "question.answer_slot_inventory_mismatch",
                 StringComparison.Ordinal) == true)
             .ToArray();
@@ -435,7 +436,7 @@ public sealed class TemplateGenerationFinalizationServiceTests
     }
 
     [Fact]
-    public async Task ConfirmationAcceptsReviewedEmbeddedBlankAnomalyAndKeepsItUnverified()
+    public async Task ConfirmationAcceptsReviewedEmbeddedBlankAnomalyWithMachineMetadata()
     {
         await using var fixture = await FinalizationFixture.CreateAsync();
         var seeded = await fixture.SeedBatchAsync(
@@ -459,14 +460,15 @@ public sealed class TemplateGenerationFinalizationServiceTests
         var flaggedQuestion = Assert.Single(
             await fixture.Db.Questions
                 .AsNoTracking()
-                .Where(item => item.TeacherNote != null
-                    && item.TeacherNote.Contains(
+                .Where(item => item.ExtractionReviewJson != null
+                    && item.ExtractionReviewJson.Contains(
                         "question.fill_blank_placeholder_invalid"))
                 .ToArrayAsync());
         Assert.Contains(
             "question.filled_answer_removal_unconfirmed",
-            flaggedQuestion.TeacherNote!,
+            flaggedQuestion.ExtractionReviewJson!,
             StringComparison.Ordinal);
+        Assert.Null(flaggedQuestion.TeacherNote);
         Assert.False(flaggedQuestion.RequiresReviewAlways);
         Assert.False(flaggedQuestion.TeacherVerified);
 

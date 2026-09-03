@@ -298,6 +298,7 @@ public sealed class StaffWorkflowTests
             await db.SaveChangesAsync();
         });
 
+        var loginStartedAt = DateTimeOffset.UtcNow;
         var first = await application.LoginWithServiceAsync(
             "single.use",
             StrongResetPassword,
@@ -309,6 +310,9 @@ public sealed class StaffWorkflowTests
 
         Assert.Equal(LoginDisposition.Succeeded, first.Disposition);
         Assert.True(first.Session?.Staff.MustChangePassword);
+        Assert.True(
+            first.Session!.Staff.SessionExpiresAt
+                >= loginStartedAt.AddDays(30).AddSeconds(-1));
         Assert.Equal(LoginDisposition.InvalidCredentials, second.Disposition);
         await application.WithDatabaseAsync(async db =>
         {
@@ -525,12 +529,13 @@ public sealed class StaffWorkflowTests
                 scope.ServiceProvider.GetRequiredService<IPasswordHasher>(),
                 scope.ServiceProvider.GetRequiredService<ISessionTokenService>(),
                 TimeProvider.System,
-                new ConfigurationBuilder().AddInMemoryCollection(
-                    new Dictionary<string, string?>
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
                     {
-                        ["Security:SessionIdleMinutes"] = "30",
+                        ["Security:SessionIdleMinutes"] = "10",
                         ["Security:SessionAbsoluteHours"] = "12",
-                    }).Build());
+                    })
+                    .Build());
             return await service.LoginAsync(
                 username,
                 password,

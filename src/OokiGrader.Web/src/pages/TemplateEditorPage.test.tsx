@@ -5,7 +5,6 @@ import type { TemplateQuestion } from "../types";
 import {
   answersForQuestionEdit,
   changesForGradingPreset,
-  DEFAULT_AI_RUBRIC,
   defaultPointIncrementMilli,
   defaultsForQuestionTypeChange,
   gradingPresetForQuestion,
@@ -14,8 +13,10 @@ import {
   allowNonKanjiForKanjiRequired,
   isKanjiRequired,
   isTemplateEditorReadOnly,
+  normalizedQuestionHierarchy,
   QuestionProperties,
   newQuestionPayload,
+  questionHierarchyDisplayLabel,
   questionPayload,
   templateSourcePreviewKind,
   templateSourceRoleLabel,
@@ -94,7 +95,7 @@ describe("template proposal review routing", () => {
     expect(needsIndividualReview(question)).toBe(true);
   });
 
-  it("mirrors server-side substantive AI notes in the exception list", () => {
+  it("keeps teacher notes teacher-owned and routes machine warnings separately", () => {
     expect(
       needsIndividualReview(
         generatedQuestion({
@@ -108,6 +109,15 @@ describe("template proposal review routing", () => {
         generatedQuestion({
           teacherNote:
             "[AI確認] [answer.source_conflict_or_ambiguity] 模範解答に不一致があります。",
+          warnings: [],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      needsIndividualReview(
+        generatedQuestion({
+          teacherNote: "先生だけが使うメモ",
+          warnings: ["模範解答に不一致があります。"],
         }),
       ),
     ).toBe(true);
@@ -203,7 +213,6 @@ describe("question grading rules", () => {
       ).toEqual({
         questionType,
         gradingMode: "ai_rubric",
-        rubric: DEFAULT_AI_RUBRIC,
         requiresReviewAlways: false,
       });
     },
@@ -238,8 +247,31 @@ describe("question grading rules", () => {
       order: 3,
       gradingMode: "ai_rubric",
       pointIncrementMilli: 1000,
-      rubric: DEFAULT_AI_RUBRIC,
+      rubric: "",
       requiresReviewAlways: false,
+    });
+  });
+
+  it("normalizes the unified 大問・中問・小問 hierarchy without inventing a direct 大問・小問 path", () => {
+    const hierarchy = normalizedQuestionHierarchy(
+      generatedQuestion({
+        displayLabel: "旧表示",
+        majorQuestionLabel: " 大問1 ",
+        middleQuestionLabel: " 中問2 ",
+        minorQuestionLabel: " (3) ",
+      }),
+    );
+
+    expect(hierarchy).toEqual({
+      majorQuestionLabel: "大問1",
+      middleQuestionLabel: "中問2",
+      minorQuestionLabel: "(3)",
+    });
+    expect(questionHierarchyDisplayLabel(hierarchy)).toBe("大問1 中問2 (3)");
+    expect(questionPayload(generatedQuestion())).toMatchObject({
+      majorQuestionLabel: null,
+      middleQuestionLabel: "問1",
+      minorQuestionLabel: null,
     });
   });
 
@@ -252,7 +284,7 @@ describe("question grading rules", () => {
   it("maps the simplified teacher choices to explicit grading settings", () => {
     const question = generatedQuestion({
       gradingMode: "ai_rubric",
-      rubric: DEFAULT_AI_RUBRIC,
+      rubric: "",
     });
 
     expect(gradingPresetForQuestion(question)).toBe("ai");
@@ -306,7 +338,6 @@ describe("question grading rules", () => {
     expect(onChange).toHaveBeenLastCalledWith({
       questionType: "subjective",
       gradingMode: "ai_rubric",
-      rubric: DEFAULT_AI_RUBRIC,
       requiresReviewAlways: false,
     });
     expect(
@@ -357,7 +388,6 @@ describe("question grading rules", () => {
     expect(onChange).toHaveBeenLastCalledWith({
       questionType: "exact_short_text",
       gradingMode: "ai_rubric",
-      rubric: DEFAULT_AI_RUBRIC,
       requiresReviewAlways: false,
     });
     expect(
@@ -491,7 +521,7 @@ describe("question grading rules", () => {
     expect(screen.getByLabelText("漢字必須の例外（読み）")).toHaveValue(
       "かんじ",
     );
-    fireEvent.change(screen.getByLabelText("正解として認める別表記"), {
+    fireEvent.change(screen.getByLabelText("別の模範解答・正解（複数可）"), {
       target: { value: "新しい別表記" },
     });
 

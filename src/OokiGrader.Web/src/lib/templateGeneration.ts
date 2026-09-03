@@ -175,16 +175,17 @@ export const templateGenerationApi = {
     return response;
   },
 
-  updateUnit(
+  async updateUnit(
     batchId: string,
     unitId: string,
     request: UpdateTemplateGenerationUnitRequest,
   ) {
-    return api.patch(
+    const response = await api.patch<unknown>(
       `${BATCHES_PATH}/${encodeURIComponent(batchId)}/units/${encodeURIComponent(unitId)}`,
       request,
       { idempotencyKey: newIdempotencyKey() },
     );
+    return normalizeTemplateGenerationBatch(response);
   },
 
   updateStepSet(

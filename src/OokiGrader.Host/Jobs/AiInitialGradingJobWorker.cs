@@ -563,11 +563,25 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             }
 
             var bundle = _promptCatalog.GetRequired(AiTaskTypes.InitialGrading);
+            var applyRequestSnapshot = lease.Type == ApplyJobType
+                ? await db.AiRequests
+                    .AsNoTracking()
+                    .Include(item => item.BatchRequest)
+                        .ThenInclude(item => item!.AiBatch)
+                    .SingleOrDefaultAsync(
+                        item => item.Id == payload.AiRequestId,
+                        token)
+                    .ConfigureAwait(false)
+                    ?? throw Permanent("ai_request_missing")
+                : null;
             var profile = await db.AiTaskProfiles
                 .Include(item => item.AiConnection)
                 .SingleOrDefaultAsync(
                     item => item.TaskType == AiTaskTypes.InitialGrading
-                        && item.Active,
+                        && (applyRequestSnapshot == null
+                            ? item.Active
+                            : item.Id
+                                == applyRequestSnapshot.AiTaskProfileId),
                     token)
                 .ConfigureAwait(false);
             if (profile is null)
@@ -575,7 +589,28 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 throw Blocked("ai_initial_profile_unavailable");
             }
 
-            ValidateProfile(profile, bundle);
+            var applyBatchSnapshot = applyRequestSnapshot?
+                .BatchRequest?.AiBatch;
+            if (applyBatchSnapshot is null)
+            {
+                ValidateProfile(profile, bundle);
+            }
+            else
+            {
+                ValidateHistoricalBatchProfile(
+                    profile,
+                    applyRequestSnapshot!,
+                    applyBatchSnapshot,
+                    bundle);
+            }
+
+            var profileRevisionSnapshot = applyRequestSnapshot?
+                    .TaskProfileRevision
+                ?? profile.Revision;
+            var executionProvider = applyBatchSnapshot?.Provider
+                ?? profile.AiConnection.Provider;
+            var executionModelId = applyBatchSnapshot?.ModelId
+                ?? profile.AiConnection.ModelId;
             var submission = await db.Submissions
                 .Include(item => item.TestSession)
                     .ThenInclude(session => session.TemplateVersion)
@@ -640,7 +675,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             var inputManifestHash = ComputeInputManifestHash(
                 submission,
                 version,
-                profile,
+                profile.Id,
+                profileRevisionSnapshot,
                 bundle,
                 questions,
                 artifactSnapshots);
@@ -678,12 +714,14 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             var requestRows = await db.AiRequests
                 .Include(item => item.Usage)
                 .Include(item => item.BatchRequest)
+                    .ThenInclude(item => item!.AiBatch)
                 .Where(item => item.EntityType == "submission"
                         && item.EntityId == submission.Id
                         && item.Purpose == AiTaskTypes.InitialGrading
                         && item.AiTaskProfileId == profile.Id
                         && chunkHashes.Contains(item.InputManifestHash)
-                        && item.TaskProfileRevision == profile.Revision)
+                        && item.TaskProfileRevision
+                            == profileRevisionSnapshot)
                 .ToListAsync(token)
                 .ConfigureAwait(false);
             var currentRequestByManifest = requestRows
@@ -755,8 +793,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                         db,
                         submission,
                         version.Id,
-                        profile.AiConnection.Provider,
-                        profile.AiConnection.ModelId,
+                        executionProvider,
+                        executionModelId,
                         bundle,
                         questionSnapshots,
                         artifactSnapshots,
@@ -1041,6 +1079,17 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         bool forceExpedite,
         StoredAiResponse? storedResponse)
     {
+        var batchSnapshot = request.BatchRequest?.AiBatch;
+        var provider = batchSnapshot?.Provider
+            ?? profile.AiConnection.Provider;
+        var modelId = batchSnapshot?.ModelId
+            ?? profile.AiConnection.ModelId;
+        var processingStrategy = batchSnapshot is not null
+            ? "gemini_batch"
+            : forceExpedite
+                || submission.TestSession.Priority == "expedite"
+                ? "expedite_standard"
+                : profile.ProcessingStrategy;
         return new PreparedClaim(
             lease.Id,
             lease.CorrelationId,
@@ -1049,23 +1098,22 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             submission.Revision,
             version.Id,
             profile.Id,
-            profile.Revision,
-            profile.ConnectionRevision,
-            forceExpedite
-                || submission.TestSession.Priority == "expedite"
-                ? "expedite_standard"
-                : profile.ProcessingStrategy,
+            request.TaskProfileRevision,
+            batchSnapshot?.ConnectionRevision
+                ?? profile.ConnectionRevision,
+            processingStrategy,
             request.Id,
             request.RequestKey,
             inputManifestHash,
             profile.MaxOutputTokens,
             ToMediaResolution(profile.MediaResolution),
+            AiProviderRuntime.ToProviderThinkingLevel(profile.ThinkingLevel),
             profile.AiConnection.SecretReference,
             new AiConnectionSettings(
                 profile.AiConnection.Id,
-                profile.AiConnection.Provider,
-                AiProviderCatalog.GetBaseAddress(profile.AiConnection.Provider),
-                profile.AiConnection.ModelId,
+                provider,
+                AiProviderCatalog.GetBaseAddress(provider),
+                modelId,
                 TimeSpan.FromSeconds(profile.AiConnection.TimeoutSeconds)),
             bundle,
             questions,
@@ -1438,7 +1486,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             claim.Bundle.ResponseJsonSchema,
             media,
             claim.MaxOutputTokens,
-            claim.MediaResolution);
+            claim.MediaResolution,
+            claim.ThinkingLevel);
     }
 
     private async Task ApplyStoredResponseAsync(
@@ -2748,11 +2797,51 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             || profile.PromptVersion != bundle.PromptVersion
             || profile.SchemaVersion != bundle.SchemaVersion
             || profile.PromptContentHash != bundle.ContentHash
-            || profile.ThinkingLevel != "minimal"
+            || profile.ThinkingLevel != AiProviderRuntime.DefaultThinkingLevel(
+                profile.AiConnection.Provider,
+                profile.ModelId,
+                profile.TaskType)
             || profile.ProcessingStrategy is not (
                 "queued_standard" or "expedite_standard" or "gemini_batch"))
         {
             throw Blocked("ai_initial_profile_not_approved");
+        }
+    }
+
+    private static void ValidateHistoricalBatchProfile(
+        AiTaskProfileEntity profile,
+        AiRequestEntity request,
+        AiBatchEntity batch,
+        AiPromptBundle bundle)
+    {
+        // A model switch deactivates the old profile and advances its mutable
+        // row revision. The request and batch rows are the immutable execution
+        // snapshot, so applying an already-stored response must validate against
+        // those values rather than the newly active connection/profile.
+        if (profile.TaskType != AiTaskTypes.InitialGrading
+            || profile.Id != request.AiTaskProfileId
+            || request.TaskProfileRevision != batch.TaskProfileRevision
+            || batch.AiTaskProfileId != request.AiTaskProfileId
+            || batch.AiConnectionId != profile.AiConnectionId
+            || batch.ConnectionRevision != profile.ConnectionRevision
+            || batch.Provider != AiProviders.GeminiDirect
+            || profile.AiConnection.Provider != batch.Provider
+            || profile.ModelId != batch.ModelId
+            || !AiProviderCatalog.SupportsImageTasks(
+                batch.Provider,
+                batch.ModelId)
+            || profile.ProcessingStrategy != "gemini_batch"
+            || !AiTaskProfileRuntimePolicy.IsReadyApprovalState(
+                profile.ApprovalState)
+            || profile.PromptVersion != bundle.PromptVersion
+            || profile.SchemaVersion != bundle.SchemaVersion
+            || profile.PromptContentHash != bundle.ContentHash
+            || profile.ThinkingLevel != AiProviderRuntime.DefaultThinkingLevel(
+                batch.Provider,
+                batch.ModelId,
+                profile.TaskType))
+        {
+            throw Blocked("ai_initial_profile_snapshot_invalid");
         }
     }
 
@@ -2847,7 +2936,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
     private static string ComputeInputManifestHash(
         SubmissionEntity submission,
         TemplateVersionEntity version,
-        AiTaskProfileEntity profile,
+        string profileId,
+        long profileRevision,
         AiPromptBundle bundle,
         IEnumerable<QuestionEntity> questions,
         IEnumerable<ArtifactSnapshot> artifacts)
@@ -2863,11 +2953,11 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             canonical,
             "template-content",
             version.ContentHash ?? string.Empty);
-        AppendManifest(canonical, "profile", profile.Id);
+        AppendManifest(canonical, "profile", profileId);
         AppendManifest(
             canonical,
             "profile-revision",
-            profile.Revision.ToString(
+            profileRevision.ToString(
                 System.Globalization.CultureInfo.InvariantCulture));
         AppendManifest(canonical, "prompt", bundle.ContentHash);
         foreach (var question in questions
@@ -2985,7 +3075,14 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             inspection. Transcribe each visible answer exactly, preserving Japanese
             script and every visible line boundary as \n. The transcription is an
             audit record, not the sole input to grading. Grade only against the
-            teacher-supplied rubric and accepted answers. A visual line wrap,
+            supplied grading options, accepted answers, and optional teacher
+            rubric. Every accepted_answers entry is an independently complete,
+            equally valid model answer; do not combine entries or prefer the first.
+            rubric_text is optional teacher-authored criteria and null means there
+            are no additional teacher criteria. When allow_non_kanji is false and
+            a model answer contains Kanji, a kana-only rendering of that Kanji is
+            not correct unless it is separately present in accepted_answers.
+            A visual line wrap,
             indentation, or surrounding layout whitespace alone must never make
             otherwise identical content incorrect. Ignore only layout placement;
             never omit, reorder, or merge distinct answer components.
@@ -3480,6 +3577,7 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
         string CanonicalInputManifestHash,
         int MaxOutputTokens,
         string MediaResolution,
+        string ThinkingLevel,
         string SecretReference,
         AiConnectionSettings Connection,
         AiPromptBundle Bundle,

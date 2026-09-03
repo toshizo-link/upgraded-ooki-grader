@@ -22,6 +22,15 @@ results or every exportable result matching the current report filters as a
 durable, previewed ZIP containing the canonical Japanese result PDFs and a
 UTF-8 manifest CSV.
 
+The current release also unifies printed `大問` / `中問` / `小問` structure,
+autosaves grading-key edits, and supports multiple complete accepted answers.
+The test-session list has one cross-session drop area that natural-sorts
+one-page scanner PDFs, routes them to open `受付中` boxes, and processes them
+sequentially. Reviewers can isolate incorrect answers, each result PDF combines
+the retained answer-sheet PDF with a compact transcript, and the report screen
+maintains a live `合否表` that can be saved through the browser print-to-PDF
+dialog.
+
 ## Repository layout
 
 - `src/OokiGrader.Domain` — grading, template, student-matching, scoring, and retention rules;
@@ -217,12 +226,20 @@ development stores it in an authenticated encrypted file bound to the
 persistent ASP.NET Core Data Protection key ring under `Data:Root`, so a normal
 Host restart does not require the key to be entered again. This macOS store is
 development-only; moving the data root or restoring it on another machine still
-requires re-entry. The checked-in grading path accepts the exact model
-identifier `gemini-3.5-flash-lite` by default. An administrator can enter a
-different exact Gemini model ID on the same screen. The replacement is saved
-and activated only after the full authentication, image, structured-output,
-usage-metadata, and representative-task capability checks pass. Do not change
-models while submitted Gemini Batch work is still in progress.
+requires re-entry. The checked-in grading path uses the exact model identifier
+`gemini-3.7-flash` by default. For new Gemini 3.7 profile settings, the supported
+thinking levels are `LOW`, `MEDIUM`, and `HIGH`; `MINIMAL` is not accepted.
+
+An administrator can change only the exact Gemini model ID on the same screen
+and leave the API-key field blank. The host reuses the already encrypted key,
+runs the full authentication, exact-model, image, structured-output,
+usage-metadata, and representative-task capability checks, and atomically
+activates the replacement only on success. A failed or ambiguous model-only
+change preserves the previous working connection and profiles. Enter the key
+again only when rotating the credential. Do not change models while submitted
+Gemini Batch work is still in progress. Older evaluation/profile snapshots are
+retained as historical evidence; changing the default does not rewrite them or
+the model provenance of completed grading runs.
 
 The normal Gemini screen does not ask a school administrator to create an
 evaluation record, approve a pilot, or activate four profiles by hand. Its
@@ -274,7 +291,7 @@ cost as free, and records the routed provider for audit.
 `deepseek/deepseek-v4-flash-0731` snapshot are text-only. Both passed a live
 structured-text probe but rejected the supplied Japanese worksheet image, so
 they are not eligible for template generation, name reading, or image grading.
-Gemini 3.5 Flash Lite remains the checked-in default and there is no automatic
+Gemini 3.7 Flash remains the checked-in default and there is no automatic
 cross-provider failover. See the
 [visual-workflow eligibility report](output/accuracy/openrouter-deepseek-v4-vs-gemini-report-2026-08-05.md).
 
@@ -310,8 +327,8 @@ Configuration follows normal ASP.NET Core precedence. Use `appsettings.json`, an
 | `Data:Reports` | Generated report artifacts | `.data/reports` |
 | `Security:AllowedOrigin` | Exact origin accepted for API mutations | `https://ooki-grader.test` |
 | `Security:RequireSecureCookies` | Uses a Secure `__Host-` session cookie | `true` |
-| `Security:SessionIdleMinutes` | Session idle timeout | `30` |
-| `Security:SessionAbsoluteHours` | Absolute session lifetime | `12` |
+| `Security:SessionIdleMinutes` | Sliding idle lifetime; values are clamped to at least 30 days | `43200` (30 days) |
+| `Security:SessionAbsoluteHours` | Absolute lifetime; allowed range is 30–365 days | `2160` (90 days) |
 | `Security:BootstrapTokenHours` | First-run token lifetime, clamped to 1–24 hours | `24` |
 | `Storage:PhysicalReserveBytes` | Free-space reserve enforced for uploads | `5368709120` |
 | `Backup:Enabled` | Scheduled verified backups after destination setup | `false` |
@@ -370,7 +387,15 @@ creation UI as a shortcut.
 ### Ordered one-page scan intake
 
 Completed papers use one ordered intake pipeline driven by the published
-template version's expected submission page count. HOP groups one one-page PDF
+template version's expected submission page count. The test-session list
+provides one `受付中テストへ一括仕分け` drop area across all open sessions. It
+natural-sorts retained scanner filenames and asks the server to compare each
+one-page PDF locally with the published template pages of open sessions. It
+exposes the proposed destination/status for every file and requires a teacher
+choice when visual evidence is weak, ambiguous, or unavailable. No Gemini call
+or grading token is used for this routing step. It then sends one file at a time
+in that visible order through the existing per-session assembly contract. HOP
+groups one one-page PDF
 per submission. Each registered STEP variation/session (`-1`, `-2`, or `-3`)
 is a separate test and groups two consecutive PDFs; the original six-page STEP
 pack is not one grading session. Class-placement and Other group the complete
@@ -415,7 +440,18 @@ lazy normalized-page fallback), all question results, and append-only score,
 outcome, and transcription edits. `未確認を一括確認` preserves every proposed
 value and resolves only the exact versioned unresolved set shown in the dialog;
 it does not finalize the submission and rejects the entire action if another
-teacher changed any selected result.
+teacher changed any selected result. `不正解のみ` limits the question list to
+items currently marked incorrect so a teacher can concentrate revision on the
+likely AI false negatives and return to `すべて` without changing scores.
+
+When the retained source is a readable PDF, result export places the complete
+original/assembled answer sheet first and appends a compact transcript with the
+student identity/class, total, `大問` / `中問` / `小問` path, student answer,
+all accepted model answers, and awarded points. If the scan has aged
+out or is not a usable PDF, export remains available as transcript-only output.
+The `合否表` on the report screen uses the same current result filters, refreshes
+from result status events with a timed fallback, and supports an adjustable pass
+mark. `合否表をPDF出力` opens the browser print dialog; select `PDFとして保存`.
 
 This workflow deliberately accepts the school's scanner-order contract: page
 2 and later are assumed to belong to the student whose page 1 immediately
@@ -479,7 +515,16 @@ The specification is the target design; [Implementation status](docs/implementat
 - The question editor exposes `完答`, `順不同`, and `漢字必須` independently.
   Complete-answer questions are all-or-nothing, order-insensitive answers
   compare explicitly separated components with duplicate counts preserved, and
-  the Kanji policy remains compatible with the `allowNonKanji` API field.
+  the Kanji policy remains compatible with the `allowNonKanji` API field. A
+  question's current `漢字必須` value can be applied to all questions in the
+  draft. Ordinary grading-key changes autosave; there is no separate save or
+  confirm step before the deliberate `受付を開始` lifecycle action.
+- Every point-bearing row has a required `中問`. `大問` is optional scope only
+  and never has points. Without `小問`, points and grading options belong to
+  `中問`; with `小問`, `中問` is scope and points/options belong to each
+  independently scored `小問`. A direct `大問` → `小問` link is not representable.
+  Multiple accepted-answer entries are independent complete answers, while the
+  free-form notes and rubric fields stay blank unless a teacher enters them.
 - Removing a template is a recoverable archive, not destructive erasure.
   Archived templates cannot be edited or selected for new tests, while their
   published versions, existing sessions, grading results, and audit history

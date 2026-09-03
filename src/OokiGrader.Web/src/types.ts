@@ -190,6 +190,9 @@ export interface PageRegion {
 export interface TemplateQuestion {
   id: string;
   displayLabel: string;
+  majorQuestionLabel?: string | null;
+  middleQuestionLabel?: string;
+  minorQuestionLabel?: string | null;
   order: number;
   questionText: string;
   questionType: string;
@@ -203,6 +206,7 @@ export interface TemplateQuestion {
   canonicalAnswer?: string;
   rubric?: string;
   teacherNote?: string;
+  kanjiPolicyNote?: string;
   requiresReviewAlways: boolean;
   answerRegion?: PageRegion;
   questionRegion?: PageRegion;

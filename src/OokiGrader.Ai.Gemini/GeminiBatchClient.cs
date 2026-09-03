@@ -18,7 +18,7 @@ namespace OokiGrader.Ai.Gemini;
 public sealed partial class GeminiBatchClient(HttpClient httpClient)
     : IAiBatchProviderClient
 {
-    public const string SelectedModel = "gemini-3.5-flash-lite";
+    public const string SelectedModel = AiProviderCatalog.GeminiDefaultModelId;
 
     private const string AllowedHost = "generativelanguage.googleapis.com";
     private const int MaximumJsonLinesBytes = 1024 * 1024 * 1024;

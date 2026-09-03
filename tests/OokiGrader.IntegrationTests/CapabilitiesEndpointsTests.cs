@@ -112,7 +112,9 @@ public sealed class CapabilitiesEndpointsTests
             promptCatalog,
             CancellationToken.None);
         Assert.Equal(AiProviders.GeminiDirect, ready.Ai.Provider);
-        Assert.Equal("gemini-3.5-flash-lite", ready.Ai.ModelId);
+        Assert.Equal(
+            AiProviderCatalog.GeminiDefaultModelId,
+            ready.Ai.ModelId);
         Assert.True(ready.Ai.TemplateGeneration.Ready);
         Assert.True(ready.Ai.SemanticGrading.Ready);
         Assert.True(ready.Ai.GeminiBatch.Ready);

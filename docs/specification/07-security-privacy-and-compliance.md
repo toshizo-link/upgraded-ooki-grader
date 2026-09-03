@@ -92,7 +92,11 @@ Authorization is server-side and object-aware. A scan operator's access may be r
 - only a one-way hash stored server-side;
 - Secure, HttpOnly, SameSite=Strict host-only cookie;
 - rotated on login, privilege change, and credential change;
-- idle and absolute expiry;
+- sliding idle expiry defaults to and is clamped at a minimum of 30 days;
+- absolute expiry defaults to 90 days and is configurable only from 30 through
+  365 days;
+- authenticated activity refreshes idle state at a bounded cadence so active
+  work is not logged out by a stale short-lived deadline;
 - revoked on disable/password reset;
 - optional “sign out all sessions”;
 - source anomalies logged but IP changes alone do not leak whether an account exists.

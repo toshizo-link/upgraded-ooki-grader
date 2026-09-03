@@ -140,7 +140,12 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                         .ToLowerInvariant()),
             ],
             MaxOutputTokens: 64,
-            MediaResolution: "MEDIA_RESOLUTION_LOW");
+            MediaResolution: "MEDIA_RESOLUTION_LOW",
+            ThinkingLevel: AiProviderCatalog.SupportsMinimalThinking(
+                    connection.Provider,
+                    connection.ModelId)
+                ? "MINIMAL"
+                : "LOW");
 
         try
         {
