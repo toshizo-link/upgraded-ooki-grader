@@ -2,6 +2,15 @@
 
 Snapshot: **2026-08-27**.
 
+Windows upgrade update (**2026-09-07**): a local 0.9.2-to-0.9.9 rehearsal
+with published questions exposed an immutable-trigger failure in migration
+0024. The corrected 0.9.10 package passed the same upgrade after a verified
+old-version restore, preserved historical grading data and PDF bytes, and
+passed 1,015 .NET tests (two optional tests skipped; live tests excluded).
+See the [Windows rehearsal report](testing/windows-upgrade-rehearsal-2026-09-07.md)
+for evidence and limitations, including the independent encrypted test backup
+and the distinction between service restart and a full Windows reboot.
+
 This page separates code that is executable in this repository from evidence
 that still must be collected before a school deployment. It is not a
 production-readiness declaration. The teacher-first simplifications recorded

@@ -13,8 +13,13 @@ public sealed class QuestionHierarchyMigrationTests
     private const string Migration0024 =
         "20260827223000_0024_QuestionHierarchy";
 
-    [Fact]
-    public async Task Migration0024SeparatesOnlyAiMarkerLinesAndPreservesTeacherNotes()
+    [Theory]
+    [InlineData("draft")]
+    [InlineData("published")]
+    [InlineData("superseded")]
+    [InlineData("retired")]
+    public async Task Migration0024PreservesHistoryAndRestoresPublishedQuestionProtection(
+        string versionState)
     {
         var root = Path.Combine(
             Path.GetTempPath(),
@@ -74,10 +79,22 @@ public sealed class QuestionHierarchyMigrationTests
                     1, 1, 1);
                 """);
 
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE template_version SET state={versionState}, published_at=1, published_by_staff_user_id='01KZHIERARCHYSTAFF000001', content_hash={'a' + new string('b', 63)};");
+            foreach (var statement in TemplateVersionIntegrityTriggerCatalog.Schema18Statements)
+            {
+                await context.Database.ExecuteSqlRawAsync(statement);
+            }
+            var originalNote = await ScalarStringAsync(
+                context, "SELECT teacher_note FROM question;");
+            var originalGuard = await ScalarStringAsync(
+                context,
+                "SELECT sql FROM sqlite_master WHERE name='trg_published_question_no_update';");
+
             await migrator.MigrateAsync(Migration0024);
 
             Assert.Equal(
-                "先生の追記\n次回も確認",
+                versionState == "draft" ? "先生の追記\n次回も確認" : originalNote,
                 await ScalarStringAsync(
                     context,
                     "SELECT teacher_note FROM question WHERE " +
@@ -86,14 +103,21 @@ public sealed class QuestionHierarchyMigrationTests
                 context,
                 "SELECT extraction_review_json FROM question WHERE " +
                 "id='01KZHIERARCHYQUESTION0001';");
-            Assert.Contains(
-                "question.filled_answer_redacted",
-                machineReview,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                "answer.expected_answer_missing",
-                machineReview,
-                StringComparison.Ordinal);
+            if (versionState == "draft")
+            {
+                Assert.Contains(
+                    "question.filled_answer_redacted",
+                    machineReview,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "answer.expected_answer_missing",
+                    machineReview,
+                    StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Empty(machineReview);
+            }
             Assert.DoesNotContain(
                 "先生の追記",
                 machineReview,
@@ -110,6 +134,27 @@ public sealed class QuestionHierarchyMigrationTests
                     context,
                     "SELECT middle_question_label FROM question WHERE " +
                     "id='01KZHIERARCHYQUESTION0001';"));
+
+            Assert.Equal(originalGuard, await ScalarStringAsync(context,
+                "SELECT sql FROM sqlite_master WHERE name='trg_published_question_no_update';"));
+            Assert.Equal('a' + new string('b', 63), await ScalarStringAsync(context,
+                "SELECT content_hash FROM template_version;"));
+            if (versionState != "draft")
+            {
+                var immutable = await Assert.ThrowsAsync<SqliteException>(() =>
+                    context.Database.ExecuteSqlRawAsync("UPDATE question SET question_text='changed';"));
+                Assert.Contains("published_template_content_is_immutable", immutable.Message,
+                    StringComparison.Ordinal);
+                await migrator.MigrateAsync(Migration0023);
+                Assert.Equal(originalNote, await ScalarStringAsync(context,
+                    "SELECT teacher_note FROM question;"));
+                Assert.Equal(originalGuard, await ScalarStringAsync(context,
+                    "SELECT sql FROM sqlite_master WHERE name='trg_published_question_no_update';"));
+                await migrator.MigrateAsync(Migration0024);
+                Assert.Equal(originalNote, await ScalarStringAsync(context,
+                    "SELECT teacher_note FROM question;"));
+                return;
+            }
 
             var mixedScoringInsert = await Assert.ThrowsAsync<SqliteException>(
                 () => context.Database.ExecuteSqlRawAsync(

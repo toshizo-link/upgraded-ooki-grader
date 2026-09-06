@@ -45,9 +45,15 @@ public partial class _0024_QuestionHierarchy : Migration
             maxLength: 20000,
             nullable: true);
 
+        // Existing installations already enforce immutable published questions.
+        // Suspend only that update guard, within this migration's transaction,
+        // while deriving the new columns from the unchanged historical label.
+        migrationBuilder.Sql("DROP TRIGGER IF EXISTS trg_published_question_no_update;");
         migrationBuilder.Sql(
             "UPDATE question SET middle_question_label = display_label, " +
             "hierarchy_path_key = char(31) || display_label || char(31);");
+        migrationBuilder.Sql(
+            TemplateVersionIntegrityTriggerCatalog.Schema18PublishedQuestionUpdateStatement);
 
         // Separate legacy machine markers line-by-line. A legacy Notes value can
         // contain both [AI確認] lines and teacher-authored lines; only the former
@@ -60,6 +66,8 @@ public partial class _0024_QuestionHierarchy : Migration
                         char(13), char(10)) || char(10)
                 FROM question
                 WHERE teacher_note IS NOT NULL
+                    AND template_version_id IN (
+                        SELECT id FROM template_version WHERE state = 'draft')
                 UNION ALL
                 SELECT question_id, line_number + 1,
                     substr(rest, 1, instr(rest, char(10)) - 1),
@@ -91,10 +99,13 @@ public partial class _0024_QuestionHierarchy : Migration
             "UPDATE question SET rubric_text = NULL WHERE rubric_text = " +
             "'模範解答と照合し、内容と根拠が一致する場合のみ正解とします。' || " +
             "'部分的な一致、曖昧な表現、別解の可能性がある場合は点数を確定せず、' || " +
-            "'先生の確認に回します。';");
+            "'先生の確認に回します。' AND template_version_id IN " +
+            "(SELECT id FROM template_version WHERE state = 'draft');");
         migrationBuilder.Sql(
             "UPDATE question SET kanji_policy_note = NULL WHERE kanji_policy_note = " +
-            "'AIによる表記方針の提案です。先生の確認が必要です。';");
+            "'AIによる表記方針の提案です。先生の確認が必要です。' " +
+            "AND template_version_id IN " +
+            "(SELECT id FROM template_version WHERE state = 'draft');");
 
         migrationBuilder.DropIndex(
             name: "IX_question_template_version_id_display_label",
@@ -157,7 +168,9 @@ public partial class _0024_QuestionHierarchy : Migration
             "FROM json_each(question.extraction_review_json)) " +
             "ELSE (SELECT group_concat(value, char(10)) " +
             "FROM json_each(question.extraction_review_json)) || char(10) || teacher_note " +
-            "END WHERE extraction_review_json IS NOT NULL;");
+            "END WHERE extraction_review_json IS NOT NULL " +
+            "AND template_version_id IN " +
+            "(SELECT id FROM template_version WHERE state = 'draft');");
         migrationBuilder.DropIndex(
             name: "IX_question_template_version_id_hierarchy_path_key",
             table: "question");

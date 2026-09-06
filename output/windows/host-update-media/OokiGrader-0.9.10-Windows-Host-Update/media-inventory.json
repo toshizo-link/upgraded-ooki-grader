@@ -1,0 +1,57 @@
+{
+  "schema": "ooki-host-update-media/v1",
+  "product": "Ooki Grader",
+  "version": "0.9.10",
+  "runtime": "win-x64",
+  "packageArchive": {
+    "path": "OokiGrader-0.9.10-win-x64.zip",
+    "sha256": "3dfe1885904c7b403d19b7d81782ba14fe1c911da7ceb8df78a0075df0772ce4",
+    "compression": "store",
+    "deterministicEntryTimestamp": "1980-01-01T09:00:00+09:00",
+    "topLevelDirectory": "OokiGrader-0.9.10-win-x64"
+  },
+  "sourcePackage": {
+    "fileCount": 394,
+    "productionSigningClaimed": false,
+    "signerThumbprint": null,
+    "hostInstallEntryPoint": "Install-OokiGraderOnSite.ps1",
+    "minimumTechnicianPowerShell": "5.1"
+  },
+  "minimumBootstrapPowerShell": "5.1",
+  "requiredApplicationPowerShell": "5.1 (included with Windows)",
+  "bundledPrerequisites": [],
+  "artifactCount": 5,
+  "artifacts": [
+    {
+      "path": "00-README-ja.txt",
+      "bytes": 2075,
+      "sha256": "f951325b7d0cd06e6136abf305f2ef2d183924183dc3b9a1c77e43f3dde38d0c",
+      "kind": "operator-documentation"
+    },
+    {
+      "path": "01-Update-OokiGrader-Host.cmd",
+      "bytes": 882,
+      "sha256": "6095b2370f83f5e3c966d82613107eaeef737634527b7e98671d6c0cf06a9efd",
+      "kind": "bootstrap"
+    },
+    {
+      "path": "OokiGrader-0.9.10-win-x64.zip",
+      "bytes": 198669342,
+      "sha256": "3dfe1885904c7b403d19b7d81782ba14fe1c911da7ceb8df78a0075df0772ce4",
+      "kind": "release-package-archive"
+    },
+    {
+      "path": "OokiGrader-0.9.10-win-x64.zip.sha256",
+      "bytes": 97,
+      "sha256": "4cf1e4f5b353f22fd72073b20ba1806f26cb3a494b2633a3d0bf7dd6b5bd1522",
+      "kind": "operator-documentation"
+    },
+    {
+      "path": "Update-OokiGrader-Host.ps1",
+      "bytes": 19390,
+      "sha256": "60a80d229cc8f1c4369f85097f367dd405495416eb577088683fd9fc85fb4c72",
+      "kind": "bootstrap"
+    }
+  ],
+  "updateEntryPoint": "Update-OokiGrader-Host.ps1"
+}
