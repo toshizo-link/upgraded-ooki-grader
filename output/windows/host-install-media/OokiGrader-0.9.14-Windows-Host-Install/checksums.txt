@@ -1,0 +1,6 @@
+9c78ac8a5fe549286471cbb86405e9bbc240d853f5950492ed5a1bd37a227a07  00-README-ja.txt
+e35608be01b75f7b5a2a15063edba1cdbc683f49810a9d762753ab53817b44e3  01-Install-OokiGrader-Host.cmd
+8cff633c755a4bb3b46cd22f5a5bd84ec3038fd3bfd8a683dd2c7df60d77c9f8  Install-OokiGrader-Host.ps1
+28a7b0ef33c61a400c279b2d42b3af533cb734b0081cbd9f27858f5a0939e821  OokiGrader-0.9.14-win-x64.zip
+c9fb81912482be177dd0f91db9e0be629e337be1ec8acc19acef348657b8f4ad  OokiGrader-0.9.14-win-x64.zip.sha256
+12a8fea0450a9807b5fac1f6d9f90bf0315290a7fbac27e494489b0ccbc7b98a  media-inventory.json
