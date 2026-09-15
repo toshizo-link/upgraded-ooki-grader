@@ -360,6 +360,43 @@ public sealed class AiInitialGradingJobWorkerTests
                 .ToListAsync());
     }
 
+    [Theory]
+    [InlineData("大阪", "incorrect", false)]
+    [InlineData("", "blank", true)]
+    public async Task NegativeInitialResultAlwaysWaitsForTeacherReview(
+        string transcription,
+        string outcome,
+        bool blank)
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            request => CreateResponse(
+                request,
+                proposedPointsMilli: 0,
+                proposedOutcome: outcome,
+                transcription: transcription,
+                blank: blank));
+        var seeded = await fixture.SeedAsync();
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var run = await db.GradingRuns
+            .AsNoTracking()
+            .Include(item => item.QuestionResults)
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+
+        Assert.Equal("needs_grade_review", submission.State);
+        Assert.Equal("needs_grade_review", run.State);
+        var result = Assert.Single(run.QuestionResults);
+        Assert.Equal(outcome, result.Outcome);
+        Assert.Equal(0, result.ProposedPointsMilli);
+        Assert.True(result.ReviewRequired);
+        Assert.Equal("pending", result.ReviewStatus);
+    }
+
     [Fact]
     public async Task ActiveHardBudgetBlocksBeforeReadingCropsOrCallingProvider()
     {
@@ -1194,7 +1231,9 @@ public sealed class AiInitialGradingJobWorkerTests
         AiProviderRequest request,
         long proposedPointsMilli = 1_000,
         string proposedOutcome = "correct",
-        bool includeObservation = true)
+        bool includeObservation = true,
+        string transcription = "東京",
+        bool blank = false)
     {
         var questionId = ExtractQuestionId(request.UserInstruction);
         var results = includeObservation
@@ -1203,10 +1242,10 @@ public sealed class AiInitialGradingJobWorkerTests
                 new
                 {
                     question_id = questionId,
-                    transcription = "東京",
+                    transcription,
                     script_observed = KanjiScript,
                     legibility = "clear",
-                    blank = false,
+                    blank,
                     proposed_outcome = proposedOutcome,
                     proposed_points_milli = proposedPointsMilli,
                     kanji_observation = "not_applicable",

@@ -143,6 +143,13 @@ finalization of the paper. Initial goal is ≥92% exact score agreement, with
 all lower-confidence, conflicting, partial, or unreadable results reviewed;
 descriptive type alone does not force per-question review.
 
+The current supervised-pilot policy is stricter for negative results: every
+final reconciled outcome other than `correct` requires per-question teacher
+review. Evaluation reports must therefore include automatic-decision precision,
+unsafe automatic decisions, incorrect-credit false positives, and risk-case
+review coverage. A local synthetic matrix may validate these controls, but only
+the versioned school golden set may qualify automatic grading for production.
+
 ### 4.5 Ease-of-use
 
 - median teacher time to review a clear 50-question paper ≤ 60 seconds after AI draft;

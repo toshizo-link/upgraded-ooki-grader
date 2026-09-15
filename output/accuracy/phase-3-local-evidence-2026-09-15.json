@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "evaluatedAt": "2026-09-15",
+  "deploymentEvidence": false,
+  "gradingPolicyVersion": "teacher-review-negative-v1",
+  "grading": {
+    "totalCases": 7,
+    "exactAgreementCount": 7,
+    "exactAgreementBasisPoints": 10000,
+    "automaticDecisionCount": 3,
+    "safeAutomaticDecisionCount": 3,
+    "automaticPrecisionBasisPoints": 10000,
+    "unsafeAutomaticDecisionCount": 0,
+    "incorrectCreditFalsePositiveCount": 0,
+    "riskCaseCount": 4,
+    "riskCaseReviewCount": 4,
+    "riskReviewCoverageBasisPoints": 10000,
+    "cases": [
+      {
+        "caseId": "multiple-canonical",
+        "category": "multiple_answers",
+        "transcription": "東京",
+        "expectedOutcome": "correct",
+        "expectedPointsMilli": 1000,
+        "actualOutcome": "correct",
+        "actualPointsMilli": 1000,
+        "requiresTeacherReview": false
+      },
+      {
+        "caseId": "multiple-equivalent",
+        "category": "multiple_answers",
+        "transcription": "江戸",
+        "expectedOutcome": "correct",
+        "expectedPointsMilli": 1000,
+        "actualOutcome": "correct",
+        "actualPointsMilli": 1000,
+        "requiresTeacherReview": false
+      },
+      {
+        "caseId": "kanji-exact",
+        "category": "kanji_required",
+        "transcription": "漢字",
+        "expectedOutcome": "correct",
+        "expectedPointsMilli": 1000,
+        "actualOutcome": "correct",
+        "actualPointsMilli": 1000,
+        "requiresTeacherReview": false
+      },
+      {
+        "caseId": "kanji-kana",
+        "category": "kanji_required",
+        "transcription": "かんじ",
+        "expectedOutcome": "incorrect",
+        "expectedPointsMilli": 0,
+        "actualOutcome": "incorrect",
+        "actualPointsMilli": 0,
+        "requiresTeacherReview": true
+      },
+      {
+        "caseId": "partial-rubric",
+        "category": "partial_credit",
+        "transcription": "要素Aのみ",
+        "expectedOutcome": "partial",
+        "expectedPointsMilli": 500,
+        "actualOutcome": "partial",
+        "actualPointsMilli": 500,
+        "requiresTeacherReview": true
+      },
+      {
+        "caseId": "incorrect-answer",
+        "category": "incorrect",
+        "transcription": "大阪",
+        "expectedOutcome": "incorrect",
+        "expectedPointsMilli": 0,
+        "actualOutcome": "incorrect",
+        "actualPointsMilli": 0,
+        "requiresTeacherReview": true
+      },
+      {
+        "caseId": "located-blank",
+        "category": "blank",
+        "transcription": "",
+        "expectedOutcome": "blank",
+        "expectedPointsMilli": 0,
+        "actualOutcome": "blank",
+        "actualPointsMilli": 0,
+        "requiresTeacherReview": true
+      }
+    ]
+  },
+  "routing": {
+    "pipelineVersion": "local-raster-v3",
+    "minimumVisualScoreBasisPoints": 6500,
+    "minimumVisualMarginBasisPoints": 250,
+    "reference": {
+      "file": "tmp/pdfs/user-guide/fixtures/asia-check-test-blank.pdf",
+      "sha256": "26d6642902c3b068732deca13d25ad0e9beb208fe270d52383d81b99a2588773"
+    },
+    "candidates": [
+      {
+        "file": "tmp/pdfs/user-guide/fixtures/asia-check-test-hanako.pdf",
+        "sha256": "c512cbcc87216ef4bfe26c6cf984e02af4d034c36f80eaceff9f94cf05c408da",
+        "state": "aligned",
+        "scoreBasisPoints": 9890,
+        "rotationDegrees": 0,
+        "offsetXMillionths": 14706,
+        "offsetYMillionths": -10417
+      },
+      {
+        "file": "tmp/pdfs/user-guide/fixtures/asia-check-test-yuta.pdf",
+        "sha256": "b0792de96c84aacd4bcdc3873d14ba23ffb18fb7413b379e9cdad0e4795754af",
+        "state": "aligned",
+        "scoreBasisPoints": 9894,
+        "rotationDegrees": 0,
+        "offsetXMillionths": 14706,
+        "offsetYMillionths": -10417
+      }
+    ]
+  },
+  "limitations": [
+    "The committed forms and answers are fictional and do not contain real student handwriting.",
+    "Seven grading cases are control-flow regression evidence, not a statistical accuracy sample.",
+    "No live AI provider was called because no approved credential and school dataset were supplied.",
+    "Automatic assignment and unattended grading remain blocked pending the privacy-reviewed, teacher-adjudicated school golden set."
+  ]
+}

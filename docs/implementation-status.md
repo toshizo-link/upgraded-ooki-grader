@@ -2,6 +2,23 @@
 
 Snapshot: **2026-09-15**.
 
+Phase 3 intake/grading-accuracy update (**2026-09-15**): after local
+reconciliation, only a clear gated `correct` result may avoid per-question
+review. `incorrect`, `blank`, `partial`, `unreadable`, and `review`
+results now persist as pending teacher review and keep the paper in
+`needs_grade_review`. A reusable evaluator reports agreement, automatic
+precision, unsafe automatic decisions, incorrect-credit false positives, and
+risk-review coverage. The seven-case local teacher-truth matrix passed 7/7,
+with 3/3 safe automatic correct results and 4/4 risk cases routed to review.
+Real `local-raster-v3` processing aligned two committed completed PDFs to the
+blank reference at 9,890 and 9,894 basis points against the 6,500 routing
+threshold. The full source update passed 1,043 .NET tests (seven optional
+external/live tests skipped), 178 frontend tests, and the production frontend
+build. Checksum-verified unsigned Windows 0.9.13 release, new-install media,
+and host-update media were generated. The privacy-reviewed,
+teacher-adjudicated school golden set remains required before unattended
+assignment or grading.
+
 Phase 2 grading-workflow update (**2026-09-15**): new and AI-generated
 questions award points only at `小問`; `大問` and `中問` are scope labels.
 Legacy AI drafts are normalized when materialized, while historical published

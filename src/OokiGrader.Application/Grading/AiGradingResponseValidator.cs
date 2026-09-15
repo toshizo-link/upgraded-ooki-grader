@@ -181,6 +181,9 @@ public static class AiGradingResponseValidator
                 proposedPoints,
                 outcome,
                 reviewRecommended);
+            var requiresTeacherReview = reconciled.ReviewRecommended
+                || RequiresTeacherReviewForOutcome(
+                    reconciled.ProposedOutcome);
             var canonicalItem = JsonSerializer.SerializeToUtf8Bytes(result);
             observations.Add(new ValidatedAiQuestionObservation(
                 questionId,
@@ -190,7 +193,7 @@ public static class AiGradingResponseValidator
                 checked((int)Math.Round(
                     confidence * 10_000,
                     MidpointRounding.AwayFromZero)),
-                reconciled.ReviewRecommended,
+                requiresTeacherReview,
                 reconciled.ReasonCode,
                 null,
                 Convert.ToHexString(
@@ -230,6 +233,9 @@ public static class AiGradingResponseValidator
             observations,
             RequiredBoolean(response, "unexpected_content"));
     }
+
+    private static bool RequiresTeacherReviewForOutcome(string outcome) =>
+        outcome != "correct";
 
     public static AiIdentityComponentValidation ValidateIdentityComponent(
         JsonElement response,

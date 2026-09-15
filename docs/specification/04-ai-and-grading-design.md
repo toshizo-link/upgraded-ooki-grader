@@ -419,6 +419,15 @@ the other supplied question IDs missing; the host resolves observations across
 all chunks. The application evaluates deterministic rules independently and
 can reject the proposal.
 
+During the supervised pilot, the application applies the teacher-review
+boundary after local reconciliation. A clear, high-confidence final outcome of
+`correct` may proceed without per-question review when every other configured
+gate passes. Final outcomes of `incorrect`, `blank`, `partial`,
+`unreadable`, or `review` always require teacher review, even when provider
+confidence is high. This keeps the reliable positive path useful while
+preventing uncertain negative judgments from silently reducing a student's
+score. Paper finalization remains an explicit teacher action.
+
 ## 6. Structured output
 
 ### 6.1 Grading-key extraction schema shape

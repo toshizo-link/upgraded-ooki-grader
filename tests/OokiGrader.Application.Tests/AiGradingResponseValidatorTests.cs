@@ -87,7 +87,9 @@ public sealed class AiGradingResponseValidatorTests
         var observation = Assert.Single(validated.Observations);
         Assert.Equal(proposedOutcome, observation.ProposedOutcome);
         Assert.Equal(proposedPointsMilli, observation.ProposedPointsMilli);
-        Assert.False(observation.ProviderReviewRecommended);
+        Assert.Equal(
+            proposedOutcome != "correct",
+            observation.ProviderReviewRecommended);
         Assert.Null(observation.ProviderReasonCode);
     }
 
@@ -148,19 +150,15 @@ public sealed class AiGradingResponseValidatorTests
         Assert.Equal("ai_invalid_point_award", observation.ProviderReasonCode);
     }
 
-    [Theory]
-    [InlineData("correct", 1_000)]
-    [InlineData("incorrect", 0)]
-    public void ValidateAllowsClearHighConfidenceAiRubricWithoutMandatoryReview(
-        string outcome,
-        long points)
+    [Fact]
+    public void ValidateAllowsClearHighConfidenceCorrectAiRubricWithoutMandatoryReview()
     {
         var question = RubricQuestion(requiresReviewAlways: false);
         using var response = ParseResponse(
             question.Id,
             transcription: "説明",
-            proposedOutcome: outcome,
-            proposedPointsMilli: points,
+            proposedOutcome: "correct",
+            proposedPointsMilli: 1_000,
             reviewRecommended: false);
 
         var validated = AiGradingResponseValidator.Validate(
@@ -172,9 +170,40 @@ public sealed class AiGradingResponseValidatorTests
             });
 
         var observation = Assert.Single(validated.Observations);
-        Assert.Equal(outcome, observation.ProposedOutcome);
-        Assert.Equal(points, observation.ProposedPointsMilli);
+        Assert.Equal("correct", observation.ProposedOutcome);
+        Assert.Equal(1_000, observation.ProposedPointsMilli);
         Assert.False(observation.ProviderReviewRecommended);
+    }
+
+    [Theory]
+    [InlineData("incorrect", "説明", false)]
+    [InlineData("blank", "", true)]
+    public void ValidateRequiresTeacherReviewForClearHighConfidenceNegativeResult(
+        string outcome,
+        string transcription,
+        bool blank)
+    {
+        var question = RubricQuestion(requiresReviewAlways: false);
+        using var response = ParseResponse(
+            question.Id,
+            transcription,
+            proposedOutcome: outcome,
+            proposedPointsMilli: 0,
+            reviewRecommended: false,
+            blank: blank);
+
+        var validated = AiGradingResponseValidator.Validate(
+            response.RootElement,
+            "grade-request-1",
+            new Dictionary<string, DomainQuestionDefinition>
+            {
+                [question.Id] = question,
+            });
+
+        var observation = Assert.Single(validated.Observations);
+        Assert.Equal(outcome, observation.ProposedOutcome);
+        Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.True(observation.ProviderReviewRecommended);
     }
 
     [Fact]
@@ -489,6 +518,7 @@ public sealed class AiGradingResponseValidatorTests
         Assert.Equal(string.Empty, observation.Observation.Transcription);
         Assert.Equal("blank", observation.ProposedOutcome);
         Assert.Equal(0, observation.ProposedPointsMilli);
+        Assert.True(observation.ProviderReviewRecommended);
         Assert.Null(observation.ProviderReasonCode);
     }
 
