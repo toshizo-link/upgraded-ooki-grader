@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using OokiGrader.Infrastructure.Persistence;
 
@@ -10,9 +11,11 @@ using OokiGrader.Infrastructure.Persistence;
 namespace OokiGrader.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(OokiGraderDbContext))]
-    partial class OokiGraderDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260915062614_0025_SchoolManagerGuardianDelivery")]
+    partial class _0025_SchoolManagerGuardianDelivery
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");

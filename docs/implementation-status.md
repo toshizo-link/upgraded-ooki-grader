@@ -2,6 +2,25 @@
 
 Snapshot: **2026-09-15**.
 
+Phase 4 School Manager guardian-delivery update (**2026-09-15**): results
+finalized after explicit automation activation are queued only when the retained
+original answer-sheet PDF is available, and the existing report renderer joins
+that PDF with the grading transcript. A separate worker matches exactly one
+School Manager student by number and name, verifies the semantic guardian-only
+controls, and defaults to a no-upload/no-send dry run. New `.xls`/`.xlsx`
+pass/fail tables are projected per student to the exact grade and class, with
+all recognized identifier/name columns removed, a fixed generated title,
+bounded result-only cells, and a Tokyo-calendar limit of one send per student
+per day. Unknown send outcomes reserve that daily limit and block automatic
+retry. The supplied legacy `.xls` sample produced a 23-row, 99-result-column,
+9-page projection with no captured identity token or five-digit sequence. The
+source passed 1,068 .NET tests (seven optional external/live tests skipped),
+178 frontend tests, the production frontend build, PowerShell parsing, and a
+second safety review. Production School Manager upload/send was not performed;
+activation remains a technician-controlled, dummy-account-first deployment
+step. Checksum-verified unsigned Windows 0.9.14 release, new-install media, and
+host-update media were generated.
+
 Phase 3 intake/grading-accuracy update (**2026-09-15**): after local
 reconciliation, only a clear gated `correct` result may avoid per-question
 review. `incorrect`, `blank`, `partial`, `unreadable`, and `review`
@@ -50,8 +69,8 @@ here supersede the older Batch/priority controls in the baseline
 
 ### Application foundation and staff security
 
-- Eleven .NET 10 source projects, a React/TypeScript SPA, eight .NET test
-  projects, and twenty-one EF Core migrations.
+- Twelve .NET 10 source projects, a React/TypeScript SPA, nine .NET test
+  projects, and twenty-five EF Core migrations.
 - SQLite with WAL, foreign keys, integrity constraints/triggers, serialized
   writes, content-addressed storage, audit records, and crash reconciliation
   for promoted-but-unreferenced objects.
@@ -319,6 +338,14 @@ here supersede the older Batch/priority controls in the baseline
   percentage, result-event plus timed refresh, print CSS, and browser
   print-to-PDF export. Its 2,000-student / 20,000-result read bound is
   independent from ZIP-export limits.
+- School Manager guardian delivery is a host-local background workflow with an
+  activation boundary, DPAPI-protected credentials, dry-run recipient checks,
+  exact student matching, guardian-only semantic control verification, audited
+  delivery state, and no automatic retry after an unknown send outcome. Finalized
+  results require the retained original answer PDF before a combined report is
+  queued. Updated pass/fail workbooks create fixed-title, identity-redacted PDFs
+  for each matching grade/class and enforce one possible send per student per
+  Tokyo day.
 - Durable bulk student-result export previews either exact checked submission
   IDs or the server-resolved current report filters. A fingerprinted job
   revalidates every current finalized result and packages at most 100 students

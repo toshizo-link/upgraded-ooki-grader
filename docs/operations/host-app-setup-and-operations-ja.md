@@ -609,6 +609,81 @@ PDF を作成できます。備考と先生専用の自由記述採点基準は�
 
 *図: 実際のバックグラウンド処理が 2 件の正式な日本語結果 PDF と一覧 CSV を検証し、ZIP をダウンロード可能にした状態です。`作成済み` と処理件数が一致するまで未完成物を配布しません。*
 
+### 9.8 School Manager の保護者配信を構成する
+
+この機能は、技術担当者が明示的に有効化した時刻より後のデータだけを対象にします。
+更新前から存在する確定済み答案や合否表を遡って送信しません。先生が答案を確定
+すると、元答案 PDF と採点結果を連結した検証済み PDF が保護者限定メッセージの
+候補になります。合否表は技術担当者が所定フォルダーへ置いた更新ファイルを検知し、
+各生徒について同じ学年かつ同じクラスの行だけを残し、すべての氏名・生徒 ID を
+削除して PDF にします。表題は Ooki Grader が固定文言で作り直し、元ファイルの
+自由記述を転記しません。
+合否表の送信上限は東京時間で生徒 1 人につき 1 日 1 回です。
+
+更新直後は、実送信をしないドライランで構成します。Ooki Grader の管理者名と
+School Manager 自動化専用ユーザー名だけを引数に指定し、2 つのパスワードは
+画面の安全な入力欄へ入力します。パスワードをコマンド行、ファイル、運用記録へ
+書かないでください。
+
+```powershell
+Set-Location 'C:\Program Files\Ooki Grader'
+
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File .\Set-OokiGraderSchoolManager.ps1 `
+  -OokiGraderUrl 'https://ooki-grader.test' `
+  -AdminUsername '<Ooki Grader 管理者名>' `
+  -SchoolManagerUsername '<自動化専用ユーザー名>' `
+  -Enable
+```
+
+この実行では、認証情報を Ooki Grader サービスの DPAPI 保管庫へ暗号化して保存し、
+自動化をドライランで開始します。ドライランは School Manager へログインし、生徒番号
+と氏名が完全一致する生徒が 1 人だけであること、保護者だけが選択されていること、
+件名入力後に次へ進めることまでを確認します。ファイルのアップロードとメッセージ
+送信は行いません。
+
+合否表を試す場合は、有効化後に安定した `.xls` または `.xlsx` を新しく次へコピーします。
+
+```powershell
+Copy-Item -LiteralPath 'C:\受領\合否表.xls' `
+  -Destination '<DataRoot>\school-manager\incoming\合否表.xls'
+```
+
+合否表には `四谷大塚ID`／`生徒ID`／`生徒番号` のいずれかと、`クラス`／
+`所属クラス` の列が必要です。`学年`／`在籍学年` 列、または表題中の
+`小6`／`中1`／`高1` 形式で学年も一意に判定できる必要があります。複数ある ID 列、
+氏名・名前・カナ列、見出しが空の列はすべて出力から除外されます。結果欄には
+合否記号・合否状態・限定された数値だけを使用でき、その他の自由記述があるファイルは
+安全側に停止します。対象 ID・学年・クラスが一意に一致しないファイル、20 MiB を
+超えるファイル、500 列・10,000 行を超えるファイルは送信候補にしません。
+
+ログイン済みの管理者ブラウザーで
+`https://ooki-grader.test/api/v1/admin/school-manager/` を開き、`dryRun: true`、
+`lastCredentialTestedAt`、配信状態件数を確認します。詳細一覧は末尾へ
+`deliveries?limit=200` を付けます。`recipient_not_found`、`recipient_ambiguous`、
+`guardian_only_selection_invalid` が 1 件でもあれば、Ooki Grader と School Manager
+の生徒番号・氏名・保護者登録を直してから新しい対象で再確認します。
+
+ダミー生徒・ダミー保護者だけで対象、添付内容、通知先を確認できた後、技術担当者が
+次を実行すると、その時点で待機しているドライラン検証済み候補と以後の候補が実送信
+されます。実行前に配信一覧の件数を必ず記録してください。
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File .\Set-OokiGraderSchoolManager.ps1 `
+  -OokiGraderUrl 'https://ooki-grader.test' `
+  -AdminUsername '<Ooki Grader 管理者名>' `
+  -SchoolManagerUsername '<自動化専用ユーザー名>' `
+  -Enable -LiveSending
+```
+
+送信開始後に応答を確認できなかった候補は `message_send_outcome_unknown` で停止し、
+自動再試行しません。School Manager の送信済みメッセージを確認してから対応します。
+合否表では応答不明もその日の送信済み枠として扱います。同じ PDF を手動で再送しないで
+ください。自動化を無効化するときは `-Enable` と
+`-LiveSending` を外してスクリプトを実行します。未送信候補は取り消され、次回有効化
+より前の結果と合否表は対象外になります。
+
 ## 10. バックアップと復元
 
 ### 10.1 バックアップ設定の重要点

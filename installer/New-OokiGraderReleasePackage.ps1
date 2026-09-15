@@ -217,6 +217,7 @@ if ($PSCmdlet.ShouldProcess(
             'Uninstall-OokiGrader.ps1',
             'Test-OokiGraderHealth.ps1',
             'Test-OokiGraderPreflight.ps1',
+            'Set-OokiGraderSchoolManager.ps1',
             'New-OokiGraderCertificate.ps1',
             'New-OokiGraderPeerTrustPackage.ps1',
             'Install-OokiGraderPeerTrust.ps1',

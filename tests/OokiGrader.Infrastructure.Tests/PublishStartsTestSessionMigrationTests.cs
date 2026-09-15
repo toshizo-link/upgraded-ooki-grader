@@ -18,6 +18,8 @@ public sealed class PublishStartsTestSessionMigrationTests
         "20260827220405_0023_ConfigurableGeminiModel";
     private const string Migration0024 =
         "20260827223000_0024_QuestionHierarchy";
+    private const string Migration0025 =
+        "20260915062614_0025_SchoolManagerGuardianDelivery";
 
     [Fact]
     public async Task Migration0022IsAdditiveTriggerSafeAndRoundTripsFrom0021()
@@ -216,7 +218,7 @@ public sealed class PublishStartsTestSessionMigrationTests
                 Migration0022,
                 await context.Database.GetAppliedMigrationsAsync());
             Assert.Equal(
-                [Migration0023, Migration0024],
+                [Migration0023, Migration0024, Migration0025],
                 await context.Database.GetPendingMigrationsAsync());
             Assert.False(context.Database.HasPendingModelChanges());
         }
