@@ -246,8 +246,8 @@ public sealed class TemplateGenerationUnitJobWorkerTests
 
         var providerRequest = Assert.Single(fixture.Provider.Requests);
         Assert.Equal(AiTaskTypes.TemplateExtraction, providerRequest.TaskType);
-        Assert.Equal("template-extract-v2.0.0", providerRequest.PromptVersion);
-        Assert.Equal("template_extract_v5", providerRequest.SchemaVersion);
+        Assert.Equal("template-extract-v2.1.0", providerRequest.PromptVersion);
+        Assert.Equal("template_extract_v6", providerRequest.SchemaVersion);
         await using var db = await fixture.CreateDbContextAsync();
         Assert.Equal(
             TemplateGenerationBatchStatus.NeedsFinalCheck,
@@ -866,6 +866,9 @@ public sealed class TemplateGenerationUnitJobWorkerTests
                             {
                                 source_key = "page-1-slot-1",
                                 display_label = "1",
+                                major_question_label = (string?)null,
+                                middle_question_label = "設問",
+                                minor_question_label = "1",
                                 question_text = "1 + 1 はいくつですか。",
                                 answer_slot_ordinal = 1,
                                 answer_slot_count = 1,
@@ -889,7 +892,7 @@ public sealed class TemplateGenerationUnitJobWorkerTests
                 ];
             var root = JsonSerializer.SerializeToElement(new
             {
-                schema_version = "template_extract_v5",
+                schema_version = "template_extract_v6",
                 request_key = requestKey,
                 action = action == ProviderAction.Rotate ? "rotate" : "extract",
                 orientation = new { pages = orientation },

@@ -29,6 +29,14 @@ public sealed class TemplateExtractionInstructionBuilderTests
         Assert.Contains("common-extraction-core-v3", built.UserInstruction);
         Assert.Contains(expectedFragment, built.UserInstruction);
         Assert.Contains("paper-name-and-grade-v1", built.UserInstruction);
+        Assert.Contains(
+            "minor_question_label awards points",
+            built.UserInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "the 中問 awards the points",
+            built.UserInstruction,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("display_name", built.UserInstruction,
             StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("current_metadata", built.UserInstruction,
@@ -73,6 +81,6 @@ public sealed class TemplateExtractionInstructionBuilderTests
             DeterministicSuffix: testType == TestType.Step ? "-2" : null,
             TemplateGenerationProfile.CurrentSplitPolicyVersion,
             TemplateGenerationProfile.CurrentNamingPolicyVersion,
-            "template-extract-v2.0.0",
-            "template_extract_v5");
+            "template-extract-v2.1.0",
+            "template_extract_v6");
 }

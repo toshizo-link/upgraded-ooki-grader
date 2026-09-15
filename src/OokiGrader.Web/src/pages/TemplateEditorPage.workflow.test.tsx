@@ -108,7 +108,8 @@ describe("TemplateEditorPage autosave and publish recovery", () => {
         expect.stringContaining("/questions/question-1"),
         expect.objectContaining({
           questionText: "自動保存する問題文",
-          middleQuestionLabel: "問1",
+          middleQuestionLabel: "設問",
+          minorQuestionLabel: "問1",
           teacherVerified: true,
           acceptedAnswers: [
             expect.objectContaining({ teacherVerified: true }),

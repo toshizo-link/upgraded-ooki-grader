@@ -2024,13 +2024,18 @@ public static class TemplatesEndpoints
         }
 
         var hierarchy = BuildQuestionHierarchy(request, request.DisplayLabel!);
+        if (HasQuestionHierarchyInput(request)
+            && hierarchy.AwardsPointsAtMiddleQuestion)
+        {
+            return MinorQuestionRequired(context);
+        }
         if (HasHierarchyScoringModeConflict(version.Questions, hierarchy))
         {
             return Conflict(
                 context,
                 "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
                 "中問の採点単位が重複しています",
-                "同じ中問では、中問そのものに配点するか、小問ごとに配点するかのどちらか一方を選んでください。");
+                "同じ範囲に中問配点の旧形式が残っています。既存の採点項目にも小問を設定してください。");
         }
 
         if (version.Questions.Any(question =>
@@ -2281,6 +2286,11 @@ public static class TemplatesEndpoints
                     ? question.DisplayLabel
                     : question.MiddleQuestionLabel,
                 question.MinorQuestionLabel);
+        if (HasQuestionHierarchyInput(request)
+            && hierarchy.AwardsPointsAtMiddleQuestion)
+        {
+            return MinorQuestionRequired(context);
+        }
         if (HasHierarchyScoringModeConflict(
                 version.Questions,
                 hierarchy,
@@ -2290,7 +2300,7 @@ public static class TemplatesEndpoints
                 context,
                 "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
                 "中問の採点単位が重複しています",
-                "同じ中問では、中問そのものに配点するか、小問ごとに配点するかのどちらか一方を選んでください。");
+                "同じ範囲に中問配点の旧形式が残っています。既存の採点項目にも小問を設定してください。");
         }
 
         if (version.Questions.Any(item =>
@@ -5399,13 +5409,32 @@ public static class TemplatesEndpoints
 
     private static QuestionHierarchy BuildQuestionHierarchy(
         QuestionWriteRequest request,
-        string fallbackDisplayLabel) =>
-        new(
+        string fallbackDisplayLabel)
+    {
+        if (!HasQuestionHierarchyInput(request))
+        {
+            return QuestionHierarchy.ForScoringLabel(fallbackDisplayLabel.Trim());
+        }
+
+        return new QuestionHierarchy(
             request.MajorQuestionLabel,
             string.IsNullOrWhiteSpace(request.MiddleQuestionLabel)
-                ? fallbackDisplayLabel.Trim()
+                ? "設問"
                 : request.MiddleQuestionLabel.Trim(),
             request.MinorQuestionLabel);
+    }
+
+    private static IResult MinorQuestionRequired(HttpContext context) =>
+        ValidationProblem(
+            context,
+            "MINOR_QUESTION_REQUIRED",
+            "小問を入力してください",
+            [
+                FieldError(
+                    "minorQuestionLabel",
+                    "REQUIRED",
+                    "大問と中問は範囲だけを表します。配点が付く小問を入力してください。"),
+            ]);
 
     private static bool HasHierarchyScoringModeConflict(
         IEnumerable<QuestionEntity> questions,

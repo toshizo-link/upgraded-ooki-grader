@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace OokiGrader.Host.Jobs;
 
 /// <summary>
-/// Validates the v5 orientation-gated envelope and delegates the established
+/// Validates the v6 orientation-gated envelope and delegates the established
 /// question/answer invariants to the existing canonical extraction validator.
 /// Cross-field action rules are deliberately enforced in host code instead of
 /// depending on provider support for conditional JSON Schema.
@@ -41,7 +41,7 @@ internal static class OrientationGatedTemplateExtractionValidator
             root,
             ["schema_version", "request_key", "action", "orientation", "metadata", "pages"],
             "AI_STRUCTURED_OUTPUT_INVALID");
-        RequireString(root, "schema_version", "template_extract_v5",
+        RequireString(root, "schema_version", "template_extract_v6",
             "AI_STRUCTURED_OUTPUT_INVALID");
         RequireString(root, "request_key", expectedRequestKey,
             "AI_STRUCTURED_OUTPUT_INVALID");
@@ -179,6 +179,7 @@ internal static class OrientationGatedTemplateExtractionValidator
             "warnings",
             "AI_STRUCTURED_OUTPUT_INVALID");
         ValidateWarnings(warnings);
+        ValidatePointAwardingMinorQuestions(pages);
 
         using var legacyDocument = CreateLegacyExtractionDocument(
             expectedRequestKey,
@@ -291,6 +292,33 @@ internal static class OrientationGatedTemplateExtractionValidator
                 || value.Length > 1_000))
         {
             throw Invalid("AI_STRUCTURED_OUTPUT_INVALID");
+        }
+    }
+
+    private static void ValidatePointAwardingMinorQuestions(JsonElement pages)
+    {
+        const string errorCode = "template_extract_question_hierarchy_invalid";
+        foreach (var page in pages.EnumerateArray())
+        {
+            RequireObject(page, errorCode);
+            var questions = RequireProperty(
+                page,
+                "questions",
+                errorCode);
+            if (questions.ValueKind != JsonValueKind.Array)
+            {
+                throw Invalid(errorCode);
+            }
+
+            foreach (var question in questions.EnumerateArray())
+            {
+                RequireObject(question, errorCode);
+                RequireString(
+                    question,
+                    "minor_question_label",
+                    expected: null,
+                    errorCode);
+            }
         }
     }
 

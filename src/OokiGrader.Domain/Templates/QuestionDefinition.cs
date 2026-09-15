@@ -72,7 +72,7 @@ public sealed class QuestionDefinition
         KanjiPolicyNote = string.IsNullOrWhiteSpace(kanjiPolicyNote) ? null : kanjiPolicyNote;
         RequiresCompleteAnswer = requiresCompleteAnswer;
         AnswerOrderInsensitive = answerOrderInsensitive;
-        Hierarchy = hierarchy ?? QuestionHierarchy.FromLegacyLabel(displayLabel);
+        Hierarchy = hierarchy ?? QuestionHierarchy.ForScoringLabel(displayLabel);
     }
 
     public string Id { get; }

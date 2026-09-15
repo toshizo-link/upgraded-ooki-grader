@@ -44,9 +44,8 @@ public enum GradingMode
 
 /// <summary>
 /// Identifies the printed question hierarchy for one point-rewarding item.
-/// 大問 is always a scope. A row without 小問 awards points at 中問; a row with
-/// 小問 awards points at 小問 and its 中問 is a scope. This makes a direct
-/// 大問-to-小問 relationship unrepresentable by design.
+/// New publishable versions award points only at 小問. The middle-only shape is
+/// retained so historical published versions remain readable and hash-stable.
 /// </summary>
 public sealed record QuestionHierarchy
 {
@@ -89,6 +88,29 @@ public sealed record QuestionHierarchy
         " ",
         new[] { MajorQuestionLabel, MiddleQuestionLabel, MinorQuestionLabel }
             .Where(value => value is not null));
+
+    public static QuestionHierarchy ForScoring(
+        string? majorQuestionLabel,
+        string? middleQuestionLabel,
+        string? minorQuestionLabel,
+        string displayLabel)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayLabel);
+        var middle = NormalizeOptional(middleQuestionLabel);
+        var minor = NormalizeOptional(minorQuestionLabel);
+        return minor is null
+            ? new QuestionHierarchy(
+                majorQuestionLabel,
+                "設問",
+                middle ?? displayLabel)
+            : new QuestionHierarchy(
+                majorQuestionLabel,
+                middle ?? "設問",
+                minor);
+    }
+
+    public static QuestionHierarchy ForScoringLabel(string displayLabel) =>
+        ForScoring(null, null, displayLabel, displayLabel);
 
     public static QuestionHierarchy FromLegacyLabel(string displayLabel) =>
         new(null, displayLabel);

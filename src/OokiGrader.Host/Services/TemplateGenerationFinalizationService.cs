@@ -1055,12 +1055,11 @@ public sealed class TemplateGenerationFinalizationService
             {
                 reviewNotes.Add("正答が未解決です。先生が入力してください。");
             }
-            var hierarchy = new QuestionHierarchy(
+            var hierarchy = QuestionHierarchy.ForScoring(
                 proposal.MajorQuestionLabel,
-                string.IsNullOrWhiteSpace(proposal.MiddleQuestionLabel)
-                    ? proposal.DisplayLabel
-                    : proposal.MiddleQuestionLabel,
-                proposal.MinorQuestionLabel);
+                proposal.MiddleQuestionLabel,
+                proposal.MinorQuestionLabel,
+                proposal.DisplayLabel);
 
             var question = new QuestionEntity
             {

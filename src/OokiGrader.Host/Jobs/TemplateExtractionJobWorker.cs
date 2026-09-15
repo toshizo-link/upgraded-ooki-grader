@@ -1282,7 +1282,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 : null;
         if (string.Equals(
                 responseSchemaVersion,
-                "template_extract_v5",
+                "template_extract_v6",
                 StringComparison.Ordinal))
         {
             var suppliedPages = preparedMedia
@@ -1313,7 +1313,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
         }
         else
         {
-            // Kept solely so durable legacy jobs created with the v4 snapshot
+            // Kept solely so durable legacy jobs created with v4/v5 snapshots
             // remain readable/retryable during the additive migration.
             validated = TemplateExtractionResponseValidator.Validate(
                 response.StructuredOutput,
@@ -1721,12 +1721,11 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
                 {
                     warnings.Add("正答が未解決です。先生が入力してください。");
                 }
-                var hierarchy = new QuestionHierarchy(
+                var hierarchy = QuestionHierarchy.ForScoring(
                     proposal.MajorQuestionLabel,
-                    string.IsNullOrWhiteSpace(proposal.MiddleQuestionLabel)
-                        ? proposal.DisplayLabel
-                        : proposal.MiddleQuestionLabel,
-                    proposal.MinorQuestionLabel);
+                    proposal.MiddleQuestionLabel,
+                    proposal.MinorQuestionLabel,
+                    proposal.DisplayLabel);
 
                 var question = new QuestionEntity
                 {
@@ -2405,25 +2404,22 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             boxes. A filled name box or a handwritten score is not an answer slot.
             Cross-check every counted slot against a printed curricular prompt.
             Set detected_answer_slot_count to that inventory count, then return
-            one object per point-rewarding scoring unit in visual reading order.
+            one object per point-rewarding 小問 in visual reading order.
             answer_slot_ordinal is the first consecutive 1-based physical slot in
             that scoring unit. answer_slot_count is normally 1. It may be greater
-            than 1 only when one 中問 visibly scores consecutive child responses as
-            a unit (for example, a printed 完答 instruction); those child 小問 must
-            not also be returned as point-rewarding objects. When 中問 is only a
-            scope, every independently scored 小問 is its own object with count 1.
+            than 1 only when one 小問 visibly scores consecutive responses as a
+            unit (for example, a printed 完答 instruction). Every independently
+            scored 小問 is its own object with count 1.
             Never omit a curricular slot merely to make the inventory agree.
 
             Use a unified hierarchy for every scoring unit:
             major_question_label is the printed 大問 label or null;
-            middle_question_label is always required and is the printed 中問 label,
-            or the flat scoring label when the paper has no hierarchy;
-            minor_question_label is the printed 小問 label only when that 小問
-            independently awards points. 大問 is scope-only and never awards
-            points. If minor_question_label is null, points belong to 中問. If it
-            is present, 中問 is a scope and points belong to 小問. Never return a
-            direct 大問-to-小問 relationship. Preserve unusual original groupings
-            rather than forcing them into an example pattern. Tables, diagrams,
+            middle_question_label is always required and is the printed 中問 scope,
+            or "設問" when the paper has no printed middle scope;
+            minor_question_label is always required and is the printed label of
+            the point-awarding item. Only minor_question_label awards points; 大問
+            and 中問 are scope-only. Preserve unusual original groupings rather
+            than forcing them into an example pattern. Tables, diagrams,
             ordinary fill-ins, Q&A, choices, and mixed pages all use these same
             rules.
 
@@ -2454,9 +2450,9 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             true only after doing this; use true for an already-empty source slot.
             If one printed sentence contains several independently scored blanks,
             emit several 小問 objects: each focuses on one slot and replaces only
-            its target with ［　］. If the paper explicitly awards points to the 中問
-            only, emit one 中問 object, keep one ［　］ per represented physical slot,
-            and set answer_slot_count accordingly.
+            its target with ［　］. If several slots receive one combined score,
+            emit one 小問 object, keep one ［　］ per represented physical slot, and
+            set answer_slot_count accordingly.
 
             Apply source-role provenance mechanically, not by judgment:
             blank_test without an authoritative answer source => ai_proposed and
@@ -2541,7 +2537,7 @@ public sealed partial class TemplateExtractionJobWorker : BackgroundService
             """
             + JsonSerializer.Serialize(new
             {
-                schema_version = "template_extract_v5",
+                schema_version = "template_extract_v6",
                 request_key = requestKey,
                 default_points_milli = defaultPointsMilli,
                 target_total_points_milli = targetTotalPointsMilli,

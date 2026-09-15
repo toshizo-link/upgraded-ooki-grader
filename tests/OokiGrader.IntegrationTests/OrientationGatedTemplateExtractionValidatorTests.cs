@@ -27,7 +27,7 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
             .ToArray();
         var response = JsonSerializer.SerializeToElement(new
         {
-            schema_version = "template_extract_v5",
+            schema_version = "template_extract_v6",
             request_key = "request-1",
             action = "rotate",
             orientation = new
@@ -76,11 +76,22 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
     }
 
     [Fact]
+    public void RejectsExtractionWithoutPointAwardingMinorQuestion()
+    {
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            Validate(ExtractionResponse(0, minorQuestionLabel: null)));
+
+        Assert.Equal(
+            "template_extract_question_hierarchy_invalid",
+            exception.Message);
+    }
+
+    [Fact]
     public void RejectsRotationResponseContainingMetadata()
     {
         var response = JsonSerializer.SerializeToElement(new
         {
-            schema_version = "template_extract_v5",
+            schema_version = "template_extract_v6",
             request_key = "request-1",
             action = "rotate",
             orientation = new
@@ -124,7 +135,7 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
     {
         var response = JsonSerializer.SerializeToElement(new
         {
-            schema_version = "template_extract_v5",
+            schema_version = "template_extract_v6",
             request_key = "request-1",
             action = "rotate",
             orientation = new
@@ -153,7 +164,7 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
         using var document = JsonDocument.Parse(
             """
             {
-              "schema_version":"template_extract_v5",
+              "schema_version":"template_extract_v6",
               "request_key":"request-1",
               "action":"rotate",
               "orientation":{"pages":[{"page_id":"page-1","clockwise_degrees_to_upright":90,"confidence":1}]},
@@ -174,7 +185,7 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
         using var document = JsonDocument.Parse(
             """
             {
-              "schema_version":"template_extract_v5",
+              "schema_version":"template_extract_v6",
               "request_key":"request-1",
               "action":"extract",
               "orientation":{"pages":[{"page_id":"page-1","clockwise_degrees_to_upright":0,"confidence":1}]},
@@ -209,7 +220,7 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
     private static JsonElement RotationResponse(int degrees) =>
         JsonSerializer.SerializeToElement(new
         {
-            schema_version = "template_extract_v5",
+            schema_version = "template_extract_v6",
             request_key = "request-1",
             action = "rotate",
             orientation = new
@@ -228,10 +239,12 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
             pages = Array.Empty<object>(),
         });
 
-    private static JsonElement ExtractionResponse(int degrees) =>
+    private static JsonElement ExtractionResponse(
+        int degrees,
+        string? minorQuestionLabel = "1") =>
         JsonSerializer.SerializeToElement(new
         {
-            schema_version = "template_extract_v5",
+            schema_version = "template_extract_v6",
             request_key = "request-1",
             action = "extract",
             orientation = new
@@ -260,6 +273,9 @@ public sealed class OrientationGatedTemplateExtractionValidatorTests
                         {
                             source_key = "page-1-slot-1",
                             display_label = "1",
+                            major_question_label = (string?)null,
+                            middle_question_label = "設問",
+                            minor_question_label = minorQuestionLabel,
                             question_text = "1 + 1 はいくつですか。",
                             answer_slot_ordinal = 1,
                             answer_slot_count = 1,
