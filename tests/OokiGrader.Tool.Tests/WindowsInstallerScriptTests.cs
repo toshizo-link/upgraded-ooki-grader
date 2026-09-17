@@ -987,6 +987,22 @@ public sealed class WindowsInstallerScriptTests
             "'-p:IncludeNativeLibrariesForSelfExtract=true'",
             script,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "Move-DirectoryAtomicallyWithRetry",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Start-Sleep -Milliseconds 250",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if ([IO.Directory]::Exists($Destination)",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "[IO.Directory]::Move($payload, $packageRoot)",
+            script,
+            StringComparison.Ordinal);
     }
 
     [Fact]

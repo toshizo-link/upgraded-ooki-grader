@@ -67,6 +67,40 @@ function Copy-PublishTree {
     }
 }
 
+function Move-DirectoryAtomicallyWithRetry {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Source,
+
+        [Parameter(Mandatory)]
+        [string] $Destination
+    )
+
+    $maximumAttempts = 20
+    for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
+        if ([IO.Directory]::Exists($Destination) -or
+            [IO.File]::Exists($Destination)) {
+            throw 'The immutable release package target appeared while publishing.'
+        }
+
+        try {
+            [IO.Directory]::Move($Source, $Destination)
+            return
+        } catch {
+            $cause = $_.Exception.GetBaseException()
+            $isTransientFileLock = $cause -is [IO.IOException] -or
+                $cause -is [UnauthorizedAccessException]
+            if (-not $isTransientFileLock -or
+                $attempt -eq $maximumAttempts -or
+                -not [IO.Directory]::Exists($Source)) {
+                throw
+            }
+
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
 $source = Resolve-OokiExactPath -Path $SourceRoot `
     -Purpose 'Repository source root' -MustExist -PathType Directory
 $output = Resolve-OokiExactPath -Path $OutputRoot `
@@ -183,6 +217,7 @@ if ($PSCmdlet.ShouldProcess(
             'Uninstall-OokiGrader.ps1',
             'Test-OokiGraderHealth.ps1',
             'Test-OokiGraderPreflight.ps1',
+            'Set-OokiGraderSchoolManager.ps1',
             'New-OokiGraderCertificate.ps1',
             'New-OokiGraderPeerTrustPackage.ps1',
             'Install-OokiGraderPeerTrust.ps1',
@@ -302,7 +337,7 @@ if ($PSCmdlet.ShouldProcess(
         $checksumLines | Set-Content -LiteralPath (
             Join-Path $payload 'checksums.txt') -Encoding ASCII
 
-        [IO.Directory]::Move($payload, $packageRoot)
+        Move-DirectoryAtomicallyWithRetry -Source $payload -Destination $packageRoot
         [pscustomobject]@{
             state = 'packaged'
             version = $Version

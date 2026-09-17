@@ -50,6 +50,9 @@ internal static class TemplateVersionIntegrityTriggerCatalog
     public static string Schema18PublishedVersionContentImmutableStatement =>
         Schema18Statements[2];
 
+    public static string Schema18PublishedQuestionUpdateStatement =>
+        Schema18Statements[10];
+
     public static string Schema17PublishedVersionContentImmutableStatement =>
         Schema17Statements[2];
 

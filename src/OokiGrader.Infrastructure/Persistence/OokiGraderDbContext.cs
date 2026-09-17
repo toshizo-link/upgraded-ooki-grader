@@ -87,6 +87,11 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
     public DbSet<ExportRecordEntity> ExportRecords => Set<ExportRecordEntity>();
     public DbSet<BulkTranscriptExportEntity> BulkTranscriptExports =>
         Set<BulkTranscriptExportEntity>();
+    public DbSet<SchoolManagerSettingsEntity> SchoolManagerSettings =>
+        Set<SchoolManagerSettingsEntity>();
+    public DbSet<PassFailImportEntity> PassFailImports => Set<PassFailImportEntity>();
+    public DbSet<GuardianDeliveryEntity> GuardianDeliveries =>
+        Set<GuardianDeliveryEntity>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -128,6 +133,7 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
         ConfigureBackupModel(modelBuilder);
         ConfigureExportModel(modelBuilder);
         ConfigureBulkTranscriptExportModel(modelBuilder);
+        ConfigureSchoolManagerModel(modelBuilder);
         ApplySqliteTimestampConversions(modelBuilder);
         ApplySnakeCaseColumns(modelBuilder);
     }
@@ -2513,6 +2519,155 @@ public sealed class OokiGraderDbContext : DbContext, IUnitOfWork
             builder.HasOne(entity => entity.CreatedByStaffUser)
                 .WithMany()
                 .HasForeignKey(entity => entity.CreatedByStaffUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            ConfigureRevision(builder);
+        });
+    }
+
+    private static void ConfigureSchoolManagerModel(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SchoolManagerSettingsEntity>(builder =>
+        {
+            builder.ToTable("school_manager_settings", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_school_manager_settings_singleton",
+                    "id = 'school-manager'");
+                table.HasCheckConstraint(
+                    "ck_school_manager_settings_credential_revision",
+                    "credential_revision >= 0");
+                table.HasCheckConstraint(
+                    "ck_school_manager_settings_enabled",
+                    "enabled = 0 OR (password_secret_reference IS NOT NULL " +
+                    "AND activation_started_at IS NOT NULL)");
+            });
+            builder.HasKey(entity => entity.Id);
+            builder.Property(entity => entity.Id).HasMaxLength(32);
+            builder.Property(entity => entity.BaseUrl).HasMaxLength(300);
+            builder.Property(entity => entity.Username).HasMaxLength(200);
+            builder.Property(entity => entity.PasswordSecretReference).HasMaxLength(500);
+            builder.Property(entity => entity.LastErrorCode).HasMaxLength(200);
+            builder.Property(entity => entity.SafeErrorDetail).HasMaxLength(2_000);
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<PassFailImportEntity>(builder =>
+        {
+            builder.ToTable("pass_fail_import", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_pass_fail_import_state",
+                    "state IN ('processing','processed','failed')");
+                table.HasCheckConstraint(
+                    "ck_pass_fail_import_counts",
+                    "row_count >= 0 AND delivery_count >= 0");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            builder.Property(entity => entity.SourceSha256).HasMaxLength(64);
+            builder.Property(entity => entity.SourceFileName).HasMaxLength(300);
+            builder.Property(entity => entity.State).HasMaxLength(32);
+            builder.Property(entity => entity.ErrorCode).HasMaxLength(200);
+            builder.Property(entity => entity.SafeErrorDetail).HasMaxLength(2_000);
+            builder.HasIndex(entity => entity.SourceSha256).IsUnique();
+            builder.HasIndex(entity => new
+            {
+                entity.State,
+                entity.CreatedAt,
+                entity.Id,
+            });
+            ConfigureRevision(builder);
+        });
+
+        modelBuilder.Entity<GuardianDeliveryEntity>(builder =>
+        {
+            builder.ToTable("guardian_delivery", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_kind",
+                    "kind IN ('result_pdf','pass_fail_table')");
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_state",
+                    "state IN ('pending','ready','sending','sent','failed','canceled')");
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_attempts",
+                    "attempt_count >= 0 AND max_attempts > 0");
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_source",
+                    "(kind = 'result_pdf' AND submission_id IS NOT NULL " +
+                    "AND export_record_id IS NOT NULL AND pass_fail_import_id IS NULL) " +
+                    "OR (kind = 'pass_fail_table' AND submission_id IS NULL " +
+                    "AND export_record_id IS NULL AND pass_fail_import_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_sent",
+                    "state <> 'sent' OR (sent_at IS NOT NULL " +
+                    "AND school_manager_thread_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_guardian_delivery_pass_fail_file",
+                    "kind <> 'pass_fail_table' OR state = 'pending' " +
+                    "OR file_reference_id IS NOT NULL");
+            });
+            builder.HasKey(entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.Id);
+            ConfigureUlid(builder, entity => entity.StudentId);
+            ConfigureUlid(builder, entity => entity.SubmissionId);
+            ConfigureUlid(builder, entity => entity.ExportRecordId);
+            ConfigureUlid(builder, entity => entity.PassFailImportId);
+            ConfigureUlid(builder, entity => entity.FileReferenceId);
+            builder.Property(entity => entity.Kind).HasMaxLength(32);
+            builder.Property(entity => entity.SourceKey).HasMaxLength(200);
+            builder.Property(entity => entity.AttachmentName).HasMaxLength(300);
+            builder.Property(entity => entity.State).HasMaxLength(32);
+            builder.Property(entity => entity.SchoolManagerThreadId).HasMaxLength(200);
+            builder.Property(entity => entity.LastErrorCode).HasMaxLength(200);
+            builder.Property(entity => entity.SafeErrorDetail).HasMaxLength(2_000);
+            builder.HasIndex(entity => new
+            {
+                entity.Kind,
+                entity.StudentId,
+                entity.SourceKey,
+            }).IsUnique();
+            builder.HasIndex(entity => new
+            {
+                entity.State,
+                entity.NotBeforeAt,
+                entity.CreatedAt,
+                entity.Id,
+            });
+            builder.HasIndex(entity => entity.ExportRecordId)
+                .IsUnique()
+                .HasFilter("\"export_record_id\" IS NOT NULL");
+            builder.HasIndex(entity => entity.FileReferenceId)
+                .IsUnique()
+                .HasFilter("\"file_reference_id\" IS NOT NULL");
+            builder.HasIndex(entity => new
+                {
+                    entity.StudentId,
+                    entity.Kind,
+                    entity.SentLocalDate,
+                })
+                .IsUnique()
+                .HasFilter(
+                    "\"kind\" = 'pass_fail_table' AND \"sent_local_date\" IS NOT NULL");
+            builder.HasOne(entity => entity.Student)
+                .WithMany()
+                .HasForeignKey(entity => entity.StudentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.Submission)
+                .WithMany()
+                .HasForeignKey(entity => entity.SubmissionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.ExportRecord)
+                .WithMany()
+                .HasForeignKey(entity => entity.ExportRecordId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.PassFailImport)
+                .WithMany(entity => entity.Deliveries)
+                .HasForeignKey(entity => entity.PassFailImportId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne(entity => entity.FileReference)
+                .WithMany()
+                .HasForeignKey(entity => entity.FileReferenceId)
                 .OnDelete(DeleteBehavior.Restrict);
             ConfigureRevision(builder);
         });

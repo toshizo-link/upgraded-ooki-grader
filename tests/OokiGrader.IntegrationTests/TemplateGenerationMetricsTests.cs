@@ -214,8 +214,8 @@ public sealed class TemplateGenerationMetricsTests
             DeterministicSuffix: null,
             TemplateGenerationProfile.CurrentSplitPolicyVersion,
             TemplateGenerationProfile.CurrentNamingPolicyVersion,
-            "template-extract-v2.0.0",
-            "template_extract_v5");
+            "template-extract-v2.1.0",
+            "template_extract_v6");
 
     private sealed class MetricCollector : IDisposable
     {

@@ -156,8 +156,8 @@ public sealed class TemplateGenerationBatchService
     public const int MaximumResumableBatchLimit = 50;
     public const string UnitJobType = "gemini_template_generation_unit";
     public const int UnitJobSchemaVersion = 1;
-    public const string ExtractionPromptVersion = "template-extract-v2.0.0";
-    public const string ExtractionSchemaVersion = "template_extract_v5";
+    public const string ExtractionPromptVersion = "template-extract-v2.1.0";
+    public const string ExtractionSchemaVersion = "template_extract_v6";
 
     private static readonly HashSet<string> SupportedSubjects =
         ["算数", "国語", "理科", "社会"];

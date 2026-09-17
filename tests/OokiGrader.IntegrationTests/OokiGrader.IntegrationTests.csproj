@@ -20,6 +20,7 @@
     <ProjectReference Include="../../src/OokiGrader.Host/OokiGrader.Host.csproj" />
     <ProjectReference Include="../../src/OokiGrader.Preprocessing/OokiGrader.Preprocessing.csproj" />
     <ProjectReference Include="../../src/OokiGrader.Reports.Pdf/OokiGrader.Reports.Pdf.csproj" />
+    <ProjectReference Include="../../src/OokiGrader.SchoolManager/OokiGrader.SchoolManager.csproj" />
   </ItemGroup>
 
   <ItemGroup>

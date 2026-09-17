@@ -13,13 +13,14 @@
 > and startup reconciliation self-heal current Gemini profile revisions; formal
 > evaluation/manual activation remains an advanced OpenRouter/release concern.
 >
-> **Template-creation update (2026-08-09):** new creation is settings-first and
+> **Template-creation update (2026-09-15):** new creation is settings-first and
 > deterministic. The user selects test type and subject before upload; the host
 > owns HOP/STEP splitting and prompt routing. Template extraction uses prompt
-> `template-extract-v2.0.0` with schema `template_extract_v5`, including an
+> `template-extract-v2.1.0` with schema `template_extract_v6`, including an
 > in-band orientation gate. Earlier source-role inference, v1/v4 extraction,
 > detail-view reconciliation, and separate AI preflight/classification behavior
 > are retained only for historical readability and are not a new-creation path.
+> `大問` and `中問` are scope-only; every point-bearing item is a `小問`.
 >
 > **Completed-paper update (2026-08-10):** the current scanner contract is an
 > explicitly ordered manifest of one-page PDFs. HOP uses one page, a registered
@@ -156,7 +157,7 @@ profiles. Probe content is synthetic and contains no student data.
 
 | Task | Input disclosed | Output | Default route | Teacher gate |
 |---|---|---|---|---|
-| `TemplateExtraction` (`template_extract_v5`) | one host-planned source unit, trusted test type/subject/answer style, exact page manifest | rotation-only action or paper metadata plus a grading-key draft | selected task profile | batch final check, then normal editor/publish |
+| `TemplateExtraction` (`template_extract_v6`) | one host-planned source unit, trusted test type/subject/answer style, exact page manifest | rotation-only action or paper metadata plus a grading-key draft | selected task profile | batch final check, then normal editor/publish |
 | `submission_analysis_v2` | one deterministic consecutive normalized-page chunk, approved compact question list/rubrics, anonymous request ID; chunk 1 also contains logical page 1 | chunk 1: raw name/number transcription plus visible-answer grading; later chunks: visible-answer grading with `identity=null` | selected initial-grading profile | local roster/teacher identity confirmation and threshold/type-dependent grade review |
 | `name_transcribe_v1` | logical page 1 for ordered intake; complete normalized pages for a legacy non-ordered submission | raw name/number transcription and legibility | fallback/legacy selected task profile | uncertain assignment |
 | `answer_transcribe_grade_v1` | historical deterministic page chunk | visible-answer transcription and proposed per-question outcome | compatibility reader only | threshold/type dependent |
@@ -409,7 +410,7 @@ The grading task contains a compact, canonical rubric generated from the publish
 
 Each accepted-answer entry is a complete alternative that can satisfy the
 question independently. Structured grading options are always included at the
-point-bearing `中問` or `小問`; an absent teacher rubric is represented as
+point-bearing `小問`; an absent teacher rubric is represented as
 null/empty and is never filled with AI-generated prose.
 
 The model transcribes first, then proposes an outcome. For a page chunk it must
@@ -417,6 +418,15 @@ return an observation only when the answer is visible in that chunk and mark
 the other supplied question IDs missing; the host resolves observations across
 all chunks. The application evaluates deterministic rules independently and
 can reject the proposal.
+
+During the supervised pilot, the application applies the teacher-review
+boundary after local reconciliation. A clear, high-confidence final outcome of
+`correct` may proceed without per-question review when every other configured
+gate passes. Final outcomes of `incorrect`, `blank`, `partial`,
+`unreadable`, or `review` always require teacher review, even when provider
+confidence is high. This keeps the reliable positive path useful while
+preventing uncertain negative judgments from silently reducing a student's
+score. Paper finalization remains an explicit teacher action.
 
 ## 6. Structured output
 
@@ -426,7 +436,7 @@ Illustrative shape; the checked-in JSON Schema is the authority:
 
 ```json
 {
-  "schema_version": "template_extract_v5",
+  "schema_version": "template_extract_v6",
   "request_key": "template_01J...",
   "action": "extract",
   "orientation": {
@@ -459,7 +469,7 @@ When correction is required, the same schema instead returns:
 
 ```json
 {
-  "schema_version": "template_extract_v5",
+  "schema_version": "template_extract_v6",
   "request_key": "template_01J...",
   "action": "rotate",
   "orientation": {

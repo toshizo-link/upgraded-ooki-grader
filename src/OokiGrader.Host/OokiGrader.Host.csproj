@@ -37,6 +37,7 @@
     <ProjectReference Include="../OokiGrader.Infrastructure/OokiGrader.Infrastructure.csproj" />
     <ProjectReference Include="../OokiGrader.Preprocessing/OokiGrader.Preprocessing.csproj" />
     <ProjectReference Include="../OokiGrader.Reports.Pdf/OokiGrader.Reports.Pdf.csproj" />
+    <ProjectReference Include="../OokiGrader.SchoolManager/OokiGrader.SchoolManager.csproj" />
   </ItemGroup>
 
   <Target Name="BuildWebForPublish" AfterTargets="ComputeFilesToPublish">

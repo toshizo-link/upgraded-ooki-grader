@@ -737,8 +737,8 @@ public sealed class TemplateWorkflowTests
             DeterministicSuffix: null,
             TemplateGenerationProfile.CurrentSplitPolicyVersion,
             TemplateGenerationProfile.CurrentNamingPolicyVersion,
-            "template-extract-v2.0.0",
-            "template_extract_v5");
+            "template-extract-v2.1.0",
+            "template_extract_v6");
         var profileJson = JsonSerializer.Serialize(profile);
         var profileHash = profile.ComputeHash();
         application.AddContent(
@@ -1598,12 +1598,12 @@ public sealed class TemplateWorkflowTests
     }
 
     [Fact]
-    public async Task ApiRejectsMixingMiddleAndMinorScoringRowsWithinOneScope()
+    public async Task ApiRejectsPointBearingMiddleQuestion()
     {
         await using var application = await TemplateTestApplication.CreateAsync();
         var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
 
-        var middle = await application.SendAsync(
+        var response = await application.SendAsync(
             HttpMethod.Post,
             $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
             "teacher",
@@ -1620,29 +1620,18 @@ public sealed class TemplateWorkflowTests
                 maxPointsMilli = 2_000,
                 teacherVerified = true,
             });
-        Assert.Equal(HttpStatusCode.Created, middle.StatusCode);
 
-        var conflictingMinor = await application.SendAsync(
-            HttpMethod.Post,
-            $"/api/v1/templates/{templateId}/versions/{versionId}/questions",
-            "teacher",
-            new
-            {
-                displayLabel = "大問1 中問1 (1)",
-                majorQuestionLabel = "大問1",
-                middleQuestionLabel = "中問1",
-                minorQuestionLabel = "(1)",
-                order = 2,
-                questionText = "答えなさい。",
-                questionType = "subjective",
-                gradingMode = "manual",
-                maxPointsMilli = 1_000,
-                teacherVerified = true,
-            });
-        Assert.Equal(HttpStatusCode.Conflict, conflictingMinor.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
         Assert.Equal(
-            "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
-            RequiredString(await ReadJsonAsync(conflictingMinor), "code"));
+            "MINOR_QUESTION_REQUIRED",
+            RequiredString(await ReadJsonAsync(response), "code"));
+    }
+
+    [Fact]
+    public async Task ApiAllowsMultipleMinorScoringRowsWithinOneScope()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (templateId, versionId) = await CreateTemplateAndVersionAsync(application);
 
         var firstMinor = await application.SendAsync(
             HttpMethod.Post,
@@ -1654,7 +1643,7 @@ public sealed class TemplateWorkflowTests
                 majorQuestionLabel = "大問1",
                 middleQuestionLabel = "中問2",
                 minorQuestionLabel = "(1)",
-                order = 2,
+                order = 1,
                 questionText = "一つ目を答えなさい。",
                 questionType = "subjective",
                 gradingMode = "manual",
@@ -1671,7 +1660,7 @@ public sealed class TemplateWorkflowTests
                 majorQuestionLabel = "大問1",
                 middleQuestionLabel = "中問2",
                 minorQuestionLabel = "(2)",
-                order = 3,
+                order = 2,
                 questionText = "二つ目を答えなさい。",
                 questionType = "subjective",
                 gradingMode = "manual",
@@ -1680,23 +1669,6 @@ public sealed class TemplateWorkflowTests
             });
         Assert.Equal(HttpStatusCode.Created, firstMinor.StatusCode);
         Assert.Equal(HttpStatusCode.Created, secondMinor.StatusCode);
-
-        var moveMiddleIntoMinorScope = await application.SendAsync(
-            HttpMethod.Patch,
-            $"/api/v1/templates/{templateId}/versions/{versionId}/questions/" +
-            RequiredString(await ReadJsonAsync(middle), "id"),
-            "teacher",
-            new
-            {
-                majorQuestionLabel = "大問1",
-                middleQuestionLabel = "中問2",
-                minorQuestionLabel = (string?)null,
-            },
-            RequiredEtag(middle));
-        Assert.Equal(HttpStatusCode.Conflict, moveMiddleIntoMinorScope.StatusCode);
-        Assert.Equal(
-            "QUESTION_HIERARCHY_SCORING_MODE_CONFLICT",
-            RequiredString(await ReadJsonAsync(moveMiddleIntoMinorScope), "code"));
     }
 
     [Fact]
@@ -2964,10 +2936,10 @@ public sealed class TemplateWorkflowTests
             DeterministicSuffix: suffix,
             TemplateGenerationProfile.CurrentSplitPolicyVersion,
             TemplateGenerationProfile.CurrentNamingPolicyVersion,
-            "template-extract-v2.0.0",
-            "template_extract_v5");
+            "template-extract-v2.1.0",
+            "template_extract_v6");
         var profileJson = JsonSerializer.Serialize(profile, WebJsonOptions);
-        const string draftJson = "{\"schemaVersion\":\"template_extract_v5\"}";
+        const string draftJson = "{\"schemaVersion\":\"template_extract_v6\"}";
         var draftHash = Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(draftJson)))
             .ToLowerInvariant();
@@ -3179,14 +3151,20 @@ public sealed class TemplateWorkflowTests
         string displayLabel,
         string questionText,
         string teacherNote,
-        DateTimeOffset now) =>
-        new()
+        DateTimeOffset now)
+    {
+        var hierarchy = QuestionHierarchy.ForScoringLabel(displayLabel);
+        return new QuestionEntity
         {
             Id = id,
             TemplateVersionId = versionId,
             LogicalQuestionId = UlidId.New(now.AddTicks(20 + orderIndex)),
             OrderIndex = orderIndex,
             DisplayLabel = displayLabel,
+            MajorQuestionLabel = hierarchy.MajorQuestionLabel,
+            MiddleQuestionLabel = hierarchy.MiddleQuestionLabel,
+            MinorQuestionLabel = hierarchy.MinorQuestionLabel,
+            HierarchyPathKey = hierarchy.PathKey,
             QuestionText = questionText,
             QuestionType = "exact_short_text",
             GradingMode = "transcribe_then_rules",
@@ -3202,6 +3180,7 @@ public sealed class TemplateWorkflowTests
             CreatedAt = now,
             UpdatedAt = now,
         };
+    }
 
     private static AcceptedAnswerEntity CreateGeneratedAnswer(
         string id,

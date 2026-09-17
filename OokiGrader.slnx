@@ -10,6 +10,7 @@
     <Project Path="src/OokiGrader.Infrastructure/OokiGrader.Infrastructure.csproj" />
     <Project Path="src/OokiGrader.Preprocessing/OokiGrader.Preprocessing.csproj" />
     <Project Path="src/OokiGrader.Reports.Pdf/OokiGrader.Reports.Pdf.csproj" />
+    <Project Path="src/OokiGrader.SchoolManager/OokiGrader.SchoolManager.csproj" />
     <Project Path="src/OokiGrader.Tool/OokiGrader.Tool.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -20,6 +21,7 @@
     <Project Path="tests/OokiGrader.ProviderContract.Tests/OokiGrader.ProviderContract.Tests.csproj" />
     <Project Path="tests/OokiGrader.Preprocessing.Tests/OokiGrader.Preprocessing.Tests.csproj" />
     <Project Path="tests/OokiGrader.Reports.Pdf.Tests/OokiGrader.Reports.Pdf.Tests.csproj" />
+    <Project Path="tests/OokiGrader.SchoolManager.Tests/OokiGrader.SchoolManager.Tests.csproj" />
     <Project Path="tests/OokiGrader.Tool.Tests/OokiGrader.Tool.Tests.csproj" />
   </Folder>
 </Solution>

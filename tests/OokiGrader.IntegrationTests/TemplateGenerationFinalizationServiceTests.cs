@@ -246,6 +246,8 @@ public sealed class TemplateGenerationFinalizationServiceTests
         {
             Assert.True(item.RequiresCompleteAnswer);
             Assert.True(item.AnswerOrderInsensitive);
+            Assert.Equal("設問", item.MiddleQuestionLabel);
+            Assert.Equal(item.DisplayLabel, item.MinorQuestionLabel);
         });
         Assert.Equal(2, sources.Select(item => item.FileReferenceId).Distinct().Count());
         Assert.All(versions, item =>

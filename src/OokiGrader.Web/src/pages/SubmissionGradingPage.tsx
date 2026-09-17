@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 import { Link, useParams } from "../router";
 import { Icon } from "../components/Icon";
@@ -71,9 +70,6 @@ interface BulkReport {
   skipped: number;
   stale: number;
 }
-
-const UNSAVED_MESSAGE =
-  "採点の編集内容が保存されていません。変更を破棄して移動しますか？";
 
 export function SubmissionGradingPage() {
   const { submissionId = "" } = useParams();
@@ -171,12 +167,18 @@ function SubmissionGradingWorkspaceView({
   const [baseline, setBaseline] = useState<EditDraft>(() =>
     draftFromResult(selectedResult),
   );
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string>();
   const [editSaved, setEditSaved] = useState(false);
   const editAttemptRef = useRef<
     { signature: string; key: string } | undefined
   >(undefined);
+  const sourceResultRevisionRef = useRef(
+    selectedResult?.sourceResultRevision ?? 0,
+  );
+  const failedDraftSignatureRef = useRef<string | undefined>(undefined);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkAcknowledged, setBulkAcknowledged] = useState(false);
   const [bulkSnapshot, setBulkSnapshot] = useState<BulkSnapshot>();
@@ -185,8 +187,8 @@ function SubmissionGradingWorkspaceView({
   const [bulkReport, setBulkReport] = useState<BulkReport>();
 
   const dirty = !sameDraft(draft, baseline);
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  const pendingSaveRef = useRef(dirty || saving);
+  pendingSaveRef.current = dirty || saving;
 
   const finalized =
     workspace.submission.state === "finalized" ||
@@ -216,6 +218,9 @@ function SubmissionGradingWorkspaceView({
     setEditError(undefined);
     setEditSaved(false);
     editAttemptRef.current = undefined;
+    failedDraftSignatureRef.current = undefined;
+    sourceResultRevisionRef.current =
+      selectedResult?.sourceResultRevision ?? 0;
     const evidencePage = selectedResult?.pageNumbers.find((pageNumber) =>
       sortedPages.some((page) => page.pageNumber === pageNumber),
     );
@@ -232,12 +237,12 @@ function SubmissionGradingWorkspaceView({
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirtyRef.current) return;
+      if (!pendingSaveRef.current) return;
       event.preventDefault();
       event.returnValue = "";
     };
     const handleLinkClick = (event: MouseEvent) => {
-      if (!dirtyRef.current || event.defaultPrevented) return;
+      if (!pendingSaveRef.current || event.defaultPrevented) return;
       const target = event.target;
       if (!(target instanceof Element)) return;
       const anchor = target.closest<HTMLAnchorElement>("a[href]");
@@ -251,10 +256,8 @@ function SubmissionGradingWorkspaceView({
       ) {
         return;
       }
-      if (!window.confirm(UNSAVED_MESSAGE)) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
+      event.preventDefault();
+      event.stopPropagation();
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     document.addEventListener("click", handleLinkClick, true);
@@ -264,23 +267,28 @@ function SubmissionGradingWorkspaceView({
     };
   }, []);
 
+  useEffect(() => {
+    if (!dirty || saving || readOnly || !selectedResult) return;
+    if (failedDraftSignatureRef.current === JSON.stringify(draft)) return;
+    const validation = validateDraft(draft, selectedResult);
+    if (validation) {
+      setEditError(validation);
+      return;
+    }
+    const timer = window.setTimeout(() => void saveOverride(), 600);
+    return () => window.clearTimeout(timer);
+  }, [dirty, draft, readOnly, saving, selectedResult]);
+
   function chooseResult(result: SubmissionGradingResult) {
     if (result.resultId === selectedResult?.resultId) return;
-    if (dirty && !window.confirm(UNSAVED_MESSAGE)) return;
+    if (dirty || saving) return;
     setSelectedResultId(result.resultId);
   }
 
   function changeResultListMode(next: ResultListMode) {
     if (next === resultListMode) return;
-    if (dirty && !window.confirm(UNSAVED_MESSAGE)) return;
-    if (dirty) discardDraft();
+    if (dirty || saving) return;
     setResultListMode(next);
-  }
-
-  function discardDraft() {
-    const next = draftFromResult(selectedResult);
-    setDraft(next);
-    setBaseline(next);
   }
 
   function openBulkConfirmation() {
@@ -292,10 +300,7 @@ function SubmissionGradingWorkspaceView({
     ) {
       return;
     }
-    if (dirty) {
-      if (!window.confirm(UNSAVED_MESSAGE)) return;
-      discardDraft();
-    }
+    if (dirty || saving) return;
     setBulkSnapshot({
       sourceSubmissionRevision: workspace.submission.revision,
       gradingRunId: workspace.gradingRun.id,
@@ -310,10 +315,11 @@ function SubmissionGradingWorkspaceView({
     setBulkOpen(true);
   }
 
-  async function saveOverride(event: FormEvent) {
-    event.preventDefault();
+  async function saveOverride() {
     if (!selectedResult || saving || readOnly) return;
-    const validation = validateDraft(draft, selectedResult);
+    const draftToSave = { ...draft };
+    const draftSignature = JSON.stringify(draftToSave);
+    const validation = validateDraft(draftToSave, selectedResult);
     if (validation) {
       setEditError(validation);
       return;
@@ -322,15 +328,15 @@ function SubmissionGradingWorkspaceView({
     setEditError(undefined);
     setEditSaved(false);
     const body = {
-      sourceResultRevision: selectedResult.sourceResultRevision,
-      awardedPointsMilli: draft.pointsMilli,
-      outcome: draft.outcome,
+      sourceResultRevision: sourceResultRevisionRef.current,
+      awardedPointsMilli: draftToSave.pointsMilli,
+      outcome: draftToSave.outcome,
       // Always send the effective text shown to the teacher. The API treats a
       // missing value as "keep the previous correction" and an empty string as
       // an explicit correction to a blank answer.
-      transcriptionCorrection: draft.transcription,
-      reasonCode: draft.reasonCode,
-      note: draft.note,
+      transcriptionCorrection: draftToSave.transcription,
+      reasonCode: draftToSave.reasonCode,
+      note: draftToSave.note,
     };
     const signature = JSON.stringify(body);
     if (editAttemptRef.current?.signature !== signature) {
@@ -343,10 +349,15 @@ function SubmissionGradingWorkspaceView({
         { idempotencyKey: editAttemptRef.current.key },
       );
       editAttemptRef.current = undefined;
-      setBaseline({ ...draft });
+      failedDraftSignatureRef.current = undefined;
+      sourceResultRevisionRef.current += 1;
+      setBaseline(draftToSave);
       setEditSaved(true);
-      reload();
+      if (sameDraft(draftRef.current, draftToSave)) {
+        reload();
+      }
     } catch (reason) {
+      failedDraftSignatureRef.current = draftSignature;
       setEditError(
         reason instanceof ApiError && reason.status === 412
           ? "別の先生がこの採点を更新しました。再読み込みしてから確認してください。"
@@ -357,6 +368,11 @@ function SubmissionGradingWorkspaceView({
     } finally {
       setSaving(false);
     }
+  }
+
+  function retrySave() {
+    failedDraftSignatureRef.current = undefined;
+    void saveOverride();
   }
 
   async function confirmUnresolved() {
@@ -740,6 +756,15 @@ function SubmissionGradingWorkspaceView({
                       <Button variant="secondary" size="small" onClick={reload}>
                         再読み込み
                       </Button>
+                    ) : dirty ? (
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        disabled={saving}
+                        onClick={retrySave}
+                      >
+                        保存を再試行
+                      </Button>
                     ) : undefined
                   }
                 >
@@ -751,7 +776,7 @@ function SubmissionGradingWorkspaceView({
                   <p>採点を保存しました。</p>
                 </InlineAlert>
               ) : null}
-              <form onSubmit={saveOverride}>
+              <form onSubmit={(event) => event.preventDefault()}>
                 <Field
                   label="読み取り結果"
                   htmlFor={`grading-transcription-${selectedResult.resultId}`}
@@ -759,7 +784,7 @@ function SubmissionGradingWorkspaceView({
                   <input
                     id={`grading-transcription-${selectedResult.resultId}`}
                     value={draft.transcription}
-                    disabled={readOnly || saving}
+                    disabled={readOnly}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -781,7 +806,7 @@ function SubmissionGradingWorkspaceView({
                       max={selectedResult.maxPointsMilli / 1000}
                       step={selectedResult.pointIncrementMilli / 1000}
                       value={draft.pointsMilli / 1000}
-                      disabled={readOnly || saving}
+                      disabled={readOnly}
                       onChange={(event) =>
                         setDraft((current) => {
                           const pointsMilli = Math.round(
@@ -809,7 +834,7 @@ function SubmissionGradingWorkspaceView({
                   <select
                     id={`grading-outcome-${selectedResult.resultId}`}
                     value={draft.outcome}
-                    disabled={readOnly || saving}
+                    disabled={readOnly}
                     onChange={(event) => {
                       const outcome = event.target.value;
                       setDraft((current) => ({
@@ -849,7 +874,7 @@ function SubmissionGradingWorkspaceView({
                   <select
                     id={`grading-reason-${selectedResult.resultId}`}
                     value={draft.reasonCode}
-                    disabled={readOnly || saving}
+                    disabled={readOnly}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -876,7 +901,7 @@ function SubmissionGradingWorkspaceView({
                     id={`grading-note-${selectedResult.resultId}`}
                     rows={2}
                     value={draft.note}
-                    disabled={readOnly || saving}
+                    disabled={readOnly}
                     required={draft.reasonCode === "other"}
                     onChange={(event) =>
                       setDraft((current) => ({
@@ -886,18 +911,14 @@ function SubmissionGradingWorkspaceView({
                     }
                   />
                 </Field>
-                <div className="submission-editor-actions">
-                  {dirty ? <Badge tone="warning">未保存の変更</Badge> : <span />}
-                  <Button
-                    type="submit"
-                    disabled={
-                      readOnly ||
-                      saving ||
-                      (draft.reasonCode === "other" && !draft.note.trim())
-                    }
-                  >
-                    {saving ? "保存しています…" : "この採点を保存・確認"}
-                  </Button>
+                <div className="submission-editor-actions" aria-live="polite">
+                  {saving ? (
+                    <Badge tone="neutral">保存しています…</Badge>
+                  ) : dirty ? (
+                    <Badge tone="warning">自動保存待ち</Badge>
+                  ) : (
+                    <Badge tone="success">保存済み</Badge>
+                  )}
                 </div>
               </form>
             </Card>

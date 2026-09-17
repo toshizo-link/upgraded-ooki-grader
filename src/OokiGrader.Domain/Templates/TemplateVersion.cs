@@ -256,6 +256,15 @@ public sealed class TemplateVersion
             _questions.Select(question => question.Hierarchy.PathKey),
             "template.duplicate_question_hierarchy",
             "Question hierarchy paths must be unique.");
+        if (_questions.Any(question =>
+                question.Hierarchy.AwardsPointsAtMiddleQuestion))
+        {
+            errors.Add(
+                new DomainError(
+                    "template.middle_question_awards_points",
+                    "Major and middle questions are scopes; only minor questions may award points.",
+                    nameof(Questions)));
+        }
         foreach (var scope in _questions
                      .GroupBy(
                          question => question.Hierarchy.MiddleScopeKey,
@@ -269,7 +278,7 @@ public sealed class TemplateVersion
             errors.Add(
                 new DomainError(
                     "template.mixed_middle_minor_scoring",
-                    "A middle-question scope must award points either at the middle question or through minor questions, never both.",
+                    "A legacy point-bearing middle question must be converted to a minor question before this scope can be published.",
                     nameof(Questions)));
         }
         AddDuplicateErrors(

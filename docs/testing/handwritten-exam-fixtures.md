@@ -71,6 +71,35 @@ dotnet test tests/OokiGrader.ProviderContract.Tests \
 Live tests consume provider quota and are never part of the ordinary
 deterministic suite.
 
+### Phase 3 committed local regression
+
+The repository includes a fictional one-page Japanese social-studies form and
+two completed variants under `tmp/pdfs/user-guide/fixtures`. These files are
+used without network or provider access to exercise the real PDF rasterizer and
+blank-template alignment path:
+
+```text
+dotnet test tests/OokiGrader.Preprocessing.Tests \
+  --filter AlignsCommittedCompletedSheetsToBlankRoutingReference
+
+dotnet test tests/OokiGrader.Application.Tests \
+  --filter PhaseThreeLocalGradingEvaluationTests
+```
+
+With `local-raster-v3`, the two completed pages scored 9,890 and 9,894 basis
+points against the blank reference; the routing threshold is 6,500. The local
+teacher-truth matrix covers canonical and equivalent accepted answers,
+Kanji-required rejection, partial credit, an incorrect answer, and a located
+blank. All seven expected outcomes and point values agreed. The three correct
+cases were the only automatic decisions, while all four risk cases required
+teacher review.
+
+The complete hashes, observations, and limitations are recorded in
+`output/accuracy/phase-3-local-evidence-2026-09-15.json` and summarized in
+`output/accuracy/phase-3-intake-grading-report-2026-09-15.md`. The pages and
+answers are synthetic, so this regression proves pipeline behavior rather than
+accuracy on student handwriting.
+
 ### Basic live grading-accuracy evaluation
 
 The opt-in evaluator compares live Gemini grading proposals with the pinned

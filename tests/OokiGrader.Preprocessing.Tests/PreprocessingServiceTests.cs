@@ -1,9 +1,17 @@
 using SkiaSharp;
+using Xunit.Abstractions;
 
 namespace OokiGrader.Preprocessing.Tests;
 
 public sealed class PreprocessingServiceTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public PreprocessingServiceTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     [Fact]
     public async Task NormalizesPngCreatesThumbnailAndStableManifest()
     {
@@ -583,6 +591,50 @@ public sealed class PreprocessingServiceTests
         Assert.Equal(reference.Height, alignment.Page.Height);
     }
 
+    [Theory]
+    [InlineData(
+        "asia-check-test-hanako.pdf",
+        "c512cbcc87216ef4bfe26c6cf984e02af4d034c36f80eaceff9f94cf05c408da")]
+    [InlineData(
+        "asia-check-test-yuta.pdf",
+        "b0792de96c84aacd4bcdc3873d14ba23ffb18fb7413b379e9cdad0e4795754af")]
+    public async Task AlignsCommittedCompletedSheetsToBlankRoutingReference(
+        string candidateFileName,
+        string candidateSha256)
+    {
+        var fixtureDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "tmp",
+            "pdfs",
+            "user-guide",
+            "fixtures");
+        var service = new PreprocessingService();
+        var reference = await ProcessSinglePdfPageAsync(
+            service,
+            Path.Combine(
+                fixtureDirectory,
+                "asia-check-test-blank.pdf"));
+        var candidate = await ProcessSinglePdfPageAsync(
+            service,
+            Path.Combine(fixtureDirectory, candidateFileName));
+
+        var alignment = service.AlignToReference(candidate.Page, reference.Page);
+
+        Assert.Equal(
+            "26d6642902c3b068732deca13d25ad0e9beb208fe270d52383d81b99a2588773",
+            reference.InputSha256);
+        Assert.Equal(candidateSha256, candidate.InputSha256);
+        Assert.Equal("aligned", alignment.State);
+        Assert.InRange(alignment.ScoreBasisPoints!.Value, 6_500, 10_000);
+        Assert.Equal(0, alignment.RotationDegrees);
+        _output.WriteLine(
+            "{0}: score={1}, offset=({2},{3})",
+            candidateFileName,
+            alignment.ScoreBasisPoints,
+            alignment.OffsetXMillionths,
+            alignment.OffsetYMillionths);
+    }
+
     [Fact]
     public async Task FailsClosedWhenReferenceHasNoStructuralAnchors()
     {
@@ -619,6 +671,41 @@ public sealed class PreprocessingServiceTests
             new MemoryStream(bytes),
             new PreprocessingInput("image/png"));
         return Assert.Single(result.Pages);
+    }
+
+    private static async Task<(
+        PreprocessedPage Page,
+        string InputSha256)> ProcessSinglePdfPageAsync(
+        PreprocessingService service,
+        string path)
+    {
+        await using var stream = File.OpenRead(path);
+        var result = await service.ProcessAsync(
+            stream,
+            new PreprocessingInput(
+                "application/pdf",
+                Path.GetFileName(path),
+                MaximumPages: 1));
+        return (Assert.Single(result.Pages), result.InputSha256);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "global.json"))
+                && Directory.Exists(
+                    Path.Combine(current.FullName, "installer")))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException(
+            "The repository root could not be located.");
     }
 
     private static byte[] CreateFormPng(

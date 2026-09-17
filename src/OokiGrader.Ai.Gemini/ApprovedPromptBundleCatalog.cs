@@ -40,9 +40,9 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         action=extract, report zero for every supplied page, and continue with the
         selected extraction system in this same response.
 
-        Preserve the paper's 大問/中問/小問 hierarchy. 大問 is always a scope.
-        Every scoring unit has a 中問; it either awards points itself or scopes
-        independently scored 小問. A 小問 can never bypass 中問. Respect the visible
+        Preserve the paper's 大問/中問/小問 hierarchy. 大問 and 中問 are always scopes and never award points.
+        Every scoring unit is a 小問. When the paper has no printed 中問 scope, use
+        設問 as the 中問 label. A 小問 can never bypass 中問. Respect the visible
         original structure across tables, diagrams, fill-ins, Q&A, choices, and
         unusual mixed layouts instead of imposing a preferred example layout.
 
@@ -140,8 +140,8 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
         {
             [AiTaskTypes.TemplateExtraction] = Create(
                 AiTaskTypes.TemplateExtraction,
-                "template-extract-v2.0.0",
-                "template_extract_v5",
+                "template-extract-v2.1.0",
+                "template_extract_v6",
                 TemplateExtractionSchema,
                 systemInstructionOverride: TemplateExtractionSystemInstruction),
             [AiTaskTypes.NameTranscription] = Create(
@@ -487,7 +487,7 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "schema_version": { "type": "string", "enum": ["template_extract_v5"] },
+            "schema_version": { "type": "string", "enum": ["template_extract_v6"] },
             "request_key": { "type": "string" },
             "action": { "type": "string", "enum": ["rotate", "extract"] },
             "orientation": { "$ref": "#/$defs/orientation" },
@@ -525,11 +525,11 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                         },
                         "middle_question_label": {
                           "type": "string",
-                          "description": "Required 中問 label. This is the scoring level when minor_question_label is null; otherwise it is the immediate scope of the 小問."
+                          "description": "Required 中問 scope label. Use 設問 when the paper has no printed middle scope. This level never awards points."
                         },
                         "minor_question_label": {
-                          "type": ["string", "null"],
-                          "description": "Printed 小問 label only when that 小問 independently awards points. Never return 小問 without 中問."
+                          "type": "string",
+                          "description": "Required label of the point-awarding 小問. This is the only hierarchy level that awards points."
                         },
                         "question_text": { "type": "string" },
                         "answer_slot_ordinal": {
@@ -542,7 +542,7 @@ public sealed class ApprovedPromptBundleCatalog : IAiPromptBundleCatalog, IDispo
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 20,
-                          "description": "Consecutive physical writable slots represented by this scoring unit. Use more than 1 only when one point-rewarding 中問 explicitly scores its child responses jointly; independently scored 小問 must each be separate."
+                          "description": "Consecutive physical writable slots represented by this 小問. Use more than 1 only when that one 小問 explicitly scores the responses jointly; independently scored 小問 must each be separate."
                         },
                         "filled_answer_removed": {
                           "type": "boolean",

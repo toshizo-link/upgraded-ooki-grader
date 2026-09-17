@@ -891,7 +891,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.Null(canonical.SourceFileReferenceId);
         Assert.Null(canonical.SourcePageNumber);
         Assert.Null(canonical.SourceRegionId);
-        Assert.Equal("template-extract-v2.0.0", request.PromptVersion);
+        Assert.Equal("template-extract-v2.1.0", request.PromptVersion);
         Assert.Contains(
             "use your own subject-matter knowledge only",
             request.SystemInstruction,
@@ -1207,7 +1207,7 @@ public sealed class TemplateExtractionJobWorkerTests
         Assert.False(fixture.Provider.ObservedInsideWriteCoordinator);
         var providerRequest = Assert.Single(fixture.Provider.Requests);
         Assert.Equal(AiTaskTypes.TemplateExtraction, providerRequest.TaskType);
-        Assert.Equal("template_extract_v5", providerRequest.SchemaVersion);
+        Assert.Equal("template_extract_v6", providerRequest.SchemaVersion);
         Assert.Contains(
             "\"source_role\":\"contains_model_answers\"",
             providerRequest.UserInstruction,

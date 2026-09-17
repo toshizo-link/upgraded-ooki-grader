@@ -3,9 +3,9 @@ using PdfSharp.Fonts;
 
 namespace OokiGrader.Reports.Pdf;
 
-internal sealed class NotoSansJpFontResolver : IFontResolver
+public sealed class NotoSansJpFontResolver : IFontResolver
 {
-    internal const string FamilyName = "Ooki Noto Sans JP";
+    public const string FamilyName = "Ooki Noto Sans JP";
     private const string FaceName = "ooki-noto-sans-jp-regular";
     private const string FontResourceName =
         "OokiGrader.Reports.Pdf.Assets.NotoSansJP.ttf";
@@ -32,7 +32,7 @@ internal sealed class NotoSansJpFontResolver : IFontResolver
             ? FontBytes.Value
             : null;
 
-    internal static void EnsureRegistered()
+    public static void EnsureRegistered()
     {
         lock (RegistrationLock)
         {

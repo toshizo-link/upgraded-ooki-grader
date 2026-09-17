@@ -244,6 +244,8 @@ describe("question grading rules", () => {
   it("creates a new question with simple one-point AI defaults", () => {
     expect(newQuestionPayload(2, 5000)).toMatchObject({
       displayLabel: "問3",
+      middleQuestionLabel: "設問",
+      minorQuestionLabel: "問3",
       order: 3,
       gradingMode: "ai_rubric",
       pointIncrementMilli: 1000,
@@ -270,8 +272,8 @@ describe("question grading rules", () => {
     expect(questionHierarchyDisplayLabel(hierarchy)).toBe("大問1 中問2 (3)");
     expect(questionPayload(generatedQuestion())).toMatchObject({
       majorQuestionLabel: null,
-      middleQuestionLabel: "問1",
-      minorQuestionLabel: null,
+      middleQuestionLabel: "設問",
+      minorQuestionLabel: "問1",
     });
   });
 

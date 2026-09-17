@@ -150,6 +150,19 @@ public sealed class TemplateExtractionResponseValidatorTests
         Assert.False(question.AnswerOrderInsensitiveSuggestion);
     }
 
+    [Fact]
+    public void LegacyExplicitMiddleScoringHierarchyRemainsReadable()
+    {
+        var validated = Validate(
+            detectedAnswerSlotCount: 1,
+            CreateLegacyMiddleScoredQuestion());
+
+        var question = Assert.Single(Assert.Single(validated.Pages).Questions);
+        Assert.Equal("大問1", question.MajorQuestionLabel);
+        Assert.Equal("問1", question.MiddleQuestionLabel);
+        Assert.Null(question.MinorQuestionLabel);
+    }
+
     private static ValidatedTemplateExtraction Validate(
         int detectedAnswerSlotCount,
         params object[] questions)
@@ -243,6 +256,32 @@ public sealed class TemplateExtractionResponseValidatorTests
         accepted_variants = Array.Empty<string>(),
         suggested_points_milli = 1_000,
         allow_non_kanji_suggestion = false,
+        requires_teacher_answer = false,
+        confidence = 0.99,
+        warnings = Array.Empty<string>(),
+    };
+
+    private static object CreateLegacyMiddleScoredQuestion() => new
+    {
+        source_key = "legacy-v5-slot-1",
+        display_label = "問1",
+        major_question_label = "大問1",
+        middle_question_label = "問1",
+        minor_question_label = (string?)null,
+        question_text = "答えなさい。",
+        answer_slot_ordinal = 1,
+        answer_slot_count = 1,
+        filled_answer_removed = true,
+        is_embedded_fill_blank = false,
+        question_type = "exact_short_text",
+        expected_answer = "東京",
+        answer_provenance = "ai_proposed",
+        answer_source = (object?)null,
+        accepted_variants = Array.Empty<string>(),
+        suggested_points_milli = 1_000,
+        allow_non_kanji_suggestion = false,
+        requires_complete_answer_suggestion = false,
+        answer_order_insensitive_suggestion = false,
         requires_teacher_answer = false,
         confidence = 0.99,
         warnings = Array.Empty<string>(),

@@ -95,8 +95,12 @@ describe("SubmissionGradingPage workflow", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("edits one result through the revision-safe override contract", async () => {
+  it("autosaves one result through the revision-safe override contract", async () => {
     renderPage();
+
+    expect(
+      screen.queryByRole("button", { name: "この採点を保存・確認" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("読み取り結果"), {
       target: { value: "蒸散" },
@@ -107,9 +111,6 @@ describe("SubmissionGradingPage workflow", () => {
     fireEvent.change(screen.getByLabelText(/変更・確認理由/), {
       target: { value: "partial_credit" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "この採点を保存・確認" }),
-    );
 
     await waitFor(() =>
       expect(apiState.post).toHaveBeenCalledWith(
@@ -124,6 +125,7 @@ describe("SubmissionGradingPage workflow", () => {
         },
         { idempotencyKey: expect.any(String) },
       ),
+      { timeout: 2_000 },
     );
     expect(queryState.reload).toHaveBeenCalledOnce();
   });
@@ -134,9 +136,6 @@ describe("SubmissionGradingPage workflow", () => {
     fireEvent.change(screen.getByLabelText("点数"), {
       target: { value: "1" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "この採点を保存・確認" }),
-    );
 
     await waitFor(() =>
       expect(apiState.post).toHaveBeenCalledWith(
@@ -148,42 +147,7 @@ describe("SubmissionGradingPage workflow", () => {
         }),
         { idempotencyKey: expect.any(String) },
       ),
-    );
-  });
-
-  it("preserves an unreadable zero-point outcome when confirming it unchanged", async () => {
-    const base = makeWorkspace();
-    queryState.data = {
-      workspace: makeWorkspace({
-        results: [
-          {
-            ...base.results[0]!,
-            transcription: "",
-            outcome: "unreadable",
-            awardedPointsMilli: 0,
-          },
-          base.results[1]!,
-        ],
-      }),
-      etag: '"12"',
-    };
-    renderPage();
-
-    expect(screen.getByLabelText("判定")).toHaveValue("unreadable");
-    fireEvent.click(
-      screen.getByRole("button", { name: "この採点を保存・確認" }),
-    );
-
-    await waitFor(() =>
-      expect(apiState.post).toHaveBeenCalledWith(
-        "/submissions/submission-1/results/result-1:override",
-        expect.objectContaining({
-          awardedPointsMilli: 0,
-          outcome: "unreadable",
-          transcriptionCorrection: "",
-        }),
-        { idempotencyKey: expect.any(String) },
-      ),
+      { timeout: 2_000 },
     );
   });
 
@@ -193,12 +157,13 @@ describe("SubmissionGradingPage workflow", () => {
       .mockResolvedValueOnce(undefined);
     renderPage();
 
-    const save = screen.getByRole("button", {
-      name: "この採点を保存・確認",
+    fireEvent.change(screen.getByLabelText("点数"), {
+      target: { value: "1" },
     });
-    fireEvent.click(save);
-    expect(await screen.findByText("接続が切れました")).toBeVisible();
-    fireEvent.click(save);
+    expect(
+      await screen.findByText("接続が切れました", {}, { timeout: 2_000 }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "保存を再試行" }));
 
     await waitFor(() => expect(apiState.post).toHaveBeenCalledTimes(2));
     const firstOptions = apiState.post.mock.calls[0]?.[2] as
@@ -209,6 +174,52 @@ describe("SubmissionGradingPage workflow", () => {
       | undefined;
     expect(firstOptions?.idempotencyKey).toBeTruthy();
     expect(secondOptions?.idempotencyKey).toBe(firstOptions?.idempotencyKey);
+  });
+
+  it("serializes autosaves and sends the latest edit with the next revision", async () => {
+    let resolveFirst: (() => void) | undefined;
+    let resolveSecond: (() => void) | undefined;
+    apiState.post
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("点数"), {
+      target: { value: "1" },
+    });
+    await waitFor(() => expect(apiState.post).toHaveBeenCalledOnce(), {
+      timeout: 2_000,
+    });
+
+    fireEvent.change(screen.getByLabelText("点数"), {
+      target: { value: "2" },
+    });
+    resolveFirst?.();
+
+    await waitFor(() => expect(apiState.post).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    expect(queryState.reload).not.toHaveBeenCalled();
+    expect(apiState.post.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        sourceResultRevision: 4,
+        awardedPointsMilli: 2_000,
+        outcome: "correct",
+      }),
+    );
+
+    resolveSecond?.();
+    await waitFor(() => expect(queryState.reload).toHaveBeenCalledOnce());
   });
 
   it("freezes the unresolved snapshot and requires acknowledgment before bulk confirmation", async () => {
@@ -339,28 +350,35 @@ describe("SubmissionGradingPage workflow", () => {
     expect(screen.getByTitle("答案PDF（1ページ目）")).toBeVisible();
     expect(screen.getByLabelText("読み取り結果")).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "この採点を保存・確認" }),
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "この採点を保存・確認" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "未確認2問を一括確認" }),
     ).toBeDisabled();
     },
   );
 
-  it("does not discard an edit when result navigation is canceled", () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
+  it("keeps the current result selected until its edit is saved", async () => {
     renderPage();
 
     fireEvent.change(screen.getByLabelText("読み取り結果"), {
-      target: { value: "未保存の訂正" },
+      target: { value: "自動保存する訂正" },
     });
     fireEvent.click(screen.getByRole("button", { name: /大問2/ }));
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      "採点の編集内容が保存されていません。変更を破棄して移動しますか？",
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("読み取り結果")).toHaveValue(
+      "自動保存する訂正",
     );
-    expect(screen.getByLabelText("読み取り結果")).toHaveValue("未保存の訂正");
     expect(screen.getByRole("heading", { name: "植物の働きを答えなさい" })).toBeVisible();
+
+    await waitFor(() => expect(apiState.post).toHaveBeenCalledOnce(), {
+      timeout: 2_000,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /大問2/ }));
+    expect(
+      screen.getByRole("heading", { name: "気体を二つ答えなさい" }),
+    ).toBeVisible();
   });
 
   it("lets a teacher review only questions marked incorrect", () => {
@@ -383,8 +401,7 @@ describe("SubmissionGradingPage workflow", () => {
     expect(screen.getByRole("button", { name: /大問2/ })).toBeVisible();
   });
 
-  it("does not change the wrong-answer filter when an edit would be discarded", () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
+  it("keeps the current filter until its edit is saved", async () => {
     renderPage();
 
     fireEvent.change(screen.getByLabelText("読み取り結果"), {
@@ -394,14 +411,22 @@ describe("SubmissionGradingPage workflow", () => {
       screen.getByRole("button", { name: "不正解のみ 1" }),
     );
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      "採点の編集内容が保存されていません。変更を破棄して移動しますか？",
-    );
+    expect(window.confirm).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "すべて 2" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(screen.getByLabelText("読み取り結果")).toHaveValue("未保存の訂正");
+
+    await waitFor(() => expect(apiState.post).toHaveBeenCalledOnce(), {
+      timeout: 2_000,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "不正解のみ 1" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "不正解のみ 1" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });
 

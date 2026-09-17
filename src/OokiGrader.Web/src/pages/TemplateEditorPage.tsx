@@ -255,8 +255,8 @@ export function newQuestionPayload(
   return {
     displayLabel: `問${order}`,
     majorQuestionLabel: null,
-    middleQuestionLabel: `問${order}`,
-    minorQuestionLabel: null,
+    middleQuestionLabel: "設問",
+    minorQuestionLabel: `問${order}`,
     order,
     questionText: "",
     questionType: "exact_short_text",
@@ -281,11 +281,24 @@ export function normalizedQuestionHierarchy(
     | "minorQuestionLabel"
   >,
 ) {
+  const majorQuestionLabel = question.majorQuestionLabel?.trim() || null;
+  const middleQuestionLabel = question.middleQuestionLabel?.trim() || null;
+  const minorQuestionLabel = question.minorQuestionLabel?.trim() || null;
+  if (
+    !majorQuestionLabel &&
+    !minorQuestionLabel &&
+    (!middleQuestionLabel || middleQuestionLabel === question.displayLabel.trim())
+  ) {
+    return {
+      majorQuestionLabel: null,
+      middleQuestionLabel: "設問",
+      minorQuestionLabel: question.displayLabel.trim(),
+    };
+  }
   return {
-    majorQuestionLabel: question.majorQuestionLabel?.trim() || null,
-    middleQuestionLabel:
-      question.middleQuestionLabel?.trim() || question.displayLabel.trim(),
-    minorQuestionLabel: question.minorQuestionLabel?.trim() || null,
+    majorQuestionLabel,
+    middleQuestionLabel: middleQuestionLabel || "設問",
+    minorQuestionLabel,
   };
 }
 
@@ -1765,11 +1778,7 @@ export function QuestionProperties({
           label="中問"
           htmlFor="middle-question-label"
           required
-          hint={
-            hierarchy.minorQuestionLabel
-              ? "この中問は小問をまとめる範囲です。"
-              : "小問がない場合、この中問に配点が付きます。"
-          }
+          hint="中問は小問をまとめる範囲だけを表し、配点は持ちません。"
         >
           <input
             id="middle-question-label"
@@ -1784,12 +1793,14 @@ export function QuestionProperties({
         <Field
           label="小問"
           htmlFor="minor-question-label"
-          hint="任意。設定した場合は小問に配点が付き、中問は範囲になります。"
+          required
+          hint="配点が付く採点単位です。"
         >
           <input
             id="minor-question-label"
             value={hierarchy.minorQuestionLabel || ""}
             disabled={readOnly}
+            required
             placeholder="例：(1)"
             onChange={(event) =>
               updateHierarchy({ minorQuestionLabel: event.target.value || null })

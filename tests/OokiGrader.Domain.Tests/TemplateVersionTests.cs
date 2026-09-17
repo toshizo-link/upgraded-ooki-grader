@@ -215,6 +215,50 @@ public sealed class TemplateVersionTests
     }
 
     [Fact]
+    public void MiddleQuestionCannotBeThePointAwardingItem()
+    {
+        var draft = TemplateVersion.CreateDraft(
+            "version-1",
+            "template-1",
+            1,
+            "pipeline-v1",
+            [
+                TestQuestionFactory.ExactText(
+                    hierarchy: new QuestionHierarchy("大問1", "中問1")),
+            ]);
+
+        var validation = draft.ValidateForPublish();
+
+        Assert.Contains(
+            validation.Errors,
+            error => error.Code == "template.middle_question_awards_points");
+    }
+
+    [Theory]
+    [InlineData(null, "問1", null, null, "設問", "問1")]
+    [InlineData("大問1", "中問1", null, "大問1", "設問", "中問1")]
+    [InlineData("大問1", "中問1", "(1)", "大問1", "中問1", "(1)")]
+    public void LegacyScoringHierarchyIsNormalizedToAPointAwardingMinorQuestion(
+        string? major,
+        string? middle,
+        string? minor,
+        string? expectedMajor,
+        string expectedMiddle,
+        string expectedMinor)
+    {
+        var hierarchy = QuestionHierarchy.ForScoring(
+            major,
+            middle,
+            minor,
+            "問1");
+
+        Assert.Equal(expectedMajor, hierarchy.MajorQuestionLabel);
+        Assert.Equal(expectedMiddle, hierarchy.MiddleQuestionLabel);
+        Assert.Equal(expectedMinor, hierarchy.MinorQuestionLabel);
+        Assert.False(hierarchy.AwardsPointsAtMiddleQuestion);
+    }
+
+    [Fact]
     public void MiddleQuestionCannotAwardPointsAlongsideItsMinorQuestions()
     {
         var draft = TemplateVersion.CreateDraft(

@@ -14,8 +14,8 @@ public sealed class GeminiDirectClientTests
         using var catalog = new ApprovedPromptBundleCatalog();
         var bundle = catalog.GetRequired(AiTaskTypes.TemplateExtraction);
 
-        Assert.Equal("template-extract-v2.0.0", bundle.PromptVersion);
-        Assert.Equal("template_extract_v5", bundle.SchemaVersion);
+        Assert.Equal("template-extract-v2.1.0", bundle.PromptVersion);
+        Assert.Equal("template_extract_v6", bundle.SchemaVersion);
         Assert.Contains(
             "If any page needs a non-zero\nturn, return action=rotate",
             bundle.SystemInstruction,
@@ -46,6 +46,14 @@ public sealed class GeminiDirectClientTests
             StringComparison.Ordinal);
         Assert.Contains(
             "never splice a kana proposal and a Kanji proposal",
+            bundle.SystemInstruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "大問 and 中問 are always scopes and never award points",
+            bundle.SystemInstruction,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "it either awards points itself",
             bundle.SystemInstruction,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -88,6 +96,12 @@ public sealed class GeminiDirectClientTests
             .GetProperty("questions")
             .GetProperty("items")
             .GetProperty("properties");
+        Assert.Equal(
+            "string",
+            questionProperties
+                .GetProperty("minor_question_label")
+                .GetProperty("type")
+                .GetString());
         Assert.False(
             questionProperties.TryGetProperty("question_region", out _));
         Assert.False(

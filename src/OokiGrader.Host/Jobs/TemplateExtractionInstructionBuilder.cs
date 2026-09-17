@@ -52,13 +52,12 @@ internal static class TemplateExtractionInstructionBuilder
         separately writable or separately scored slots. Preserve source_id,
         page_number, visual order, labels, answer provenance, confidence, and
         review warnings. Model every scoring item with major_question_label
-        (大問, optional scope), middle_question_label (中問, always required), and
-        minor_question_label (小問, optional). 大問 never awards points. When
-        minor_question_label is null, the 中問 awards the points. When it is not
-        null, 中問 is a scope and that 小問 awards the points. Never create a
-        direct 大問-to-小問 relationship. If a flat paper has no printed hierarchy,
-        treat its scoring label as 中問. Preserve the original paper's grouping
-        and labels instead of forcing a familiar layout.
+        (大問, optional scope), middle_question_label (中問 scope, always required),
+        and minor_question_label (小問, always required). Only
+        minor_question_label awards points; 大問 and 中問 are scope-only. If a flat
+        paper has no printed hierarchy, use "設問" as middle_question_label and
+        put its printed scoring label in minor_question_label. Preserve printed
+        grouping and labels instead of forcing a familiar layout.
 
         A visibly printed model answer may be returned as
         provided_model_answer with this unit source and page. If no visible model
@@ -85,11 +84,10 @@ internal static class TemplateExtractionInstructionBuilder
         Identify every scoring unit and preserve printed hierarchy and numbering.
         Support ordinary Q&A, free response, normal fill-ins, table-cell fill-ins,
         diagram labels, choice questions, and mixed layouts. Split multiple blanks
-        or columns when each 小問 is independently scored. When a point-rewarding
-        中問 explicitly grades several child responses together (for example 完答),
-        return one 中問 scoring unit spanning those consecutive physical slots;
-        its child 小問 do not receive points themselves. When 中問 is only a scope,
-        return each independently scored 小問. Keep one long free-response area as
+        or columns when each 小問 is independently scored. When several child
+        responses are graded together (for example 完答), return one 小問 scoring
+        unit spanning those consecutive physical slots. Return each independently
+        scored 小問 separately. Keep one long free-response area as
         one item when it is one scored response. These examples are guidance, not
         a license to rewrite unusual papers: the visible original structure wins.
         Use visible model answers when

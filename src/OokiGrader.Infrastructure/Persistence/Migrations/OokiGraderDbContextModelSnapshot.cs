@@ -2650,6 +2650,164 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.GuardianDeliveryEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<string>("AttachmentName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("attachment_name");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ExportRecordId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("export_record_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("FileReferenceId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("file_reference_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("kind");
+
+                    b.Property<long?>("LastAttemptAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<long?>("LastDryRunAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_dry_run_at");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<int>("MaxAttempts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("max_attempts");
+
+                    b.Property<long>("NotBeforeAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("not_before_at");
+
+                    b.Property<string>("PassFailImportId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("pass_fail_import_id")
+                        .IsFixedLength();
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SafeErrorDetail")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_error_detail");
+
+                    b.Property<string>("SchoolManagerThreadId")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("school_manager_thread_id");
+
+                    b.Property<long?>("SentAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("sent_at");
+
+                    b.Property<DateOnly?>("SentLocalDate")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sent_local_date");
+
+                    b.Property<string>("SourceKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_key");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StudentId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("student_id")
+                        .IsFixedLength();
+
+                    b.Property<string>("SubmissionId")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("submission_id")
+                        .IsFixedLength();
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExportRecordId")
+                        .IsUnique()
+                        .HasFilter("\"export_record_id\" IS NOT NULL");
+
+                    b.HasIndex("FileReferenceId")
+                        .IsUnique()
+                        .HasFilter("\"file_reference_id\" IS NOT NULL");
+
+                    b.HasIndex("PassFailImportId");
+
+                    b.HasIndex("SubmissionId");
+
+                    b.HasIndex("Kind", "StudentId", "SourceKey")
+                        .IsUnique();
+
+                    b.HasIndex("StudentId", "Kind", "SentLocalDate")
+                        .IsUnique()
+                        .HasFilter("\"kind\" = 'pass_fail_table' AND \"sent_local_date\" IS NOT NULL");
+
+                    b.HasIndex("State", "NotBeforeAt", "CreatedAt", "Id");
+
+                    b.ToTable("guardian_delivery", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_guardian_delivery_attempts", "attempt_count >= 0 AND max_attempts > 0");
+
+                            t.HasCheckConstraint("ck_guardian_delivery_kind", "kind IN ('result_pdf','pass_fail_table')");
+
+                            t.HasCheckConstraint("ck_guardian_delivery_pass_fail_file", "kind <> 'pass_fail_table' OR state = 'pending' OR file_reference_id IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_guardian_delivery_sent", "state <> 'sent' OR (sent_at IS NOT NULL AND school_manager_thread_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_guardian_delivery_source", "(kind = 'result_pdf' AND submission_id IS NOT NULL AND export_record_id IS NOT NULL AND pass_fail_import_id IS NULL) OR (kind = 'pass_fail_table' AND submission_id IS NULL AND export_record_id IS NULL AND pass_fail_import_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_guardian_delivery_state", "state IN ('pending','ready','sending','sent','failed','canceled')");
+                        });
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.IdempotencyRecordEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -3014,6 +3172,86 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.ToTable("outbox_event", (string)null);
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.PassFailImportEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id")
+                        .IsFixedLength();
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DeliveryCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("delivery_count");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_code");
+
+                    b.Property<long?>("ProcessedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("processed_at");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<int>("RowCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("row_count");
+
+                    b.Property<string>("SafeErrorDetail")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_error_detail");
+
+                    b.Property<string>("SourceFileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_file_name");
+
+                    b.Property<long>("SourceLastWriteAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("source_last_write_at");
+
+                    b.Property<string>("SourceSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_sha256");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceSha256")
+                        .IsUnique();
+
+                    b.HasIndex("State", "CreatedAt", "Id");
+
+                    b.ToTable("pass_fail_import", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_pass_fail_import_counts", "row_count >= 0 AND delivery_count >= 0");
+
+                            t.HasCheckConstraint("ck_pass_fail_import_state", "state IN ('processing','processed','failed')");
+                        });
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.PricingSnapshotEntity", b =>
                 {
                     b.Property<string>("Id")
@@ -3140,6 +3378,10 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("major_question_label");
 
+                    b.Property<long>("MaxPointsMilli")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("max_points_milli");
+
                     b.Property<string>("MiddleQuestionLabel")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -3150,10 +3392,6 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT")
                         .HasColumnName("minor_question_label");
-
-                    b.Property<long>("MaxPointsMilli")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("max_points_milli");
 
                     b.Property<int>("OrderIndex")
                         .HasColumnType("INTEGER")
@@ -3563,6 +3801,85 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                         {
                             Name = "readOnlyReviewer",
                             DisplayName = "Read-only reviewer"
+                        });
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.SchoolManagerSettingsEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BaseUrl")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("base_url");
+
+                    b.Property<long?>("ActivationStartedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("activation_started_at");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("CredentialRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("credential_revision");
+
+                    b.Property<bool>("DryRun")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("dry_run");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("enabled");
+
+                    b.Property<long?>("LastCredentialTestedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_credential_tested_at");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("PasswordSecretReference")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("password_secret_reference");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("SafeErrorDetail")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_error_detail");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("username");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("school_manager_settings", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_school_manager_settings_credential_revision", "credential_revision >= 0");
+
+                            t.HasCheckConstraint("ck_school_manager_settings_enabled", "enabled = 0 OR (password_secret_reference IS NOT NULL AND activation_started_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_school_manager_settings_singleton", "id = 'school-manager'");
                         });
                 });
 
@@ -6012,6 +6329,45 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
                     b.Navigation("TemplateVersion");
                 });
 
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.GuardianDeliveryEntity", b =>
+                {
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.ExportRecordEntity", "ExportRecord")
+                        .WithMany()
+                        .HasForeignKey("ExportRecordId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.FileReferenceEntity", "FileReference")
+                        .WithMany()
+                        .HasForeignKey("FileReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.PassFailImportEntity", "PassFailImport")
+                        .WithMany("Deliveries")
+                        .HasForeignKey("PassFailImportId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.StudentEntity", "Student")
+                        .WithMany()
+                        .HasForeignKey("StudentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.SubmissionEntity", "Submission")
+                        .WithMany()
+                        .HasForeignKey("SubmissionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ExportRecord");
+
+                    b.Navigation("FileReference");
+
+                    b.Navigation("PassFailImport");
+
+                    b.Navigation("Student");
+
+                    b.Navigation("Submission");
+                });
+
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", b =>
                 {
                     b.HasOne("OokiGrader.Infrastructure.Persistence.Entities.StaffUserEntity", null)
@@ -6545,6 +6901,11 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.OrderedScanBatchEntity", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.PassFailImportEntity", b =>
+                {
+                    b.Navigation("Deliveries");
                 });
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.QuestionEntity", b =>

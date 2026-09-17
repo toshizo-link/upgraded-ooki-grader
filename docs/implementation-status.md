@@ -1,6 +1,63 @@
 # Implementation status
 
-Snapshot: **2026-08-27**.
+Snapshot: **2026-09-15**.
+
+Phase 4 School Manager guardian-delivery update (**2026-09-15**): results
+finalized after explicit automation activation are queued only when the retained
+original answer-sheet PDF is available, and the existing report renderer joins
+that PDF with the grading transcript. A separate worker matches exactly one
+School Manager student by number and name, verifies the semantic guardian-only
+controls, and defaults to a no-upload/no-send dry run. New `.xls`/`.xlsx`
+pass/fail tables are projected per student to the exact grade and class, with
+all recognized identifier/name columns removed, a fixed generated title,
+bounded result-only cells, and a Tokyo-calendar limit of one send per student
+per day. Unknown send outcomes reserve that daily limit and block automatic
+retry. The supplied legacy `.xls` sample produced a 23-row, 99-result-column,
+9-page projection with no captured identity token or five-digit sequence. The
+source passed 1,068 .NET tests (seven optional external/live tests skipped),
+178 frontend tests, the production frontend build, PowerShell parsing, and a
+second safety review. Production School Manager upload/send was not performed;
+activation remains a technician-controlled, dummy-account-first deployment
+step. Checksum-verified unsigned Windows 0.9.14 release, new-install media, and
+host-update media were generated.
+
+Phase 3 intake/grading-accuracy update (**2026-09-15**): after local
+reconciliation, only a clear gated `correct` result may avoid per-question
+review. `incorrect`, `blank`, `partial`, `unreadable`, and `review`
+results now persist as pending teacher review and keep the paper in
+`needs_grade_review`. A reusable evaluator reports agreement, automatic
+precision, unsafe automatic decisions, incorrect-credit false positives, and
+risk-review coverage. The seven-case local teacher-truth matrix passed 7/7,
+with 3/3 safe automatic correct results and 4/4 risk cases routed to review.
+Real `local-raster-v3` processing aligned two committed completed PDFs to the
+blank reference at 9,890 and 9,894 basis points against the 6,500 routing
+threshold. The full source update passed 1,043 .NET tests (seven optional
+external/live tests skipped), 178 frontend tests, and the production frontend
+build. Checksum-verified unsigned Windows 0.9.13 release, new-install media,
+and host-update media were generated. The privacy-reviewed,
+teacher-adjudicated school golden set remains required before unattended
+assignment or grading.
+
+Phase 2 grading-workflow update (**2026-09-15**): new and AI-generated
+questions award points only at `小問`; `大問` and `中問` are scope labels.
+Legacy AI drafts are normalized when materialized, while historical published
+versions remain readable. Per-answer grading changes now autosave through the
+revision-safe override endpoint without finalizing the submission. Active
+sessions retain their existing sliding expiry and persistent-cookie renewal.
+The source update passed 1,034 .NET tests (seven optional external/live tests
+skipped), 178 frontend tests, and the production frontend build.
+Checksum-verified unsigned Windows 0.9.11 release and host-update media were
+generated for local testing; production signing and an on-host upgrade rehearsal
+remain deployment gates.
+
+Windows upgrade update (**2026-09-07**): a local 0.9.2-to-0.9.9 rehearsal
+with published questions exposed an immutable-trigger failure in migration
+0024. The corrected 0.9.10 package passed the same upgrade after a verified
+old-version restore, preserved historical grading data and PDF bytes, and
+passed 1,015 .NET tests (two optional tests skipped; live tests excluded).
+See the [Windows rehearsal report](testing/windows-upgrade-rehearsal-2026-09-07.md)
+for evidence and limitations, including the independent encrypted test backup
+and the distinction between service restart and a full Windows reboot.
 
 This page separates code that is executable in this repository from evidence
 that still must be collected before a school deployment. It is not a
@@ -12,8 +69,8 @@ here supersede the older Batch/priority controls in the baseline
 
 ### Application foundation and staff security
 
-- Eleven .NET 10 source projects, a React/TypeScript SPA, eight .NET test
-  projects, and twenty-one EF Core migrations.
+- Twelve .NET 10 source projects, a React/TypeScript SPA, nine .NET test
+  projects, and twenty-five EF Core migrations.
 - SQLite with WAL, foreign keys, integrity constraints/triggers, serialized
   writes, content-addressed storage, audit records, and crash reconciliation
   for promoted-but-unreferenced objects.
@@ -46,9 +103,10 @@ here supersede the older Batch/priority controls in the baseline
   reconciliation makes complete-answer partial awards zero/incorrect while
   preserving review, and order-insensitive comparison preserves duplicate
   component counts across explicit Japanese/ASCII separators.
-- Printed question structure uses one `大問` / `中問` / `小問` path. `大問` is
-  scope-only, `中問` is required, and either the `中問` or its `小問` children
-  award points, never both. AI generation leaves teacher notes/free-form rubric
+- Printed question structure uses one `大問` / `中問` / `小問` path. `大問` and
+  `中問` are scope-only, `中問` is required, and only `小問` awards points.
+  Flat legacy labels are normalized to `設問` / the point-bearing `小問` when a
+  new draft is created. AI generation leaves teacher notes/free-form rubric
   blank, returns multiple accepted answers as complete alternatives, and
   proposes the three grading options. Template changes autosave, and the current
   `漢字必須` value can be applied across the draft.
@@ -78,7 +136,7 @@ here supersede the older Batch/priority controls in the baseline
   confirmation. EF migration `_0017_DeterministicTemplateGenerationBatches`
   adds this persistence without rewriting published historical versions.
 - The current deterministic extraction contract is prompt
-  `template-extract-v2.0.0`, schema `template_extract_v5`, and pipeline
+  `template-extract-v2.1.0`, schema `template_extract_v6`, and pipeline
   `deterministic-template-generation-v1`. The schema begins with an orientation
   action gate. Upright pages continue to extraction in that response; a valid
   rotation-only response is corrected locally and receives exactly one second
@@ -240,10 +298,12 @@ here supersede the older Batch/priority controls in the baseline
   the staged run.
 - The answer-specific grading workspace streams the original/assembled PDF,
   lazily falls back to normalized pages/thumbnails, exposes all current results,
-  and supports append-only score/outcome/transcription changes. Its bulk action
+  and autosaves append-only score/outcome/transcription changes after a short
+  debounce. Saves are serialized with source revisions, retain an idempotency
+  key across retry, and block navigation while local changes remain. Its bulk action
   confirms the exact versioned unresolved set (up to 300) without finalizing;
   stale snapshots fail atomically.
-- Template extraction schema `template_extract_v5` has an explicit
+- Template extraction schema `template_extract_v6` has an explicit
   `rotate`/`extract` discriminator, exact page manifests, per-page quarter-turn
   instructions, printed name/grade metadata, and the established
   coordinate-free question/answer contract. Cross-field invariants are enforced locally:
@@ -278,6 +338,14 @@ here supersede the older Batch/priority controls in the baseline
   percentage, result-event plus timed refresh, print CSS, and browser
   print-to-PDF export. Its 2,000-student / 20,000-result read bound is
   independent from ZIP-export limits.
+- School Manager guardian delivery is a host-local background workflow with an
+  activation boundary, DPAPI-protected credentials, dry-run recipient checks,
+  exact student matching, guardian-only semantic control verification, audited
+  delivery state, and no automatic retry after an unknown send outcome. Finalized
+  results require the retained original answer PDF before a combined report is
+  queued. Updated pass/fail workbooks create fixed-title, identity-redacted PDFs
+  for each matching grade/class and enforce one possible send per student per
+  Tokyo day.
 - Durable bulk student-result export previews either exact checked submission
   IDs or the server-resolved current report filters. A fingerprinted job
   revalidates every current finalized result and packages at most 100 students
@@ -515,7 +583,7 @@ Rollout requires a fresh verified backup and maintenance window, migration
 rehearsal from the previous SQLite schema, and synthetic HOP, STEP,
 class-placement, Other-normal, Other-fill-blank, rotation, and final-check
 acceptance runs. After startup, verify that Gemini reconciliation selected the
-exact current `template-extract-v2.0.0` / `template_extract_v5` profile; a manual
+exact current `template-extract-v2.1.0` / `template_extract_v6` profile; a manual
 connection test performs the same self-healing reconciliation after a full
 capability pass. Existing published template versions and in-flight immutable
 profile snapshots are retained, but no new work enters the superseded creation

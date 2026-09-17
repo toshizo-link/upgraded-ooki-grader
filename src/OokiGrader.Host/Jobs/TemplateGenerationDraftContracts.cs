@@ -51,7 +51,7 @@ internal static class TemplateGenerationDraftFactory
     {
         ArgumentNullException.ThrowIfNull(extraction);
         return new CanonicalTemplateGenerationDraft(
-            "template_extract_v5",
+            "template_extract_v6",
             new CanonicalTemplateGenerationMetadata(
                 extraction.Metadata.Title,
                 extraction.Metadata.GradeLabel,

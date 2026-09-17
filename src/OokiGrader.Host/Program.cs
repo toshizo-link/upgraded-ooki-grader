@@ -25,6 +25,8 @@ using OokiGrader.Preprocessing;
 using OokiGrader.Reports.Pdf;
 using OokiGrader.Domain.Templates;
 using OokiGrader.Domain.Grading;
+using OokiGrader.Host.SchoolManager;
+using OokiGrader.SchoolManager.Delivery;
 
 var (filteredArgs, externalConfigurationPath) =
     ExtractExternalConfigurationArgument(args);
@@ -270,6 +272,29 @@ builder.Services.AddOokiPersistence(new OokiPersistenceOptions
     DatabasePath = databasePath,
     ContentRootPath = objectStoreRoot,
 });
+builder.Services.Configure<SchoolManagerAutomationOptions>(options =>
+{
+    var configured = builder.Configuration[
+        "SchoolManagerAutomation:PassFailInputDirectory"];
+    options.PassFailInputDirectory = string.IsNullOrWhiteSpace(configured)
+        ? Path.Combine(dataRoot, "school-manager", "incoming")
+        : Path.IsPathFullyQualified(configured)
+            ? configured
+            : Path.GetFullPath(configured, builder.Environment.ContentRootPath);
+    options.StableFileAge = TimeSpan.FromSeconds(Math.Clamp(
+        builder.Configuration.GetValue(
+            "SchoolManagerAutomation:StableFileAgeSeconds",
+            10),
+        5,
+        300));
+});
+builder.Services.AddSingleton<ISchoolManagerClient, PlaywrightSchoolManagerClient>();
+builder.Services.AddSingleton<AutomaticResultDeliveryPlanner>();
+builder.Services.AddSingleton<PassFailImportProcessor>();
+builder.Services.AddSingleton<GuardianDeliveryProcessor>();
+builder.Services.AddSingleton<SchoolManagerAutomationWorker>();
+builder.Services.AddHostedService(serviceProvider =>
+    serviceProvider.GetRequiredService<SchoolManagerAutomationWorker>());
 var configuredBackupRoot = builder.Configuration["Backup:DestinationRoot"];
 var backupRoot = string.IsNullOrWhiteSpace(configuredBackupRoot)
     ? null
@@ -504,6 +529,7 @@ app.MapAdminEndpoints(dataRoot);
 app.MapBackupAdminEndpoints();
 app.MapAiAdminEndpoints();
 app.MapAiBatchAdminEndpoints();
+app.MapSchoolManagerAdminEndpoints();
 app.MapReportsEndpoints();
 app.MapBulkTranscriptExportEndpoints();
 app.MapEventsEndpoints();

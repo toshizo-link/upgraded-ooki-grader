@@ -253,8 +253,8 @@ public sealed class TemplateGenerationPolicyTests
             DeterministicSuffix: "-1",
             TemplateGenerationProfile.CurrentSplitPolicyVersion,
             TemplateGenerationProfile.CurrentNamingPolicyVersion,
-            ExtractionPromptVersion: "template-extract-v2.0.0",
-            ExtractionSchemaVersion: "template_extract_v5");
+            ExtractionPromptVersion: "template-extract-v2.1.0",
+            ExtractionSchemaVersion: "template_extract_v6");
 
     private static void AssertUnit(
         TemplateUnitPlan unit,
