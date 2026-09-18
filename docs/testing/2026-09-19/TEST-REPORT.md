@@ -2,6 +2,8 @@
 
 Date: 19 September 2026, Asia/Tokyo.
 
+**Expanded follow-up:** [134-page real-life workflow and test guide](../../../output/pdf/OokiGrader-Real-Life-Workflow-and-Test-Guide-2026-09-19.pdf?raw=true), with [new evidence and detailed results](workflow/README.md). This follow-up adds 64 original screenshots, 50 workflows and 38 live API assertions. It reproduces two UI defects. It also corrects any earlier inference that HTTP 200 proved installed School Manager or class-matrix API availability: those routes return the HTML application shell on installed 0.9.8, not JSON.
+
 [Download the comprehensive 15-page PDF report with screenshots](../../../output/pdf/OokiGrader-Comprehensive-Test-Report-2026-09-19.pdf?raw=true).
 
 **Code fix and automated validation: PASS. Installed upgrade, seeded retention comparison, and live end-to-end validation: INCOMPLETE.**

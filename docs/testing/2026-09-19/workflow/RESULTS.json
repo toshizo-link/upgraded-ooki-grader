@@ -1,0 +1,65 @@
+{
+  "date": "2026-09-19",
+  "timezone": "Asia/Tokyo",
+  "testedSourceCommit": "ddb6836b56dd502a92540ec5937ad645d972867e",
+  "installedVersion": "0.9.8",
+  "automated": {
+    "backendPassed": 1078,
+    "backendFailed": 0,
+    "backendSkipped": 7,
+    "frontendPassed": 178,
+    "frontendFiles": 26,
+    "totalPassed": 1256
+  },
+  "liveApiAssertions": {
+    "guardrailsPassed": 8,
+    "staffLifecyclePassed": 20,
+    "lifecycleControlsPassed": 10,
+    "totalPassed": 38
+  },
+  "build": "passed with existing chunk-size warning",
+  "openApiCheck": "passed",
+  "guide": {
+    "pages": 134,
+    "workflowChapters": 50,
+    "originalScreenshots": 64,
+    "annotatedScreenshotPages": 65,
+    "allPagesRenderedAndVisuallyReviewed": true,
+    "sha256": "99701baa6a0b2d238934ec54bd41b71694209030a32ee002356eadb9e9c9e29c",
+    "bytes": 5677792
+  },
+  "evidence": {
+    "entries": 183,
+    "sha256": "41b3f58a4e66ef659b844be55a59dbad3e440ae4dbafc99de3d77a6b80de97ce",
+    "bytes": 3729556,
+    "crcCheck": "passed",
+    "secretPatternScan": "passed; authentication helpers and credential files excluded"
+  },
+  "defects": [
+    {
+      "id": "F01",
+      "summary": "Student form does not persist school class",
+      "fixedInThisRun": false
+    },
+    {
+      "id": "F02",
+      "summary": "Not-applicable kanji rule renders an applied-rule badge",
+      "fixedInThisRun": false
+    }
+  ],
+  "unverified": [
+    "Live Gemini template extraction, name reading, initial grading and adjudication",
+    "Populated-data update retention and rollback",
+    "School Manager live attachment upload and guardian receipt",
+    "Full backup/restore and other operational boundaries listed in PDF"
+  ],
+  "classReportPeerLabel": "同級生01, 同級生02, ... (not student numbers)",
+  "releaseAcceptance": "incomplete",
+  "finalFixtureState": {
+    "practiceSession": "closed",
+    "practiceResult": "finalized; Alice RET-001; 20/30; revision 11",
+    "qaStaff": "disabled",
+    "unusedTemplate": "archived",
+    "maintenance": false
+  }
+}
