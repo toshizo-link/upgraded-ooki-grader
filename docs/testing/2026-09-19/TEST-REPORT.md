@@ -2,6 +2,8 @@
 
 Date: 19 September 2026, Asia/Tokyo.
 
+[Download the comprehensive 15-page PDF report with screenshots](../../../output/pdf/OokiGrader-Comprehensive-Test-Report-2026-09-19.pdf?raw=true).
+
 **Code fix and automated validation: PASS. Installed upgrade, seeded retention comparison, and live end-to-end validation: INCOMPLETE.**
 
 ## Changes
