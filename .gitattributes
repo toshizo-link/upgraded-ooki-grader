@@ -17,3 +17,4 @@ output/windows/host-update-media/** -text -eol
 installer/HostInstallMedia/** -text -eol
 installer/HostUpdateMedia/** -text -eol
 *.zip filter=lfs diff=lfs merge=lfs -text
+output/pdf/*.pdf binary
