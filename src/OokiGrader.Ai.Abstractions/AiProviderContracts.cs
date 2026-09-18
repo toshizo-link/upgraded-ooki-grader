@@ -87,15 +87,19 @@ public static partial class AiProviderCatalog
         string provider,
         string modelId) =>
         !(provider == AiProviders.GeminiDirect
-            && IsGemini37FlashFamily(modelId));
+            && (IsGemini37FlashFamily(modelId)
+                || IsModelFamily(modelId, "gemini-3.8-flash")));
 
     public static bool IsGemini37FlashFamily(string modelId) =>
+        IsModelFamily(modelId, "gemini-3.7-flash");
+
+    private static bool IsModelFamily(string modelId, string family) =>
         string.Equals(
             modelId,
-            GeminiDefaultModelId,
+            family,
             StringComparison.OrdinalIgnoreCase)
         || modelId.StartsWith(
-            GeminiDefaultModelId + "-",
+            family + "-",
             StringComparison.OrdinalIgnoreCase);
 
     public static bool IsConnectionShapeValid(

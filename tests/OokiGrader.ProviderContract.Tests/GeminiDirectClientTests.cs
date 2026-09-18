@@ -8,6 +8,52 @@ namespace OokiGrader.ProviderContract.Tests;
 
 public sealed class GeminiDirectClientTests
 {
+    [Theory]
+    [InlineData("gemini-3.7-flash", "LOW")]
+    [InlineData("gemini-3.7-flash-preview", "LOW")]
+    [InlineData("gemini-3.8-flash", "LOW")]
+    [InlineData("gemini-3.8-flash-preview", "LOW")]
+    [InlineData("gemini-3.8-flash-001", "LOW")]
+    [InlineData("GEMINI-3.8-FLASH", "LOW")]
+    [InlineData("gemini-3.5-flash-lite", "MINIMAL")]
+    public async Task ProbeAsyncUsesThinkingSupportedBySelectedModel(
+        string modelId,
+        string expectedThinking)
+    {
+        string? body = null;
+        var client = new GeminiDirectClient(new HttpClient(
+            new DelegateHandler(async (request, cancellationToken) =>
+            {
+                body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                Assert.EndsWith(
+                    $"/models/{modelId}:generateContent",
+                    request.RequestUri!.AbsolutePath,
+                    StringComparison.Ordinal);
+                return JsonResponse(
+                    """
+                    {
+                      "candidates": [{
+                        "content": {"parts": [{"text": "{\"ok\":true}"}]},
+                        "finishReason": "STOP"
+                      }],
+                      "usageMetadata": {"totalTokenCount": 15}
+                    }
+                    """);
+            })));
+
+        var result = await client.ProbeAsync(
+            Connection() with { ModelId = modelId },
+            Encoding.UTF8.GetBytes("test-key"));
+
+        Assert.Equal("passed", result.State);
+        Assert.NotNull(body);
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal(expectedThinking, json.RootElement
+            .GetProperty("generationConfig")
+            .GetProperty("thinkingConfig")
+            .GetProperty("thinkingLevel").GetString());
+    }
+
     [Fact]
     public void ApprovedTemplateExtractionBundleIsVersionedAndSourceAware()
     {

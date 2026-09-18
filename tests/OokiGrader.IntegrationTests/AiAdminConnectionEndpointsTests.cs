@@ -80,8 +80,12 @@ public sealed class AiAdminConnectionEndpointsTests
                 && item.GetProperty("modelId").GetString() == OpenRouterModel);
     }
 
-    [Fact]
-    public async Task AutomaticGeminiSetupProbesBeforeSavingAndEnablesAllProfiles()
+    [Theory]
+    [InlineData(GeminiModel)]
+    [InlineData("gemini-3.8-flash")]
+    [InlineData("gemini-3.8-flash-preview")]
+    public async Task AutomaticGeminiSetupProbesBeforeSavingAndEnablesAllProfiles(
+        string modelId)
     {
         await using var application = await AiAdminTestApplication.CreateAsync();
         const string apiKey = "AIza-auto-enable-gemini-key-1234567890";
@@ -91,7 +95,7 @@ public sealed class AiAdminConnectionEndpointsTests
             ConnectionBody(
                 apiKey,
                 AiProviders.GeminiDirect,
-                GeminiModel,
+                modelId,
                 testAndEnable: true));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -136,8 +140,11 @@ public sealed class AiAdminConnectionEndpointsTests
         });
     }
 
-    [Fact]
-    public async Task GeminiModelCanChangeWithoutReplacingStoredApiKey()
+    [Theory]
+    [InlineData("gemini-3.7-flash-preview")]
+    [InlineData("gemini-3.8-flash")]
+    public async Task GeminiModelCanChangeWithoutReplacingStoredApiKey(
+        string updatedModel)
     {
         await using var application = await AiAdminTestApplication.CreateAsync();
         const string apiKey = "AIza-model-change-gemini-key-1234567890";
@@ -163,7 +170,6 @@ public sealed class AiAdminConnectionEndpointsTests
             originalFingerprint = connection.KeyFingerprint;
         });
 
-        const string updatedModel = "gemini-3.7-flash-preview";
         var updated = await application.PutAsync(
             $"/api/v1/admin/ai-connections/{connectionId}",
             new
