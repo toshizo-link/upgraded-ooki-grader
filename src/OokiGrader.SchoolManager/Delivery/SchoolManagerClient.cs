@@ -103,25 +103,18 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
                     "School Manager rejected the PDF attachment.");
             }
 
-            var textareas = page.Locator("ion-textarea textarea");
+            var textareas = page.Locator("ion-textarea[placeholder='メッセージを入力'] textarea");
             var textareaCount = await textareas.CountAsync().ConfigureAwait(false);
-            if (textareaCount == 0)
+            if (textareaCount != 1)
             {
                 throw new SchoolManagerClientException(
                     "message_body_missing",
                     "The School Manager message body field was not found.");
             }
 
-            await textareas.Last.FillAsync(request.Body).ConfigureAwait(false);
-            var send = page.GetByRole(AriaRole.Button, new() { Name = "送信" });
-            if (await send.CountAsync().ConfigureAwait(false) != 1
-                || !await send.IsEnabledAsync().ConfigureAwait(false))
-            {
-                throw new SchoolManagerClientException(
-                    "send_control_invalid",
-                    "The School Manager send control was unavailable or ambiguous.");
-            }
-
+            await textareas.FillAsync(request.Body).ConfigureAwait(false);
+            // The normal send control is icon-only; the labelled alternative also resolves the thread.
+            var send = await GetSendControlAsync(page).ConfigureAwait(false);
             finalRequestStarted = true;
             var sendResponse = await page.RunAndWaitForResponseAsync(
                     () => send.ClickAsync(new LocatorClickOptions { Timeout = 15_000 }),
@@ -188,6 +181,20 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
         }
     }
 
+    internal static async Task<ILocator> GetSendControlAsync(IPage page)
+    {
+        var send = page.Locator("ion-button.send-message-button");
+        if (await send.CountAsync().ConfigureAwait(false) != 1
+            || !await send.IsEnabledAsync().ConfigureAwait(false))
+        {
+            throw new SchoolManagerClientException(
+                "send_control_invalid",
+                "The School Manager send control was unavailable or ambiguous.");
+        }
+
+        return send;
+    }
+
     private static async Task LoginAsync(
         IPage page,
         SchoolManagerDeliveryRequest request,
@@ -239,19 +246,35 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
         }
     }
 
-    private static async Task SelectExactStudentAsync(
+    internal static async Task SelectExactStudentAsync(
         IPage page,
         SchoolManagerDeliveryRequest request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await page.GotoAsync(
-                new Uri(request.BaseUri, "message-thread-target-users").AbsoluteUri,
+                new Uri(request.BaseUri, "message-threads").AbsoluteUri,
                 new PageGotoOptions
                 {
                     WaitUntil = WaitUntilState.DOMContentLoaded,
                     Timeout = 30_000,
                 })
+            .ConfigureAwait(false);
+        // The add action initializes the compose state. Direct navigation to the
+        // recipient route renders the list but leaves selecting a student inert.
+        var add = page.Locator("ion-fab-button:visible");
+        await add.WaitForAsync(new LocatorWaitForOptions { Timeout = 15_000 })
+            .ConfigureAwait(false);
+        if (await add.CountAsync().ConfigureAwait(false) != 1)
+        {
+            throw new SchoolManagerClientException(
+                "message_add_control_invalid",
+                "The School Manager new-message control was unavailable or ambiguous.");
+        }
+
+        await add.ClickAsync().ConfigureAwait(false);
+        await page.WaitForURLAsync("**/message-thread-target-users",
+                new PageWaitForURLOptions { Timeout = 15_000 })
             .ConfigureAwait(false);
         var search = page.GetByRole(AriaRole.Searchbox);
         if (await search.CountAsync().ConfigureAwait(false) != 1)
@@ -298,7 +321,7 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
             .ConfigureAwait(false);
     }
 
-    private static async Task VerifyGuardianOnlyAndSetTitleAsync(
+    internal static async Task VerifyGuardianOnlyAndSetTitleAsync(
         IPage page,
         string title)
     {
@@ -306,10 +329,12 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
             "ion-checkbox[formcontrolname='parentsAll']");
         var parents = page.Locator(
             "[formarrayname='parents'] ion-checkbox[formcontrolname='parent']");
+        // With no student-app account, Ionic renders disabled placeholders without
+        // formcontrolname. Still require both controls and verify they are unchecked.
         var studentsAll = page.Locator(
-            "ion-checkbox[formcontrolname='studentsAll']");
+            ".captioned-checkbox:has(> .checkbox-caption:text-is('生徒')) > ion-checkbox");
         var students = page.Locator(
-            "[formarrayname='students'] ion-checkbox[formcontrolname='student']");
+            "[formarrayname='students'] ion-checkbox");
         var parentCount = await parents.CountAsync().ConfigureAwait(false);
         if (await parentsAll.CountAsync().ConfigureAwait(false) != 1
             || parentCount == 0
@@ -330,6 +355,10 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
         var studentChecked = await students
             .EvaluateAsync<bool>("element => Boolean(element.checked)")
             .ConfigureAwait(false);
+        var allStudentsVerifiable = await IsStudentControlVerifiableAsync(studentsAll)
+            .ConfigureAwait(false);
+        var studentVerifiable = await IsStudentControlVerifiableAsync(students)
+            .ConfigureAwait(false);
         var everyGuardianChecked = true;
         for (var index = 0; index < parentCount; index++)
         {
@@ -341,7 +370,9 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
         if (!allParentsChecked
             || !everyGuardianChecked
             || allStudentsChecked
-            || studentChecked)
+            || studentChecked
+            || !allStudentsVerifiable
+            || !studentVerifiable)
         {
             throw new SchoolManagerClientException(
                 "guardian_only_selection_invalid",
@@ -366,6 +397,18 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
                 "The guardian-only recipient selection could not be validated.");
         }
     }
+
+    private static Task<bool> IsStudentControlVerifiableAsync(ILocator control) =>
+        control.EvaluateAsync<bool>("""
+            element => {
+                const name = element.getAttribute('formcontrolname');
+                if (name === 'studentsAll' || name === 'student') return true;
+                return name === null
+                    && element.getAttribute('aria-checked') === 'false'
+                    && element.classList.contains('checkbox-disabled')
+                    && element.querySelector('input.aux-input[disabled]') !== null;
+            }
+            """);
 
     private static void ValidateRequest(SchoolManagerDeliveryRequest request)
     {

@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="OokiGrader.SchoolManager.Tests" />
     <ProjectReference Include="../OokiGrader.Reports.Pdf/OokiGrader.Reports.Pdf.csproj" />
   </ItemGroup>
 
