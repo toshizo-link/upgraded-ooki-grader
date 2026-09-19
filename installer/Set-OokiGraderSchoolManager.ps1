@@ -33,6 +33,7 @@ if ($baseUri.Scheme -ne 'https' -or -not $baseUri.IsAbsoluteUri) {
     throw 'OokiGraderUrl must be an absolute HTTPS URL.'
 }
 $target = $baseUri.AbsoluteUri.TrimEnd('/')
+$origin = $baseUri.GetLeftPart([UriPartial]::Authority)
 $mode = if (-not $Enable) {
     'disabled'
 } elseif ($LiveSending) {
@@ -80,6 +81,7 @@ try {
     } | ConvertTo-Json -Compress
     Invoke-WebRequest -Uri "$target/api/v1/auth/login" `
         -Method Post -ContentType 'application/json; charset=utf-8' `
+        -Headers @{ Origin = $origin } `
         -Body ([Text.Encoding]::UTF8.GetBytes($loginJson)) `
         -WebSession $session -UseBasicParsing | Out-Null
 
@@ -103,7 +105,11 @@ try {
         -Uri "$target/api/v1/admin/school-manager/" `
         -Method Put `
         -ContentType 'application/json; charset=utf-8' `
-        -Headers @{ 'X-CSRF-Token' = $csrfToken } `
+        -Headers @{
+            Origin = $origin
+            'X-CSRF-Token' = $csrfToken
+            'Idempotency-Key' = [Guid]::NewGuid().ToString()
+        } `
         -Body ([Text.Encoding]::UTF8.GetBytes($settingsJson)) `
         -WebSession $session
     [pscustomobject]@{
@@ -125,7 +131,7 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($csrfToken)) {
             Invoke-WebRequest -Uri "$target/api/v1/auth/logout" `
                 -Method Post -WebSession $session -UseBasicParsing `
-                -Headers @{ 'X-CSRF-Token' = $csrfToken } `
+                -Headers @{ Origin = $origin; 'X-CSRF-Token' = $csrfToken } `
                 -ErrorAction SilentlyContinue | Out-Null
         }
     } catch {
