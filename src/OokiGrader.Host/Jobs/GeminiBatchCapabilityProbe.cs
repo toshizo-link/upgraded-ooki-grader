@@ -24,7 +24,9 @@ public sealed class GeminiBatchCapabilityProbe(
     TimeProvider timeProvider)
 {
     private static readonly byte[] ProbePng = Convert.FromBase64String(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYElEQVR4nO3PQQ0AIBDA" +
+        "MMC/50MEj4ZkVbDtmVk/OzrgVQNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNa" +
+        "A1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgPaBXKqA31N0fbGAAAAAElFTkSuQmCC");
 
     public async Task<GeminiBatchCapabilityProbeResult> ProbeAsync(
         AiConnectionSettings connection,
@@ -73,7 +75,11 @@ public sealed class GeminiBatchCapabilityProbe(
                     ProbePng,
                     mediaHash),
             ],
-            MaxOutputTokens: 64,
+            MaxOutputTokens: AiProviderCatalog.SupportsMinimalThinking(
+                    connection.Provider,
+                    connection.ModelId)
+                ? 64
+                : 2_048,
             MediaResolution: "MEDIA_RESOLUTION_LOW",
             ThinkingLevel: AiProviderCatalog.SupportsMinimalThinking(
                     connection.Provider,

@@ -555,6 +555,14 @@ static async Task InitializePersistenceAsync(WebApplication application, string 
     var timeProvider = scope.ServiceProvider.GetRequiredService<TimeProvider>();
     var providerFeaturePolicy = scope.ServiceProvider
         .GetRequiredService<IAiProviderFeaturePolicy>();
+    _ = await Gemini38UpgradeMigration.ApplyAsync(
+        scope.ServiceProvider.GetRequiredService<OokiGraderDbContext>(),
+        promptCatalog,
+        timeProvider,
+        providerFeaturePolicy,
+        scope.ServiceProvider.GetRequiredService<IAiSecretStore>(),
+        scope.ServiceProvider.GetRequiredService<IAiProviderClientResolver>(),
+        application.Lifetime.ApplicationStopping);
     _ = await AiAdminEndpoints.EnsureCurrentProfilesAsync(
         scope.ServiceProvider.GetRequiredService<OokiGraderDbContext>(),
         promptCatalog,

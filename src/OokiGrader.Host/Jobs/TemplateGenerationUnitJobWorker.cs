@@ -274,9 +274,10 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
         }
         catch (AiProviderException exception)
         {
+            var errorCode = ProviderFailureCode(exception);
             var failure = await PersistFailureAsync(
                     lease.Id,
-                    "AI_PROVIDER_UNAVAILABLE",
+                    errorCode,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (failure.UnitOutcome != "cancelled")
@@ -284,13 +285,13 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
                 LogUnitFailure(
                     _logger,
                     lease.Id,
-                    "AI_PROVIDER_UNAVAILABLE",
+                    errorCode,
                     exception.GetType().Name);
             }
 
             RecordFailureMetrics(
                 claim,
-                "AI_PROVIDER_UNAVAILABLE",
+                errorCode,
                 orientationRetryStarted,
                 failure);
         }
@@ -1105,7 +1106,7 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
             var ambiguous = AiProviderRuntime.IsAmbiguousDispatch(exception);
             request.State = "failed";
             request.PossibleDuplicate = ambiguous;
-            request.ErrorCode = "AI_PROVIDER_UNAVAILABLE";
+            request.ErrorCode = ProviderFailureCode(exception);
             request.SafeErrorDetail = null;
             request.CompletedAt = now;
             request.UpdatedAt = now;
@@ -2004,6 +2005,31 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
             JsonOptions);
     }
 
+    // Provider details may contain echoed document content or credentials. Only
+    // known request fields and normalized failure kinds become public errors.
+    private static string ProviderFailureCode(AiProviderException exception) =>
+        exception.SafeErrorCode switch
+        {
+            "gemini_model_not_found" => "AI_MODEL_UNAVAILABLE",
+            "gemini_response_schema_invalid" => "AI_RESPONSE_SCHEMA_REJECTED",
+            "gemini_thinking_config_invalid" => "AI_THINKING_CONFIG_INVALID",
+            "gemini_media_invalid" or "gemini_inline_request_too_large" =>
+                "AI_MEDIA_INVALID",
+            "gemini_output_limit_exceeded" => "AI_OUTPUT_LIMIT_EXCEEDED",
+            _ => exception.Kind switch
+            {
+                AiFailureKind.Authentication => "AI_AUTHENTICATION_FAILED",
+                AiFailureKind.InvalidConfiguration => "AI_CONFIGURATION_INVALID",
+                AiFailureKind.RateLimited => "AI_RATE_LIMITED",
+                AiFailureKind.Timeout => "AI_TIMEOUT",
+                AiFailureKind.BudgetBlocked => "AI_BUDGET_BLOCKED",
+                AiFailureKind.SafetyBlocked => "AI_OUTPUT_BLOCKED",
+                AiFailureKind.RequestRejected => "AI_REQUEST_REJECTED",
+                AiFailureKind.InvalidResponse => "AI_STRUCTURED_OUTPUT_INVALID",
+                _ => "AI_PROVIDER_UNAVAILABLE",
+            },
+        };
+
     private static string FailureMessage(string code) => code switch
     {
         "ORIENTATION_RETRY_EXHAUSTED" =>
@@ -2014,6 +2040,32 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
         "SOURCE_CHANGED" => "元PDFまたは生成設定が変更されました。",
         "DERIVED_SOURCE_FAILED" => "PDFの分割または向き補正に失敗しました。",
         "AI_PROVIDER_UNAVAILABLE" => "AIサービスを利用できませんでした。",
+        "AI_AUTHENTICATION_FAILED" =>
+            "AI接続の認証に失敗しました。管理のAI設定で接続を再確認してください。",
+        "AI_MODEL_UNAVAILABLE" =>
+            "設定されたAIモデルを利用できません。管理のAI設定でモデル名と接続を確認してください。",
+        "AI_CONFIGURATION_INVALID" =>
+            "AI接続設定を確認できませんでした。管理のAI設定で接続を再確認してください。",
+        "AI_RATE_LIMITED" =>
+            "AIの利用上限に達しました。時間を置いて失敗した項目だけ再試行してください。",
+        "AI_TIMEOUT" =>
+            "AIの応答が時間内に完了しませんでした。時間を置いて失敗した項目だけ再試行してください。",
+        "AI_BUDGET_BLOCKED" =>
+            "AIを利用するための予算または支払い設定を確認してください。",
+        "AI_RESPONSE_SCHEMA_REJECTED" =>
+            "AIがひな形の出力形式を受け付けませんでした。アプリの更新を確認してください。",
+        "AI_THINKING_CONFIG_INVALID" =>
+            "AIモデルと推論設定が一致しません。アプリの更新を確認してください。",
+        "AI_MEDIA_INVALID" =>
+            "AIがPDFを受け付けませんでした。PDFが開けることとファイルサイズを確認してください。",
+        "AI_REQUEST_REJECTED" =>
+            "AIが生成リクエストを受け付けませんでした。管理のAI設定で接続を再確認してください。",
+        "AI_OUTPUT_LIMIT_EXCEEDED" =>
+            "AIの生成結果が出力上限に達しました。PDFのページ範囲を減らして生成してください。",
+        "AI_OUTPUT_BLOCKED" =>
+            "AIの安全機能により生成が停止しました。PDFの内容を確認してください。",
+        "AI_STRUCTURED_OUTPUT_INVALID" =>
+            "AIの生成結果の形式を確認できませんでした。失敗した項目だけ再試行してください。",
         "COST_RESERVATION_FAILED" => "AI利用予算を確保できませんでした。",
         _ => "テンプレートの抽出に失敗しました。",
     };

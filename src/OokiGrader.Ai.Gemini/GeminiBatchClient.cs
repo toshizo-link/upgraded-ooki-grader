@@ -780,7 +780,12 @@ public sealed partial class GeminiBatchClient(HttpClient httpClient)
         var finishReason = GetString(candidate, "finishReason") ?? "UNKNOWN";
         if (!string.Equals(finishReason, "STOP", StringComparison.Ordinal))
         {
-            throw finishReason is "SAFETY" or "BLOCKLIST" or "PROHIBITED_CONTENT"
+            throw finishReason == "MAX_TOKENS"
+                ? Failure(
+                    AiFailureKind.InvalidResponse,
+                    "gemini_output_limit_exceeded",
+                    isTransient: false)
+                : finishReason is "SAFETY" or "BLOCKLIST" or "PROHIBITED_CONTENT"
                 ? Failure(
                     AiFailureKind.SafetyBlocked,
                     "gemini_output_blocked",

@@ -297,6 +297,17 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 return;
             }
 
+            if (candidates.Any(item => !IsCurrentDispatchProfile(
+                    item.AiRequest.AiTaskProfile)))
+            {
+                const string errorCode = "ai_batch_profile_unavailable";
+                FailUndispatchedRequests(db, candidates, now, errorCode);
+                FailJob(job, now, errorCode);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return;
+            }
+
             ValidateCandidates(candidates);
             var firstRequest = candidates[0].AiRequest;
             var profile = firstRequest.AiTaskProfile;
@@ -394,10 +405,37 @@ public sealed partial class AiBatchJobWorker : BackgroundService
             return;
         }
 
+        if (!claim.MayDispatch && claim.ProviderInputFileName is null)
+        {
+            return;
+        }
+
         using var secret = await _secretStore.ReadAsync(
                 new AiSecretReference(claim.SecretReference),
                 cancellationToken)
             .ConfigureAwait(false);
+        if (!claim.MayDispatch)
+        {
+            using var raw = JsonDocument.Parse("{}");
+            await CleanupProviderFilesAsync(
+                new RemoteClaim(
+                    claim.BatchId,
+                    string.Empty,
+                    claim.ProviderInputFileName,
+                    claim.SecretReference,
+                    claim.Connection),
+                new AiBatchStatus(
+                    string.Empty,
+                    claim.DisplayName,
+                    AiBatchRemoteState.Failed,
+                    null, null, _timeProvider.GetUtcNow(), null, null,
+                    "ai_batch_profile_unavailable",
+                    raw.RootElement.Clone()),
+                secret.Utf8Bytes,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var inputFileName = claim.ProviderInputFileName;
         if (inputFileName is null)
         {
@@ -725,6 +763,7 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 .ConfigureAwait(false);
             var batch = await db.AiBatches
                 .Include(item => item.AiConnection)
+                .Include(item => item.AiTaskProfile)
                 .Include(item => item.Requests)
                     .ThenInclude(item => item.AiRequest)
                 .SingleOrDefaultAsync(item => item.Id == batchId, token)
@@ -755,6 +794,38 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                     null);
                 await db.SaveChangesAsync(token).ConfigureAwait(false);
                 return null;
+            }
+
+            // A request with a previous model snapshot may be read to finish
+            // an already submitted remote batch. Before the first create call,
+            // however, an update must never start a new call to the old model.
+            var mayDispatch = batch.CreateAttemptCount > 0
+                || batch.ProviderBatchName is not null
+                || IsCurrentDispatchProfile(batch.AiTaskProfile);
+            if (!mayDispatch)
+            {
+                const string errorCode = "ai_batch_profile_unavailable";
+                batch.State = "failed";
+                batch.ErrorCode = errorCode;
+                batch.CompletedAt = now;
+                batch.NextActionAt = null;
+                batch.CleanupState = batch.ProviderInputFileName is null
+                    ? "completed"
+                    : "pending";
+                FailUndispatchedRequests(db, batch.Requests, now, errorCode);
+                FailJob(job, now, errorCode);
+                await db.SaveChangesAsync(token).ConfigureAwait(false);
+                return new SubmitClaim(
+                    batch.Id,
+                    batch.DisplayName,
+                    batch.ManifestHash,
+                    batch.RequestCount,
+                    batch.ProviderInputFileName,
+                    [],
+                    string.Empty,
+                    ToConnection(batch),
+                    batch.AiConnection.SecretReference,
+                    MayDispatch: false);
             }
 
             ValidateBatchConfiguration(batch);
@@ -793,7 +864,8 @@ public sealed partial class AiBatchJobWorker : BackgroundService
                 jsonLines,
                 hash,
                 ToConnection(batch),
-                batch.AiConnection.SecretReference);
+                batch.AiConnection.SecretReference,
+                mayDispatch);
         }, cancellationToken);
     }
 
@@ -2342,6 +2414,32 @@ public sealed partial class AiBatchJobWorker : BackgroundService
         }
     }
 
+    private static bool IsCurrentDispatchProfile(AiTaskProfileEntity profile) =>
+        profile.Active
+        && profile.ModelId == profile.AiConnection.ModelId;
+
+    private static void FailUndispatchedRequests(
+        OokiGraderDbContext db,
+        IEnumerable<AiBatchRequestEntity> mappings,
+        DateTimeOffset now,
+        string errorCode)
+    {
+        foreach (var mapping in mappings)
+        {
+            mapping.State = "failed";
+            mapping.ErrorCode = errorCode;
+            mapping.ProviderRequestJson = null;
+            mapping.ProviderRequestBytes = 0;
+            mapping.CompletedAt = now;
+            mapping.UpdatedAt = now;
+            mapping.AiRequest.State = "failed";
+            mapping.AiRequest.ErrorCode = errorCode;
+            mapping.AiRequest.CompletedAt = now;
+            mapping.AiRequest.UpdatedAt = now;
+            ReleaseReservation(db, mapping.AiRequestId, now);
+        }
+    }
+
     private static void ValidateBatchConfiguration(AiBatchEntity batch)
     {
         if (batch.Provider != AiProviders.GeminiDirect
@@ -2760,7 +2858,8 @@ public sealed partial class AiBatchJobWorker : BackgroundService
         byte[] JsonLines,
         string JsonLinesHash,
         AiConnectionSettings Connection,
-        string SecretReference);
+        string SecretReference,
+        bool MayDispatch);
 
     private sealed record RemoteClaim(
         string BatchId,

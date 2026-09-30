@@ -289,6 +289,32 @@ public sealed class GeminiBatchClientTests
     }
 
     [Fact]
+    public async Task ReadInlineResultsRejectsTruncatedItemWithoutTreatingItAsProviderOutage()
+    {
+        var client = new GeminiBatchClient(new HttpClient(
+            new DelegateHandler((_, _) => Task.FromResult(JsonResponse(
+                $$$"""
+                {
+                  "name": "batches/batch-1",
+                  "metadata": {"displayName": "{{{DisplayName}}}", "state": "JOB_STATE_SUCCEEDED"},
+                  "done": true,
+                  "response": {"inlinedResponses": {"inlinedResponses": [{
+                    "metadata": {"key": "truncated-key"},
+                    "response": {"candidates": [{"finishReason": "MAX_TOKENS",
+                      "content": {"parts": [{"text": "{\"incomplete\":"}]}}]}
+                  }]}}
+                }
+                """)))));
+        var status = await client.GetAsync(Connection(), Encoding.UTF8.GetBytes("test-key"),
+            "batches/batch-1");
+        var result = Assert.Single(await client.ReadResultsAsync(Connection(),
+            Encoding.UTF8.GetBytes("test-key"), status));
+        Assert.Equal("truncated-key", result.RequestKey);
+        Assert.Null(result.Response);
+        Assert.Equal("gemini_output_limit_exceeded", result.SafeErrorCode);
+    }
+
+    [Fact]
     public async Task CancelUsesOfficialBatchCancelMethod()
     {
         HttpMethod? observedMethod = null;

@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -8,6 +10,60 @@ namespace OokiGrader.ProviderContract.Tests;
 
 public sealed class GeminiDirectClientTests
 {
+    [Theory]
+    [InlineData("gemini-3.8-flash", "MINIMAL", "LOW")]
+    [InlineData("gemini-3.8-flash-001", "MINIMAL", "LOW")]
+    [InlineData("gemini-3.8-flash", "MEDIUM", "MEDIUM")]
+    [InlineData("gemini-3.8-flash", "HIGH", "HIGH")]
+    [InlineData("gemini-3.5-flash-lite", "MINIMAL", "MINIMAL")]
+    public async Task GenerateAsyncNormalizesUnsupportedThinkingWithoutChangingValidOverrides(
+        string modelId,
+        string requestedThinking,
+        string expectedThinking)
+    {
+        string? body = null;
+        var client = new GeminiDirectClient(new HttpClient(
+            new DelegateHandler(async (request, cancellationToken) =>
+            {
+                body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                return JsonResponse(
+                    """{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"ok\":true}"}]}}]}""");
+            })));
+        using var schema = JsonDocument.Parse("""{"type":"object"}""");
+        var media = new byte[] { 1 };
+        await client.GenerateAsync(
+            Connection() with { ModelId = modelId },
+            Encoding.UTF8.GetBytes("test-key"),
+            new AiProviderRequest(
+                "thinking-regression", AiTaskTypes.TemplateExtraction, "v1", "v1",
+                "system", "user", schema.RootElement.Clone(),
+                [new AiMediaPart("application/pdf", media,
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(media)).ToLowerInvariant())],
+                ThinkingLevel: requestedThinking));
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(expectedThinking, json.RootElement.GetProperty("generationConfig")
+            .GetProperty("thinkingConfig").GetProperty("thinkingLevel").GetString());
+    }
+
+    [Fact]
+    public async Task GenerateAsyncRejectsTokenTruncatedOutputWithSpecificSafeCode()
+    {
+        var client = new GeminiDirectClient(new HttpClient(
+            new DelegateHandler((_, _) => Task.FromResult(JsonResponse(
+                """{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"{\"incomplete\":"}]}}]}""")))));
+        using var schema = JsonDocument.Parse("""{"type":"object"}""");
+        var media = new byte[] { 1 };
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => client.GenerateAsync(
+            Connection(), Encoding.UTF8.GetBytes("test-key"),
+            new AiProviderRequest("truncated", AiTaskTypes.TemplateExtraction, "v1", "v1",
+                "system", "user", schema.RootElement.Clone(),
+                [new AiMediaPart("application/pdf", media,
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(media)).ToLowerInvariant())])));
+        Assert.Equal(AiFailureKind.InvalidResponse, exception.Kind);
+        Assert.Equal("gemini_output_limit_exceeded", exception.SafeErrorCode);
+        Assert.False(exception.IsTransient);
+    }
+
     [Theory]
     [InlineData("gemini-3.7-flash", "LOW")]
     [InlineData("gemini-3.7-flash-preview", "LOW")]
@@ -52,6 +108,51 @@ public sealed class GeminiDirectClientTests
             .GetProperty("generationConfig")
             .GetProperty("thinkingConfig")
             .GetProperty("thinkingLevel").GetString());
+        Assert.Equal(expectedThinking == "LOW" ? 2_048 : 64, json.RootElement
+            .GetProperty("generationConfig").GetProperty("maxOutputTokens").GetInt32());
+        var imagePart = json.RootElement.GetProperty("contents")[0]
+            .GetProperty("parts").EnumerateArray()
+            .Single(part => part.TryGetProperty("inline_data", out _));
+        AssertValidProbePng(Convert.FromBase64String(imagePart
+            .GetProperty("inline_data").GetProperty("data").GetString()!));
+    }
+
+    private static void AssertValidProbePng(byte[] png)
+    {
+        Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, png[..8]);
+        Assert.Equal(64u, BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(16, 4)));
+        Assert.Equal(64u, BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(20, 4)));
+        using var imageData = new MemoryStream();
+        for (var offset = 8; offset < png.Length;)
+        {
+            var length = checked((int)BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(offset, 4)));
+            var chunk = png.AsSpan(offset + 4, length + 4);
+            var crc = uint.MaxValue;
+            foreach (var value in chunk)
+            {
+                crc ^= value;
+                for (var bit = 0; bit < 8; bit++)
+                {
+                    crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xedb88320u : crc >> 1;
+                }
+            }
+
+            Assert.Equal(~crc, BinaryPrimitives.ReadUInt32BigEndian(
+                png.AsSpan(offset + length + 8, 4)));
+            if (chunk[..4].SequenceEqual("IDAT"u8))
+            {
+                imageData.Write(chunk[4..]);
+            }
+
+            offset += length + 12;
+            Assert.True(offset <= png.Length);
+        }
+
+        imageData.Position = 0;
+        using var zlib = new ZLibStream(imageData, CompressionMode.Decompress);
+        using var pixels = new MemoryStream();
+        zlib.CopyTo(pixels);
+        Assert.Equal(64 * (1 + 64 * 3), pixels.Length);
     }
 
     [Fact]

@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using OokiGrader.Ai.Abstractions;
@@ -8,6 +10,28 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class GeminiBatchCapabilityProbeTests
 {
+    [Theory]
+    [InlineData("gemini-3.8-flash", "LOW", 2_048)]
+    [InlineData("gemini-3.5-flash-lite", "MINIMAL", 64)]
+    public async Task ProbeUsesModelSupportedThinkingAndSufficientOutputBudget(
+        string modelId, string expectedThinking, int expectedOutputTokens)
+    {
+        var provider = new ProbeBatchProvider();
+        provider.Statuses.Enqueue(provider.Status(AiBatchRemoteState.Pending));
+        provider.Statuses.Enqueue(provider.Status(AiBatchRemoteState.Cancelled));
+        var probe = new GeminiBatchCapabilityProbe(provider, TimeProvider.System);
+        await probe.ProbeAsync(Connection() with { ModelId = modelId },
+            Encoding.UTF8.GetBytes("test-key"));
+        Assert.NotNull(provider.Request);
+        Assert.Equal(expectedThinking, provider.Request.ThinkingLevel);
+        Assert.Equal(expectedOutputTokens, provider.Request.MaxOutputTokens);
+        var media = Assert.Single(provider.Request.Media);
+        Assert.Equal("image/png", media.MimeType);
+        Assert.Equal(64u, BinaryPrimitives.ReadUInt32BigEndian(media.Bytes.Span.Slice(16, 4)));
+        Assert.Equal(64u, BinaryPrimitives.ReadUInt32BigEndian(media.Bytes.Span.Slice(20, 4)));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(media.Bytes.Span)).ToLowerInvariant(), media.Sha256);
+    }
+
     [Fact]
     public async Task PendingProbeCancelsPollsAndDeletesEveryResource()
     {
@@ -149,11 +173,13 @@ public sealed class GeminiBatchCapabilityProbeTests
         public int CancelCalls { get; private set; }
         public int DeleteBatchCalls { get; private set; }
         public int ReadResultsCalls { get; private set; }
+        public AiProviderRequest? Request { get; private set; }
 
         public byte[] BuildJsonLines(
             IReadOnlyList<AiProviderRequest> requests)
         {
-            _requestKey = Assert.Single(requests).RequestKey;
+            Request = Assert.Single(requests);
+            _requestKey = Request.RequestKey;
             return "{}\n"u8.ToArray();
         }
 

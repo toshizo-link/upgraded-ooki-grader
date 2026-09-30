@@ -16,7 +16,7 @@ public static class AiProviders
 /// </summary>
 public static partial class AiProviderCatalog
 {
-    public const string GeminiDefaultModelId = "gemini-3.7-flash";
+    public const string GeminiDefaultModelId = "gemini-3.8-flash";
     public const string GeminiEndpointProfile = "googleGenerativeLanguage";
     public const string OpenRouterEndpointProfile = "openRouterChatCompletions";
     public const string DeepSeekV4FlashModelId =

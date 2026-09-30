@@ -53,10 +53,11 @@ public sealed class AiBatchJobWorkerTests
     }
 
     [Fact]
-    public async Task PreparedBatchCompletesAfterModelAndActiveProfileSwitch()
+    public async Task SubmittedBatchCompletesAfterModelAndActiveProfileSwitch()
     {
         await using var fixture = await BatchFixture.CreateAsync();
         await fixture.StageAsync();
+        Assert.True(await fixture.Worker.ProcessNextAsync());
         Assert.True(await fixture.Worker.ProcessNextAsync());
 
         await using (var db = fixture.CreateDbContext())
@@ -105,7 +106,6 @@ public sealed class AiBatchJobWorkerTests
             await db.SaveChangesAsync();
         }
 
-        Assert.True(await fixture.Worker.ProcessNextAsync());
         fixture.Time.Advance(TimeSpan.FromSeconds(2));
         Assert.True(await fixture.Worker.ProcessNextAsync());
 
@@ -121,6 +121,51 @@ public sealed class AiBatchJobWorkerTests
             modelId => Assert.Equal(
                 GeminiBatchClient.SelectedModel,
                 modelId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnsentRequestsDoNotDispatchWithPreviousModelAfterUpgrade(
+        bool alreadyPrepared)
+    {
+        await using var fixture = await BatchFixture.CreateAsync();
+        await fixture.StageAsync();
+        if (alreadyPrepared)
+        {
+            Assert.True(await fixture.Worker.ProcessNextAsync());
+        }
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var connection = await db.AiConnections.SingleAsync();
+            connection.ModelId = "gemini-3.8-flash-upgrade-target";
+            var profile = await db.AiTaskProfiles.SingleAsync();
+            profile.Active = false;
+            await db.SaveChangesAsync();
+        }
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await using var verified = fixture.CreateDbContext();
+        var request = await verified.AiRequests.SingleAsync();
+        var mapping = await verified.AiBatchRequests.SingleAsync();
+        var job = await verified.BackgroundJobs.SingleAsync(item =>
+            item.Type == (alreadyPrepared ? AiBatchJobWorker.SubmitJobType
+                : AiBatchJobWorker.PrepareJobType));
+        Assert.Equal("failed", request.State);
+        Assert.Equal("ai_batch_profile_unavailable", request.ErrorCode);
+        Assert.Equal("failed", mapping.State);
+        Assert.Equal("failed", job.State);
+        Assert.Equal("ai_batch_profile_unavailable", job.ErrorCode);
+        Assert.Equal("released", (await verified.AiBudgetReservations.SingleAsync()).State);
+        Assert.Equal(0, fixture.Provider.UploadCalls);
+        Assert.Equal(0, fixture.Provider.CreateCalls);
+        if (alreadyPrepared)
+        {
+            var batch = await verified.AiBatches.SingleAsync();
+            Assert.Equal("failed", batch.State);
+            Assert.Equal("completed", batch.CleanupState);
+        }
     }
 
     [Fact]

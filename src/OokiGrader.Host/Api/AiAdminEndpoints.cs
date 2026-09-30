@@ -151,7 +151,8 @@ public static class AiAdminEndpoints
             Provider = provider,
             EndpointProfile = AiProviderCatalog.GetEndpointProfile(provider),
             ModelId = modelId,
-            TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300),
+            TimeoutSeconds = Math.Clamp(request.TimeoutSeconds
+                ?? (provider == AiProviders.GeminiDirect ? 300 : 75), 5, 300),
             ConcurrencyLimit = Math.Clamp(request.ConcurrencyLimit ?? 2, 1, 16),
             State = "pending_probe",
             CreatedByStaffUserId = ApiHelpers.StaffId(principal),
@@ -382,7 +383,8 @@ public static class AiAdminEndpoints
                 CredentialRevision = apiKey is null
                     ? connection.CredentialRevision
                     : checked(connection.CredentialRevision + 1),
-                TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300),
+                TimeoutSeconds = Math.Clamp(request.TimeoutSeconds
+                    ?? (provider == AiProviders.GeminiDirect ? 300 : 75), 5, 300),
                 ConcurrencyLimit = Math.Clamp(
                     request.ConcurrencyLimit ?? 2,
                     1,
@@ -519,7 +521,8 @@ public static class AiAdminEndpoints
         connection.SecretReference = nextReference.Value;
         connection.KeyFingerprint = Fingerprint(apiKey);
         connection.CredentialRevision = nextCredentialRevision;
-        connection.TimeoutSeconds = Math.Clamp(request.TimeoutSeconds ?? 75, 5, 300);
+        connection.TimeoutSeconds = Math.Clamp(request.TimeoutSeconds
+            ?? (provider == AiProviders.GeminiDirect ? 300 : 75), 5, 300);
         connection.ConcurrencyLimit = Math.Clamp(request.ConcurrencyLimit ?? 2, 1, 16);
         connection.EndpointProfile = AiProviderCatalog.GetEndpointProfile(provider);
         connection.ModelId = modelId;
@@ -2245,7 +2248,7 @@ public static class AiAdminEndpoints
         }
     }
 
-    private static bool IsSuccessfulImageProbe(
+    internal static bool IsSuccessfulImageProbe(
         AiConnectionEntity connection,
         AiCapabilityProbeResult result) =>
         result.State == "passed"
@@ -2262,7 +2265,7 @@ public static class AiAdminEndpoints
             connection.Provider,
             connection.ModelId);
 
-    private static AiCapabilityProbeEntity BuildProbe(
+    internal static AiCapabilityProbeEntity BuildProbe(
         AiConnectionEntity connection,
         AiCapabilityProbeResult result,
         DateTimeOffset now) =>
@@ -2289,7 +2292,7 @@ public static class AiAdminEndpoints
             CompletedAt = now,
         };
 
-    private static void ApplyProbeResult(
+    internal static void ApplyProbeResult(
         AiConnectionEntity connection,
         AiCapabilityProbeResult result,
         DateTimeOffset now)
@@ -2435,14 +2438,15 @@ public static class AiAdminEndpoints
         return added;
     }
 
-    private static async Task<int> ReconcileCurrentProfilesAsync(
+    internal static async Task<int> ReconcileCurrentProfilesAsync(
         OokiGraderDbContext db,
         AiConnectionEntity connection,
         string staffId,
         IAiPromptBundleCatalog catalog,
         DateTimeOffset now,
         bool replaceOtherProviders,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool activate = true)
     {
         var activeProfiles = await db.AiTaskProfiles
             .Where(profile =>
@@ -2464,6 +2468,10 @@ public static class AiAdminEndpoints
         {
             var bundle = catalog.GetRequired(taskType);
             var processingStrategy = DefaultProcessingStrategy(taskType);
+            var thinkingLevel = AiProviderRuntime.DefaultThinkingLevel(
+                connection.Provider,
+                connection.ModelId,
+                taskType);
             var defaultName = DefaultProfileName(
                 connection.Provider,
                 taskType);
@@ -2475,6 +2483,9 @@ public static class AiAdminEndpoints
                     && profile.ConnectionRevision
                         == connection.CredentialRevision
                     && profile.ModelId == connection.ModelId
+                    && profile.ThinkingLevel == thinkingLevel
+                    && (taskType != AiTaskTypes.TemplateExtraction
+                        || profile.MaxOutputTokens == 65_536)
                     && profile.PromptVersion == bundle.PromptVersion
                     && profile.SchemaVersion == bundle.SchemaVersion
                     && profile.PromptContentHash == bundle.ContentHash)
@@ -2491,7 +2502,7 @@ public static class AiAdminEndpoints
                     defaultName,
                     processingStrategy,
                     taskType == AiTaskTypes.TemplateExtraction
-                        ? 16_384
+                        ? 65_536
                         : 8_192,
                     connection.ConcurrencyLimit,
                     staffId,
@@ -2508,7 +2519,7 @@ public static class AiAdminEndpoints
         var profilesToDeactivate = activeProfiles
             .Where(profile =>
                 managedTaskTypes.Contains(profile.TaskType)
-                && !targetIds.Contains(profile.Id))
+                && (!activate || !targetIds.Contains(profile.Id)))
             .ToArray();
         foreach (var profile in profilesToDeactivate)
         {
@@ -2526,6 +2537,15 @@ public static class AiAdminEndpoints
 
         foreach (var target in targets)
         {
+            if (!activate)
+            {
+                target.Active = false;
+                target.ApprovalState = "draft";
+                target.AccuracyEvaluationId = null;
+                target.UpdatedAt = now;
+                continue;
+            }
+
             if (!AiTaskProfileRuntimePolicy.IsReadyApprovalState(
                     target.ApprovalState))
             {
@@ -2578,7 +2598,7 @@ public static class AiAdminEndpoints
                 taskType,
                 DefaultProfileName(connection.Provider, taskType),
                 processingStrategy,
-                taskType == AiTaskTypes.TemplateExtraction ? 16_384 : 8_192,
+                taskType == AiTaskTypes.TemplateExtraction ? 65_536 : 8_192,
                 connection.ConcurrencyLimit,
                 staffId,
                 bundle,

@@ -457,7 +457,30 @@ export function deterministicPlanMessage(
   }
 }
 
+const aiFailureMessages: Record<string, string> = {
+  AI_PROVIDER_UNAVAILABLE: "AIサービスを利用できませんでした。時間を置いて失敗した項目だけ再試行してください。",
+  AI_AUTHENTICATION_FAILED: "AI接続の認証に失敗しました。「管理」→「AI設定」で接続を再確認してください。",
+  AI_MODEL_UNAVAILABLE: "設定されたAIモデルを利用できません。「管理」→「AI設定」でモデル名と接続を確認してください。",
+  AI_CONFIGURATION_INVALID: "AI接続設定を確認できませんでした。「管理」→「AI設定」で接続を再確認してください。",
+  AI_RATE_LIMITED: "AIの利用上限に達しました。時間を置いて失敗した項目だけ再試行してください。",
+  AI_TIMEOUT: "AIの応答が時間内に完了しませんでした。時間を置いて失敗した項目だけ再試行してください。",
+  AI_BUDGET_BLOCKED: "AIを利用するための予算または支払い設定を確認してください。",
+  AI_RESPONSE_SCHEMA_REJECTED: "AIがひな形の出力形式を受け付けませんでした。アプリの更新を確認してください。",
+  AI_THINKING_CONFIG_INVALID: "AIモデルと推論設定が一致しません。アプリの更新を確認してください。",
+  AI_MEDIA_INVALID: "AIがPDFを受け付けませんでした。PDFが開けることとファイルサイズを確認してください。",
+  AI_REQUEST_REJECTED: "AIが生成リクエストを受け付けませんでした。「管理」→「AI設定」で接続を再確認してください。",
+  AI_OUTPUT_LIMIT_EXCEEDED: "AIの生成結果が出力上限に達しました。PDFのページ範囲を減らして生成してください。",
+  AI_OUTPUT_BLOCKED: "AIの安全機能により生成が停止しました。PDFの内容を確認してください。",
+  AI_STRUCTURED_OUTPUT_INVALID: "AIの生成結果の形式を確認できませんでした。失敗した項目だけ再試行してください。",
+};
+
+export function aiFailureMessage(code: string) {
+  return aiFailureMessages[code];
+}
+
 export function warningMessage(code: string) {
+  const aiMessage = aiFailureMessage(code);
+  if (aiMessage) return aiMessage;
   const messages: Record<string, string> = {
     STEP_PAGE_COUNT_NOT_DIVISIBLE_BY_SIX:
       "STEPのPDFは、ページ数が6の倍数である必要があります。",

@@ -19,6 +19,7 @@ import {
 } from "../components/ui";
 import { useApiQuery } from "../hooks/useApiQuery";
 import { api, asPaged, newIdempotencyKey } from "../lib/api";
+import { aiFailureMessage } from "../lib/templateGeneration";
 import {
   formatBytes,
   formatDateTime,
@@ -2997,7 +2998,14 @@ function JobsView({
                   <td>{job.attempt}</td>
                   <td>{formatDateTime(job.nextAttemptAt)}</td>
                   <td className="job-error">
-                    {job.sanitizedError || "—"}
+                    {job.sanitizedError ? (
+                      <>
+                        {aiFailureMessage(job.sanitizedError) || job.sanitizedError}
+                        {aiFailureMessage(job.sanitizedError) ? (
+                          <small className="mono">{job.sanitizedError}</small>
+                        ) : null}
+                      </>
+                    ) : "—"}
                   </td>
                   <td>
                     <div className="row-actions">

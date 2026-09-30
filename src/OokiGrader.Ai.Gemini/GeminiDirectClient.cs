@@ -16,14 +16,12 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
     private const int MaximumResponseBytes = 8 * 1024 * 1024;
     private const int MaximumErrorResponseBytes = 64 * 1024;
     private const string AllowedHost = "generativelanguage.googleapis.com";
-    private static readonly byte[] ProbePng =
-    [
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
-        0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137,
-        0, 0, 0, 13, 73, 68, 65, 84, 8, 215, 99, 248, 255, 255, 255,
-        127, 0, 9, 251, 3, 253, 42, 134, 227, 138, 0, 0, 0, 0, 73,
-        69, 78, 68, 174, 66, 96, 130,
-    ];
+    // A complete 64x64 RGB PNG with valid chunk checksums. A malformed or
+    // one-pixel image can fail in the provider's image decoder before inference.
+    private static readonly byte[] ProbePng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYElEQVR4nO3PQQ0AIBDA" +
+        "MMC/50MEj4ZkVbDtmVk/OzrgVQNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNa" +
+        "A1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgPaBXKqA31N0fbGAAAAAElFTkSuQmCC");
 
     public string Provider => AiProviders.GeminiDirect;
 
@@ -35,6 +33,17 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
     {
         ValidateConnection(connection);
         ValidateRequest(request);
+        // Request defaults and older saved profiles can still carry MINIMAL.
+        // Gemini 3.7/3.8 reject it, so use the lowest supported level rather
+        // than sending an otherwise valid request with incompatible settings.
+        if (request.ThinkingLevel == "MINIMAL"
+            && !AiProviderCatalog.SupportsMinimalThinking(
+                connection.Provider,
+                connection.ModelId))
+        {
+            request = request with { ThinkingLevel = "LOW" };
+        }
+
         if (credentialUtf8.IsEmpty)
         {
             throw Failure(
@@ -129,7 +138,7 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
             "capability-probe-v1",
             "capability-probe-v1",
             "The image is synthetic test data. Output only the requested schema.",
-            "Inspect the one-pixel image and return {\"ok\":true}.",
+            "Inspect the synthetic image and return {\"ok\":true}.",
             schema.RootElement.Clone(),
             [
                 new AiMediaPart(
@@ -139,7 +148,13 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                             System.Security.Cryptography.SHA256.HashData(ProbePng))
                         .ToLowerInvariant()),
             ],
-            MaxOutputTokens: 64,
+            // LOW models also spend the output budget on internal reasoning.
+            // A 64-token cutoff can truncate even the tiny probe JSON.
+            MaxOutputTokens: AiProviderCatalog.SupportsMinimalThinking(
+                    connection.Provider,
+                    connection.ModelId)
+                ? 64
+                : 2_048,
             MediaResolution: "MEDIA_RESOLUTION_LOW",
             ThinkingLevel: AiProviderCatalog.SupportsMinimalThinking(
                     connection.Provider,
@@ -285,7 +300,12 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
             var finishReason = GetString(candidate, "finishReason") ?? "UNKNOWN";
             if (!string.Equals(finishReason, "STOP", StringComparison.Ordinal))
             {
-                throw finishReason is "SAFETY" or "BLOCKLIST" or "PROHIBITED_CONTENT"
+                throw finishReason == "MAX_TOKENS"
+                    ? Failure(
+                        AiFailureKind.InvalidResponse,
+                        "gemini_output_limit_exceeded",
+                        isTransient: false)
+                    : finishReason is "SAFETY" or "BLOCKLIST" or "PROHIBITED_CONTENT"
                     ? Failure(
                         AiFailureKind.SafetyBlocked,
                         "gemini_output_blocked",

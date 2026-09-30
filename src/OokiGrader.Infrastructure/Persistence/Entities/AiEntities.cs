@@ -5,11 +5,11 @@ public sealed class AiConnectionEntity : IRevisionedEntity, IUpdatedEntity
     public string Id { get; set; } = string.Empty;
     public string Provider { get; set; } = "geminiDirect";
     public string EndpointProfile { get; set; } = "googleGenerativeLanguage";
-    public string ModelId { get; set; } = "gemini-3.7-flash";
+    public string ModelId { get; set; } = "gemini-3.8-flash";
     public string SecretReference { get; set; } = string.Empty;
     public string KeyFingerprint { get; set; } = string.Empty;
     public int CredentialRevision { get; set; } = 1;
-    public int TimeoutSeconds { get; set; } = 75;
+    public int TimeoutSeconds { get; set; } = 300;
     public int ConcurrencyLimit { get; set; } = 2;
     public string State { get; set; } = "pending_probe";
     public string? LastCapabilityProbeState { get; set; }
@@ -63,7 +63,7 @@ public sealed class AiTaskProfileEntity : IRevisionedEntity, IUpdatedEntity
     public string TaskType { get; set; } = string.Empty;
     public string AiConnectionId { get; set; } = string.Empty;
     public long ConnectionRevision { get; set; }
-    public string ModelId { get; set; } = "gemini-3.7-flash";
+    public string ModelId { get; set; } = "gemini-3.8-flash";
     public string ProcessingStrategy { get; set; } = "expedite_standard";
     public string PromptVersion { get; set; } = string.Empty;
     public string SchemaVersion { get; set; } = string.Empty;
@@ -95,7 +95,7 @@ public sealed class AiEvaluationRecordEntity
     public string AiTaskProfileId { get; set; } = string.Empty;
     public long TaskProfileRevision { get; set; }
     public string Provider { get; set; } = "geminiDirect";
-    public string ModelId { get; set; } = "gemini-3.7-flash";
+    public string ModelId { get; set; } = "gemini-3.8-flash";
     public long ConnectionRevision { get; set; }
     public string TaskType { get; set; } = string.Empty;
     public string ProcessingStrategy { get; set; } = string.Empty;
@@ -154,7 +154,7 @@ public sealed class AiBatchEntity : IRevisionedEntity, IUpdatedEntity
 {
     public string Id { get; set; } = string.Empty;
     public string Provider { get; set; } = "geminiDirect";
-    public string ModelId { get; set; } = "gemini-3.7-flash";
+    public string ModelId { get; set; } = "gemini-3.8-flash";
     public string AiConnectionId { get; set; } = string.Empty;
     public long ConnectionRevision { get; set; }
     public string AiTaskProfileId { get; set; } = string.Empty;

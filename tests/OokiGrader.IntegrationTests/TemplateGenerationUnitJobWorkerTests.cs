@@ -22,6 +22,47 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class TemplateGenerationUnitJobWorkerTests
 {
+    [Theory]
+    [InlineData(AiFailureKind.Authentication, "gemini_authentication_failed", "AI_AUTHENTICATION_FAILED")]
+    [InlineData(AiFailureKind.RateLimited, "gemini_rate_limited", "AI_RATE_LIMITED")]
+    [InlineData(AiFailureKind.Timeout, "gemini_timeout", "AI_TIMEOUT")]
+    [InlineData(AiFailureKind.RequestRejected, "gemini_response_schema_invalid", "AI_RESPONSE_SCHEMA_REJECTED")]
+    [InlineData(AiFailureKind.RequestRejected, "gemini_thinking_config_invalid", "AI_THINKING_CONFIG_INVALID")]
+    [InlineData(AiFailureKind.InvalidConfiguration, "gemini_model_not_found", "AI_MODEL_UNAVAILABLE")]
+    [InlineData(AiFailureKind.InvalidResponse, "gemini_output_limit_exceeded", "AI_OUTPUT_LIMIT_EXCEEDED")]
+    [InlineData(AiFailureKind.InvalidResponse, "gemini_json_invalid", "AI_STRUCTURED_OUTPUT_INVALID")]
+    [InlineData(AiFailureKind.RequestRejected, "provider-secret-must-not-escape", "AI_REQUEST_REJECTED")]
+    public async Task ProviderFailuresRemainSpecificSafeAndClearOnManualRetry(
+        AiFailureKind kind,
+        string safeProviderCode,
+        string expectedErrorCode)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(
+            ProviderAction.Fail, ProviderAction.Extract);
+        fixture.Provider.Failure = new AiProviderException(kind, safeProviderCode,
+            isTransient: false, innerException: new InvalidOperationException("secret-detail-must-not-escape"));
+
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await using (var db = await fixture.CreateDbContextAsync())
+        {
+            var request = await db.AiRequests.AsNoTracking().SingleAsync();
+            var unit = await db.TemplateGenerationUnits.AsNoTracking().SingleAsync();
+            var job = await db.BackgroundJobs.AsNoTracking().SingleAsync();
+            Assert.Equal(expectedErrorCode, request.ErrorCode);
+            Assert.Null(request.SafeErrorDetail);
+            Assert.Equal(expectedErrorCode, job.ErrorCode);
+            Assert.Contains(expectedErrorCode, unit.WarningsJson, StringComparison.Ordinal);
+            Assert.DoesNotContain("must-not-escape", unit.WarningsJson, StringComparison.Ordinal);
+        }
+        var retried = await fixture.RetryFailedAsync("retry-specific-error");
+        Assert.DoesNotContain(Assert.Single(retried.Units).Warnings.EnumerateArray(),
+            warning => warning.GetProperty("code").GetString() == expectedErrorCode);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await using var finalDb = await fixture.CreateDbContextAsync();
+        Assert.Equal(TemplateGenerationUnitStatus.Extracted,
+            await finalDb.TemplateGenerationUnits.Select(unit => unit.Status).SingleAsync());
+    }
+
     private static readonly JsonSerializerOptions WorkerJsonOptions = new(
         JsonSerializerDefaults.Web)
     {
@@ -790,6 +831,7 @@ public sealed class TemplateGenerationUnitJobWorkerTests
 
         public string Provider => AiProviders.GeminiDirect;
         public List<AiProviderRequest> Requests { get; } = [];
+        public AiProviderException? Failure { get; set; }
 
         public Task<AiProviderResponse> GenerateAsync(
             AiConnectionSettings connection,
@@ -810,7 +852,7 @@ public sealed class TemplateGenerationUnitJobWorkerTests
                 : _actions.Dequeue();
             if (action == ProviderAction.Fail)
             {
-                throw new AiProviderException(
+                throw Failure ?? new AiProviderException(
                     AiFailureKind.TransientProvider,
                     "fixture_provider_unavailable",
                     isTransient: true);

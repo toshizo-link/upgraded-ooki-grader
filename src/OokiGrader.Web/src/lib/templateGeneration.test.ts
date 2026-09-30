@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  aiFailureMessage,
   deterministicPlanMessage,
   recentTemplateGenerationBatchIds,
   rememberTemplateGenerationBatchId,
@@ -33,6 +34,23 @@ beforeEach(() => {
 });
 
 describe("template generation adapter", () => {
+  it.each([
+    ["AI_AUTHENTICATION_FAILED", "認証"],
+    ["AI_RATE_LIMITED", "利用上限"],
+    ["AI_RESPONSE_SCHEMA_REJECTED", "出力形式"],
+    ["AI_THINKING_CONFIG_INVALID", "推論設定"],
+    ["AI_OUTPUT_LIMIT_EXCEEDED", "出力上限"],
+    ["AI_TIMEOUT", "時間内"],
+  ])("explains provider failure %s in both template and admin screens", (code, detail) => {
+    expect(warningMessage(code)).toContain(detail);
+    expect(warningMessage(code)).not.toBe("確認が必要な項目があります。");
+    expect(aiFailureMessage(code)).toBe(warningMessage(code));
+  });
+
+  it("leaves unrelated job error codes intact for the admin screen", () => {
+    expect(aiFailureMessage("SOURCE_MISSING")).toBeUndefined();
+  });
+
   it("normalizes the server snapshot without editing generated OpenAPI files", () => {
     const batch = normalizeTemplateGenerationBatch({
       id: "batch-1",

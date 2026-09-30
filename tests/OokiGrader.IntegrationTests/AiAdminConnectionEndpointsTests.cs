@@ -82,7 +82,7 @@ public sealed class AiAdminConnectionEndpointsTests
 
     [Theory]
     [InlineData(GeminiModel)]
-    [InlineData("gemini-3.8-flash")]
+    [InlineData("gemini-3.7-flash")]
     [InlineData("gemini-3.8-flash-preview")]
     public async Task AutomaticGeminiSetupProbesBeforeSavingAndEnablesAllProfiles(
         string modelId)
