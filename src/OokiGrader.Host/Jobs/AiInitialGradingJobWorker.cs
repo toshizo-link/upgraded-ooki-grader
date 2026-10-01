@@ -2612,11 +2612,15 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             response.Usage,
             reservation.ReservedUsdMicros,
             claim.Connection.Provider != AiProviders.GeminiDirect
+                || response.ModelRoutingReason is not null
                 || claim.Pricing is null
                 ? null
                 : () => CalculateActualCost(
                     claim.Pricing,
                     response.Usage));
+        var routingSettlement = AiProviderRuntime.ResolveRoutingSettlement(
+            db, response, now, reservation.ReservedUsdMicros);
+        actualUsdMicros = routingSettlement?.UsdMicros ?? actualUsdMicros;
         var estimatedJpyMicros = ConvertUsdToJpy(
             actualUsdMicros,
             claim.UsdToJpyMicros);
@@ -2633,7 +2637,8 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
             OutputTokens = response.Usage.OutputTokens,
             ThinkingTokens = response.Usage.ThinkingTokens,
             TotalTokens = response.Usage.TotalTokens,
-            PricingSnapshotId = claim.Pricing?.Id,
+            PricingSnapshotId = response.ModelRoutingReason is null
+                ? claim.Pricing?.Id : routingSettlement?.PricingSnapshotId,
             EstimatedUsdMicros = actualUsdMicros,
             EstimatedJpyMicros = estimatedJpyMicros,
             ProviderRequestId = response.ProviderResponseId,

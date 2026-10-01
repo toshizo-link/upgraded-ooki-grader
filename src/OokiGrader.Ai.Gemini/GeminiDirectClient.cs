@@ -194,7 +194,8 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                 UsageMetadata: false,
                 State: "failed",
                 SafeErrorCode: exception.SafeErrorCode,
-                Latency: null);
+                Latency: null,
+                RetryAfter: exception.RetryAfter);
         }
     }
 
@@ -448,6 +449,11 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
         CancellationToken cancellationToken)
     {
         var retryAfter = response.Headers.RetryAfter?.Delta;
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            retryAfter = await ReadQuotaRetryAfterAsync(response.Content, retryAfter,
+                cancellationToken).ConfigureAwait(false);
+        }
         var safeErrorCode = response.StatusCode is HttpStatusCode.BadRequest
             ? await ClassifyBadRequestAsync(
                     response.Content,
@@ -490,6 +496,49 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                 $"gemini_http_{((int)response.StatusCode).ToString(CultureInfo.InvariantCulture)}",
                 isTransient: false),
         };
+    }
+
+    private static async Task<TimeSpan?> ReadQuotaRetryAfterAsync(
+        HttpContent content, TimeSpan? headerDelay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bytes = await ReadBoundedAsync(content, MaximumErrorResponseBytes,
+                cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(bytes);
+            if (!document.RootElement.TryGetProperty("error", out var error)
+                || !error.TryGetProperty("details", out var details)
+                || details.ValueKind != JsonValueKind.Array)
+                return headerDelay;
+            var delay = headerDelay;
+            foreach (var detail in details.EnumerateArray())
+            {
+                if (detail.ValueKind != JsonValueKind.Object) continue;
+                if (detail.TryGetProperty("violations", out var violations)
+                    && violations.ValueKind == JsonValueKind.Array
+                    && violations.EnumerateArray().Any(violation =>
+                        violation.ValueKind == JsonValueKind.Object
+                        && GetString(violation, "quotaId") is { } id
+                        && id.Contains("PerDay", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var zone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+                    var now = DateTimeOffset.UtcNow;
+                    var nextMidnight = TimeZoneInfo.ConvertTime(now, zone).Date.AddDays(1);
+                    return TimeZoneInfo.ConvertTimeToUtc(nextMidnight, zone) - now.UtcDateTime;
+                }
+                if (GetString(detail, "retryDelay") is { } value
+                    && value.EndsWith('s')
+                    && double.TryParse(value[..^1], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out var seconds)
+                    && double.IsFinite(seconds) && seconds > 0)
+                    delay = TimeSpan.FromSeconds(Math.Min(seconds, 86_400));
+            }
+            return delay;
+        }
+        catch (Exception exception) when (exception is JsonException or AiProviderException)
+        {
+            return headerDelay;
+        }
     }
 
     private static async Task<string?> ClassifyBadRequestAsync(

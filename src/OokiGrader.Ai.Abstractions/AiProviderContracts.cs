@@ -17,6 +17,7 @@ public static class AiProviders
 public static partial class AiProviderCatalog
 {
     public const string GeminiDefaultModelId = "gemini-3.8-flash";
+    public const string GeminiLightModelId = "gemini-3.5-flash-lite";
     public const string GeminiEndpointProfile = "googleGenerativeLanguage";
     public const string OpenRouterEndpointProfile = "openRouterChatCompletions";
     public const string DeepSeekV4FlashModelId =
@@ -194,7 +195,8 @@ public sealed record AiProviderResponse(
     JsonElement StructuredOutput,
     AiUsage Usage,
     TimeSpan Latency,
-    string? RoutedProvider = null);
+    string? RoutedProvider = null,
+    string? ModelRoutingReason = null);
 
 public sealed record AiCapabilityProbeResult(
     bool Authentication,
@@ -204,7 +206,8 @@ public sealed record AiCapabilityProbeResult(
     bool UsageMetadata,
     string State,
     string? SafeErrorCode,
-    TimeSpan? Latency);
+    TimeSpan? Latency,
+    TimeSpan? RetryAfter = null);
 
 public interface IAiProviderClient
 {

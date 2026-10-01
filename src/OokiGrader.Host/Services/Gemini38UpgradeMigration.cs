@@ -12,14 +12,14 @@ using OokiGrader.Infrastructure.Persistence.Entities;
 namespace OokiGrader.Host.Services;
 
 /// <summary>
-/// The 0.9.15 upgrade selects Gemini 3.8 Flash once, before any queued AI work
+/// The 0.9.16 upgrade selects the Gemini 3.8/3.5 routing policy before queued AI work
 /// can run. Credentials and historical requests remain untouched. A real
 /// capability probe, rather than the old model's probe, controls readiness.
 /// </summary>
 internal static class Gemini38UpgradeMigration
 {
     internal const string ModelId = "gemini-3.8-flash";
-    internal const string AuditEventType = "ai.upgrade.gemini38.0_9_15";
+    internal const string AuditEventType = "ai.upgrade.gemini38.0_9_16";
 
     public static async Task<bool> ApplyAsync(
         OokiGraderDbContext db,

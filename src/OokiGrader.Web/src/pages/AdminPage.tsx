@@ -1082,6 +1082,13 @@ function AiConfigurationView({
         <p>
           Geminiがひな形作成と採点を補助します。AIの結果は、受付開始・答案確定前に先生が確認できます。
         </p>
+        {geminiConnection?.modelId === "gemini-3.8-flash" ? (
+          <p>
+            ひな形作成・採点・再確認はGemini 3.8 Flash、氏名読み取りは3.5 Flash-Liteを使います。
+            3.8の利用上限に達すると3.5で処理を続け、上限の解除後は自動で3.8に戻ります。
+            実際に使用したモデルはAI使用履歴で確認できます。
+          </p>
+        ) : null}
       </InlineAlert>
 
       <div className="admin-two-column">

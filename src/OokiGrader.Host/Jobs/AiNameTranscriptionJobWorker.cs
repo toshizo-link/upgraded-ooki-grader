@@ -1874,11 +1874,15 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             response.Usage,
             reservation.ReservedUsdMicros,
             claim.Connection.Provider != AiProviders.GeminiDirect
+                || response.ModelRoutingReason is not null
                 || claim.Pricing is null
                 ? null
                 : () => CalculateActualCost(
                     claim.Pricing,
                     response.Usage));
+        var routingSettlement = AiProviderRuntime.ResolveRoutingSettlement(
+            db, response, now, reservation.ReservedUsdMicros);
+        actualUsdMicros = routingSettlement?.UsdMicros ?? actualUsdMicros;
         db.AiUsage.Add(new AiUsageEntity
         {
             Id = UlidId.New(now),
@@ -1892,7 +1896,8 @@ public sealed partial class AiNameTranscriptionJobWorker : BackgroundService
             OutputTokens = response.Usage.OutputTokens,
             ThinkingTokens = response.Usage.ThinkingTokens,
             TotalTokens = response.Usage.TotalTokens,
-            PricingSnapshotId = claim.Pricing?.Id,
+            PricingSnapshotId = response.ModelRoutingReason is null
+                ? claim.Pricing?.Id : routingSettlement?.PricingSnapshotId,
             EstimatedUsdMicros = actualUsdMicros,
             EstimatedJpyMicros = ConvertUsdToJpy(
                 actualUsdMicros,

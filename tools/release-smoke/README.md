@@ -9,12 +9,17 @@ student, manual template, finalized result, original PDF, and verified result
 PDF. It saves a Gemini connection with the old model and a disabled synthetic
 School Manager connection. No School Manager messages are sent.
 
-The `finish` phase starts version 0.9.15 against the same data directory. It
+The `finish` phase starts version 0.9.16 against the same data directory. It
 checks the original entities and PDF hashes, encrypted credential files, the
 stored API-key fingerprint/reference/revision, all four task models, and the
 one-time migration record. It also restarts the new host to check that the
 migration does not repeat. The transition includes a real Gemini capability
 probe; an optional client PDF uses the actual production template worker.
+
+All four profiles select the preferred connection model. The production
+adapter routes identity-only work to 3.5 Flash-Lite and quota-rejected important
+work to Lite, recording the actual model separately. The 0.9.16 probe checks
+Lite readiness as well as preferred-model readiness (or quota cooldown).
 
 The key must be supplied to `prepare` in the process-only environment variable
 `OOKI_GEMINI_API_KEY`. Do not put keys in command arguments, source files, or

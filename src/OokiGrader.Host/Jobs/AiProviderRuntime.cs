@@ -1,4 +1,6 @@
 using OokiGrader.Ai.Abstractions;
+using System.Numerics;
+using OokiGrader.Infrastructure.Persistence;
 
 namespace OokiGrader.Host.Jobs;
 
@@ -65,6 +67,33 @@ public sealed class AiProviderClientResolver : IAiProviderClientResolver
 
 internal static class AiProviderRuntime
 {
+    // Never price routed Lite tokens using the preferred Flash snapshot.
+    // Without a Lite price/usage record, retain the conservative reservation.
+    public static (long UsdMicros, string? PricingSnapshotId)? ResolveRoutingSettlement(
+        OokiGraderDbContext db, AiProviderResponse response, DateTimeOffset now,
+        long reservedUsdMicros)
+    {
+        if (response.ModelRoutingReason is null) return null;
+        var pricing = db.PricingSnapshots.Where(item =>
+                item.Provider == AiProviders.GeminiDirect
+                && item.ModelId == AiProviderCatalog.GeminiLightModelId
+                && item.EffectiveAt <= now)
+            .OrderByDescending(item => item.EffectiveAt)
+            .ThenByDescending(item => item.CapturedAt)
+            .ThenByDescending(item => item.Id).FirstOrDefault();
+        var cost = ResolveActualUsdMicros(response.Usage, reservedUsdMicros,
+            pricing is null ? null : () =>
+            {
+                var amount = (BigInteger)(response.Usage.PromptTokens ?? 0)
+                        * pricing.InputUsdMicrosPerMillionTokens
+                    + (BigInteger)(response.Usage.OutputTokens ?? 0)
+                        * pricing.OutputUsdMicrosPerMillionTokens
+                    + (BigInteger)(response.Usage.ThinkingTokens ?? 0)
+                        * pricing.ThinkingUsdMicrosPerMillionTokens;
+                return checked((long)((amount + 999_999) / 1_000_000));
+            });
+        return (cost, pricing?.Id);
+    }
     public const string GeminiModel = AiProviderCatalog.GeminiDefaultModelId;
     public const string OpenRouterDefaultModel =
         "google/gemini-3.1-flash-lite";

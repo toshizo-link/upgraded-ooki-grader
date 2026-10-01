@@ -159,7 +159,7 @@ if (pdfReportsEnabled)
         serviceProvider.GetRequiredService<BulkTranscriptExportJobWorker>());
 }
 builder.Services.AddSingleton<IAiPromptBundleCatalog, ApprovedPromptBundleCatalog>();
-builder.Services.AddHttpClient<IAiProviderClient, GeminiDirectClient>(client =>
+builder.Services.AddHttpClient<GeminiDirectClient>(client =>
     {
         client.Timeout = Timeout.InfiniteTimeSpan;
         client.DefaultRequestHeaders.UserAgent.ParseAdd("OokiGrader/0.1");
@@ -190,6 +190,9 @@ builder.Services.AddHttpClient<IAiProviderClient, OpenRouterClient>(client =>
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
     });
 builder.Services.AddSingleton<IAiProviderClientResolver, AiProviderClientResolver>();
+builder.Services.AddSingleton<IAiProviderClient>(services =>
+    new GeminiTaskRoutingClient(services.GetRequiredService<GeminiDirectClient>(),
+        services.GetRequiredService<GeminiQuotaCooldownStore>()));
 builder.Services.AddGeminiBatchProcessing(
     builder.Configuration,
     runWorker: geminiDirectEnabled && semanticGradingEnabled);
@@ -202,6 +205,8 @@ var dataRoot = Path.IsPathFullyQualified(configuredDataRoot)
     ? configuredDataRoot
     : Path.GetFullPath(configuredDataRoot, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(dataRoot);
+builder.Services.AddSingleton(services => new GeminiQuotaCooldownStore(
+    Path.Combine(dataRoot, "ai-routing"), services.GetRequiredService<TimeProvider>()));
 var databasePath = Path.Combine(dataRoot, "ooki-grader.db");
 var secretRoot = Path.Combine(dataRoot, "secrets");
 var dataProtectionKeyRoot = Path.Combine(dataRoot, "data-protection-keys");

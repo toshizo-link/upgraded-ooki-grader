@@ -1,6 +1,6 @@
 """Isolated Windows published-binary upgrade smoke; never controls a service.
 
-Use prepare with a 0.9.14 package, then finish with 0.9.15 against the same
+Use prepare with a 0.9.14 package, then finish with 0.9.16 against the same
 explicit private work directory. OOKI_GEMINI_API_KEY is read from process memory
 only. Evidence contains synthetic records, safe status codes, and file hashes.
 This exercises application startup/migration, not the elevated updater UI.
@@ -389,7 +389,7 @@ def main():
         print(json.dumps({"phase":"prepare","state":"passed","syntheticFinalizedResults":1,"originalAndReportPdfStored":True}))
     else:
         data = json.loads(state.read_text(encoding="utf-8"))
-        with Host(args.package,work,"new-0.9.15") as host:
+        with Host(args.package,work,"new-0.9.16") as host:
             host.login()
             after = snapshot(host,data["ids"])
             startup_probe = after["connection"].get("lastCapabilityProbe")
@@ -412,7 +412,7 @@ def main():
             profiles = after["profiles"].get("items",[])
             checks["fourProfilesSelectModel"] = len(profiles)==4 and all(p["modelId"]==EXPECTED_MODEL for p in profiles)
             db = sqlite3.connect(f"file:{(work/'data/ooki-grader.db').as_posix()}?mode=ro",uri=True)
-            migration_count = db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_15'").fetchone()[0]
+            migration_count = db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_16'").fetchone()[0]
             db.close()
             checks["migrationRecordedOnce"] = migration_count == 1
             evidence = {"state":"passed" if all(checks.values()) else "failed", "checks":checks,"after":after,
@@ -431,12 +431,12 @@ def main():
                     assert client_generation["questionCount"] == args.expected_question_count, client_generation
                     assert client_generation["persistedDraftQuestionCount"] == args.expected_question_count, client_generation
         # A second new-binary startup must not repeat the one-time migration.
-        with Host(args.package,work,"new-restart-0.9.15") as host:
+        with Host(args.package,work,"new-restart-0.9.16") as host:
             host.login()
             again = snapshot(host,data["ids"])
             assert again["connection"]["modelId"]==EXPECTED_MODEL
         db=sqlite3.connect(f"file:{(work/'data/ooki-grader.db').as_posix()}?mode=ro",uri=True)
-        count=db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_15'").fetchone()[0]
+        count=db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_16'").fetchone()[0]
         db.close()
         assert count==1
         evidence["checks"]["secondStartupDoesNotRepeatMigration"]=True

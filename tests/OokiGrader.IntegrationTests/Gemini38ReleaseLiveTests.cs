@@ -7,6 +7,8 @@ using OokiGrader.Host.Common;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Host.Services;
 using OokiGrader.Preprocessing;
+using OokiGrader.Application.Abstractions;
+using OokiGrader.Infrastructure.Security;
 using Xunit.Abstractions;
 
 namespace OokiGrader.IntegrationTests;
@@ -22,8 +24,7 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
     [Trait("Category", "Live")]
     public async Task ExactGemini38PassesProductionImageCapabilityProbe()
     {
-        var key = Encoding.UTF8.GetBytes(
-            Environment.GetEnvironmentVariable("OOKI_GEMINI_API_KEY")!);
+        var key = await ReadCredentialAsync();
         try
         {
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -46,8 +47,7 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
     [Trait("Category", "Live")]
     public async Task ProductionFillBlankPdfExtractsWithGemini38AndPassesValidation()
     {
-        var key = Encoding.UTF8.GetBytes(
-            Environment.GetEnvironmentVariable("OOKI_GEMINI_API_KEY")!);
+        var key = await ReadCredentialAsync();
         var path = Environment.GetEnvironmentVariable("OOKI_RELEASE_TEST_PDF")!;
         try
         {
@@ -80,13 +80,25 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
                 TimeSpan.FromMinutes(5));
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
             var client = new GeminiDirectClient(http);
+            IReadOnlyList<AiMediaPart> providerMedia =
+                [new AiMediaPart("application/pdf", media.Bytes, media.Sha256)];
+            if (Environment.GetEnvironmentVariable("OOKI_RELEASE_RASTER_PDF") == "1")
+            {
+                await using var rasterSource = new MemoryStream(media.Bytes, writable: false);
+                var raster = await new PreprocessingService().ProcessAsync(rasterSource,
+                    new PreprocessingInput("application/pdf", "acceptance.pdf", MaximumPages: 50));
+                providerMedia = raster.Pages.OrderBy(page => page.PageNumber).Select(page =>
+                    new AiMediaPart("image/png", page.NormalizedPng.Bytes,
+                        page.NormalizedPng.Sha256)).ToArray();
+                output.WriteLine("DiagnosticMedia=ordered-pdf-page-images");
+            }
             output.WriteLine("Phase=production-template-extraction");
             var response = await client.GenerateAsync(connection, key,
                 new AiProviderRequest(requestKey, bundle.TaskType,
                     bundle.PromptVersion, bundle.SchemaVersion,
                     bundle.SystemInstruction, instruction.UserInstruction,
                     bundle.ResponseJsonSchema,
-                    [new AiMediaPart("application/pdf", media.Bytes, media.Sha256)],
+                    providerMedia,
                     MaxOutputTokens: 65_536,
                     ThinkingLevel: "MEDIUM"));
             var extraction = OrientationGatedTemplateExtractionValidator.Validate(
@@ -125,12 +137,25 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
     {
         public LiveReleaseFactAttribute(bool requiresPdf = true)
         {
-            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OOKI_GEMINI_API_KEY"))
+            if ((string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OOKI_GEMINI_API_KEY"))
+                    && (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OOKI_ROUTING_SECRET_ROOT"))
+                        || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OOKI_ROUTING_SECRET_REFERENCE"))))
                 || (requiresPdf && string.IsNullOrWhiteSpace(
                     Environment.GetEnvironmentVariable("OOKI_RELEASE_TEST_PDF"))))
             {
                 Skip = "Requires OOKI_GEMINI_API_KEY and OOKI_RELEASE_TEST_PDF.";
             }
         }
+    }
+
+    private static async Task<byte[]> ReadCredentialAsync()
+    {
+        if (Environment.GetEnvironmentVariable("OOKI_GEMINI_API_KEY") is { Length: > 0 } value)
+            return Encoding.UTF8.GetBytes(value);
+        var store = new WindowsDpapiAiSecretStore(new WindowsDpapiAiSecretStoreOptions
+        { RootPath = Environment.GetEnvironmentVariable("OOKI_ROUTING_SECRET_ROOT")! });
+        using var secret = await store.ReadAsync(new AiSecretReference(
+            Environment.GetEnvironmentVariable("OOKI_ROUTING_SECRET_REFERENCE")!));
+        return secret.Utf8Bytes.ToArray();
     }
 }

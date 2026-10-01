@@ -18,6 +18,46 @@ public sealed class AiInitialGradingJobWorkerTests
 {
     private static readonly string[] KanjiScript = ["kanji"];
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ApprovedQuotaFallbackPersistsRealModelAndDoesNotApplyPreferredModelPrice(bool litePriceAvailable)
+    {
+        await using var fixture = await AiWorkerFixture.CreateAsync(
+            responseFactory: request => CreateResponse(request) with
+            {
+                ActualModel = AiProviderCatalog.GeminiLightModelId,
+                ModelRoutingReason = GeminiTaskRoutingClient.QuotaReason,
+            });
+        var seeded = await fixture.SeedAsync();
+        if (litePriceAvailable)
+        {
+            await using var pricingDb = await fixture.CreateDbContextAsync();
+            pricingDb.PricingSnapshots.Add(new PricingSnapshotEntity
+            {
+                Id = "lite-pricing", Provider = AiProviders.GeminiDirect,
+                ModelId = AiProviderCatalog.GeminiLightModelId,
+                InputUsdMicrosPerMillionTokens = 1_000_000,
+                OutputUsdMicrosPerMillionTokens = 2_000_000,
+                EffectiveAt = DateTimeOffset.UtcNow.AddDays(-1),
+                CapturedAt = DateTimeOffset.UtcNow,
+            });
+            await pricingDb.SaveChangesAsync();
+        }
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        await using var db = await fixture.CreateDbContextAsync();
+        var run = await db.GradingRuns.AsNoTracking()
+            .SingleAsync(item => item.SubmissionId == seeded.SubmissionId);
+        var usage = await db.AiUsage.AsNoTracking().SingleAsync();
+        var reservation = await db.AiBudgetReservations.AsNoTracking().SingleAsync();
+        Assert.Equal(AiProviderCatalog.GeminiLightModelId, run.Model);
+        Assert.Equal(AiProviderCatalog.GeminiDefaultModelId, usage.RequestedModel);
+        Assert.Equal(AiProviderCatalog.GeminiLightModelId, usage.ActualModel);
+        Assert.Equal(litePriceAvailable ? "lite-pricing" : null, usage.PricingSnapshotId);
+        Assert.Equal(litePriceAvailable ? 272 : reservation.ReservedUsdMicros, usage.EstimatedUsdMicros);
+        Assert.Equal("settled", reservation.State);
+    }
+
     [Fact]
     public async Task RoutesAnOpenRouterProfileToTheOpenRouterClient()
     {

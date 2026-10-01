@@ -2205,7 +2205,7 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
         var actualUsdMicros = AiProviderRuntime.ResolveActualUsdMicros(
             response.Usage,
             reservation.ReservedUsdMicros,
-            preparation.Pricing is null
+            preparation.Pricing is null || response.ModelRoutingReason is not null
                 ? null
                 : () => CalculateCost(
                     response.Usage.PromptTokens ?? 0,
@@ -2214,6 +2214,9 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
                     preparation.Pricing.InputRate,
                     preparation.Pricing.OutputRate,
                     preparation.Pricing.ThinkingRate));
+        var routingSettlement = AiProviderRuntime.ResolveRoutingSettlement(
+            db, response, now, reservation.ReservedUsdMicros);
+        actualUsdMicros = routingSettlement?.UsdMicros ?? actualUsdMicros;
         db.AiUsage.Add(new AiUsageEntity
         {
             Id = _ids.NewId(),
@@ -2227,7 +2230,8 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
             OutputTokens = response.Usage.OutputTokens,
             ThinkingTokens = response.Usage.ThinkingTokens,
             TotalTokens = response.Usage.TotalTokens,
-            PricingSnapshotId = preparation.Pricing?.Id,
+            PricingSnapshotId = response.ModelRoutingReason is null
+                ? preparation.Pricing?.Id : routingSettlement?.PricingSnapshotId,
             EstimatedUsdMicros = actualUsdMicros,
             EstimatedJpyMicros = ConvertUsdToJpy(
                 actualUsdMicros,

@@ -27,14 +27,25 @@ internal static class AiResponseMetadataValidator
         ArgumentNullException.ThrowIfNull(response);
         return response.Provider == selectedProvider
             && response.RequestedModel == selectedModel
-            && IsAcceptedActualModel(
+            && (IsAcceptedActualModel(
                 response.ActualModel,
                 selectedProvider,
                 selectedModel)
+                || IsApprovedGeminiRoute(response, selectedProvider, selectedModel))
             && IsSuccessfulFinishReason(
                 selectedProvider,
                 response.FinishReason);
     }
+
+    private static bool IsApprovedGeminiRoute(AiProviderResponse response,
+        string provider, string selectedModel) =>
+        provider == AiProviders.GeminiDirect
+        && selectedModel == AiProviderCatalog.GeminiDefaultModelId
+        && response.ModelRoutingReason is GeminiTaskRoutingClient.LightTaskReason
+            or GeminiTaskRoutingClient.QuotaReason
+        && IsAcceptedActualModel(response.ActualModel, provider,
+            AiProviderCatalog.GeminiLightModelId)
+        && response.ActualModel is not null;
 
     public static void Validate(
         AiProviderResponse response,
