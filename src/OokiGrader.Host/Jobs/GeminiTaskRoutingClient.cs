@@ -9,13 +9,14 @@ namespace OokiGrader.Host.Jobs;
 /// <summary>
 /// Code-owned task routing for the default Gemini connection. RequestedModel
 /// remains the preferred model; ActualModel records the dispatched model.
-/// Only an explicit quota rejection permits retrying important work on Lite.
+/// Explicit quota rejection or repeated HTTP 503 permits completing work on Lite.
 /// </summary>
 internal sealed class GeminiTaskRoutingClient(
     IAiProviderClient direct, GeminiQuotaCooldownStore cooldowns) : IAiProviderClient
 {
     internal const string LightTaskReason = "gemini_light_task";
     internal const string QuotaReason = "gemini_quota_fallback";
+    internal const string ServiceReason = "gemini_service_fallback";
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
     public string Provider => AiProviders.GeminiDirect;
 
@@ -42,6 +43,7 @@ internal sealed class GeminiTaskRoutingClient(
         // Serialize primary dispatches for one key so queued work observes a
         // quota rejection before spending another request on the same model.
         var gate = _gates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        var fallbackReason = QuotaReason;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -58,12 +60,22 @@ internal sealed class GeminiTaskRoutingClient(
                     await cooldowns.RecordAsync(key, exception.RetryAfter,
                         cancellationToken).ConfigureAwait(false);
                 }
+                catch (AiProviderException exception)
+                    when (exception.Kind == AiFailureKind.TransientProvider
+                        && exception.HttpStatusCode == 503)
+                {
+                    // The direct client already exhausted its bounded retries.
+                    // Only explicit rejected responses permit resending work;
+                    // network/timeouts have unknown outcomes and still surface.
+                    // No quota cooldown: the next job tries the preferred model.
+                    fallbackReason = ServiceReason;
+                }
             }
         }
         finally { gate.Release(); }
 
         return await GenerateLightAsync(connection, credentialUtf8, request,
-            QuotaReason, cancellationToken).ConfigureAwait(false);
+            fallbackReason, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AiCapabilityProbeResult> ProbeAsync(
@@ -83,9 +95,10 @@ internal sealed class GeminiTaskRoutingClient(
                 cancellationToken).ConfigureAwait(false);
             if (primary.State != "passed")
             {
-                if (primary.SafeErrorCode != "gemini_rate_limited") return primary;
-                await cooldowns.RecordAsync(key, primary.RetryAfter,
-                    cancellationToken).ConfigureAwait(false);
+                if (primary.SafeErrorCode == "gemini_rate_limited")
+                    await cooldowns.RecordAsync(key, primary.RetryAfter,
+                        cancellationToken).ConfigureAwait(false);
+                else if (primary.HttpStatusCode != 503) return primary;
             }
         }
         // Lite must pass the same image/JSON capability check. The default
@@ -100,6 +113,11 @@ internal sealed class GeminiTaskRoutingClient(
         AiProviderRequest request, string reason, CancellationToken token)
     {
         var settings = connection with { ModelId = AiProviderCatalog.GeminiLightModelId };
+        // Template extraction requires an independent slot inventory as well
+        // as structured questions. Give the smaller fallback model its highest
+        // supported reasoning level without splitting the page request.
+        if (request.TaskType == AiTaskTypes.TemplateExtraction)
+            request = request with { ThinkingLevel = "HIGH" };
         var response = await direct.GenerateAsync(settings, credential, request, token)
             .ConfigureAwait(false);
         AiResponseMetadataValidator.Validate(response, Provider, settings.ModelId);

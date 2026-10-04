@@ -43,6 +43,7 @@ internal static class AiResponseMetadataValidator
         && selectedModel == AiProviderCatalog.GeminiDefaultModelId
         && response.ModelRoutingReason is GeminiTaskRoutingClient.LightTaskReason
             or GeminiTaskRoutingClient.QuotaReason
+            or GeminiTaskRoutingClient.ServiceReason
         && IsAcceptedActualModel(response.ActualModel, provider,
             AiProviderCatalog.GeminiLightModelId)
         && response.ActualModel is not null;

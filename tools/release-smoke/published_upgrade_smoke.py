@@ -1,6 +1,6 @@
 """Isolated Windows published-binary upgrade smoke; never controls a service.
 
-Use prepare with a 0.9.14 package, then finish with 0.9.16 against the same
+Use prepare with a 0.9.14 package, then finish with 0.9.17 against the same
 explicit private work directory. OOKI_GEMINI_API_KEY is read from process memory
 only. Evidence contains synthetic records, safe status codes, and file hashes.
 This exercises application startup/migration, not the elevated updater UI.
@@ -76,10 +76,11 @@ def write_json(path: Path, value):
 
 
 class Host:
-    def __init__(self, package: Path, work: Path, label: str):
+    def __init__(self, package: Path, work: Path, label: str, semantic=False):
         self.package = package.resolve()
         self.work = work.resolve()
         self.label = label
+        self.semantic = semantic
         self.process = None
         self.log = None
         self.http = HttpSession()
@@ -113,7 +114,7 @@ class Host:
             "Features__Ai.GeminiDirect": "true",
             "Features__Ai.OpenRouter": "false",
             "Features__Ai.TemplateGeneration": "true",
-            "Features__Grading.Semantic": "false",
+            "Features__Grading.Semantic": str(self.semantic).lower(),
             "SchoolManagerAutomation__Enabled": "false",
         })
         self.log = (self.work / f"{self.label}-host.log").open("wb")
@@ -363,6 +364,72 @@ def generate_client_template(host: Host, client_pdf: Path):
     return summary
 
 
+def grade_fixtures(host: Host, fixtures: Path):
+    """Actual preprocessing, identity assignment, grading worker and result API."""
+    title = "配布版AI採点の検証 " + str(uuid.uuid4())[:8]
+    template = host.json("POST", "/api/v1/templates", {
+        "title": title, "subject": "社会", "gradeLabel": "中1", "defaultPointsMilli": 1000,
+    })
+    tid = template["id"]
+    version = host.json("POST", f"/api/v1/templates/{tid}/versions", {})
+    vid = version["id"]
+    uploaded = host.upload(fixtures / "asia-check-test-blank.pdf", "templateSource")
+    host.json("POST", f"/api/v1/templates/{tid}/versions/{vid}/sources", {
+        "uploadId": uploaded["uploadId"], "sourceRole": "blankTest", "displayName": "架空の検証教材",
+    })
+    questions = [
+        ("日本の首都を漢字で書きなさい。", ["東京", "東京都"], 8000),
+        ("ASEAN（アセアン）を日本語で何というか。", ["東南アジア諸国連合"], 10000),
+        ("インドで最も多くの人が信仰している宗教を書きなさい。", ["ヒンドゥー教"], 8000),
+    ]
+    for i, (text, answers, points) in enumerate(questions, 1):
+        host.json("POST", f"/api/v1/templates/{tid}/versions/{vid}/questions", {
+            "displayLabel": str(i), "order": i, "questionText": text,
+            "questionType": "exact_short_text", "gradingMode": "transcribe_then_rules",
+            "maxPointsMilli": points, "pointIncrementMilli": 1000,
+            "allowNonKanji": True, "teacherVerified": True, "requiresReviewAlways": False,
+            "canonicalAnswer": answers[0], "answerProvenance": "teacher_entered",
+            "requiresCompleteAnswer": True,
+            "acceptedAnswers": [{"text": a, "variantType": "canonical" if n == 0 else "equivalent",
+                "provenance": "teacher_entered", "teacherVerified": True} for n, a in enumerate(answers)],
+        })
+    current = host.api("GET", f"/api/v1/templates/{tid}/versions/{vid}")
+    published = host.json("POST", f"/api/v1/templates/{tid}/versions/{vid}:publish", {
+        "revision": current.json()["revision"], "testDate": "2026-10-04", "classLabel": "検証",
+    }, extra={"If-Match": current.headers["ETag"]})
+    sid = published["testSession"]["id"]
+    evidence = []
+    for filename, number, family, given, expected in [
+        ("asia-check-test-hanako.pdf", "S-001", "桜井", "花子", [8000, 10000, 8000]),
+        ("asia-check-test-yuta.pdf", "S-002", "田中", "悠太", [8000, 0, 0]),
+        ("asia-check-test-blank.pdf", "EMPTY-001", "空欄", "検証", [0, 0, 0]),
+    ]:
+        student = host.json("POST", "/api/v1/students", {
+            "studentNumber": number, "familyName": family, "givenName": given,
+            "displayName": family + " " + given, "notes": "架空の採点検証。配信しない。",
+        })
+        uploaded = host.upload(fixtures / filename, "completedTest", sid)
+        sub = uploaded["submissionId"]
+        wait_json(host, f"/api/v1/submissions/{sub}", lambda x: x.get("processingState") != "preprocessing")
+        current = host.api("GET", f"/api/v1/submissions/{sub}")
+        host.json("POST", f"/api/v1/submissions/{sub}:assignStudent", {
+            "studentId": student["id"], "sourceRevision": current.json()["revision"],
+            "reasonCode": "teacher_confirmed", "note": "架空の検証答案",
+        }, extra={"If-Match": current.headers["ETag"]})
+        workspace = wait_json(host, f"/api/v1/submissions/{sub}/grading-workspace",
+            lambda x: len(x.get("results", [])) == 3, timeout=430)
+        write_json(host.work / (filename + ".grading.json"), workspace)
+        actual = [r["awardedPointsMilli"] for r in workspace["results"]]
+        assert actual == expected, {"fixture": filename, "actual": actual, "expected": expected}
+        db = sqlite3.connect(f"file:{(host.work/'data/ooki-grader.db').as_posix()}?mode=ro", uri=True)
+        model = db.execute("SELECT model FROM grading_run WHERE id=?", (workspace["gradingRun"]["id"],)).fetchone()[0]
+        db.close()
+        assert model in ("gemini-3.8-flash", "gemini-3.5-flash-lite"), model
+        evidence.append({"fixture": filename, "model": model, "questionCount": 3,
+                         "awardedPointsMilli": actual, "state": "passed"})
+    return evidence
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase",choices=("prepare","finish"))
@@ -371,6 +438,7 @@ def main():
     parser.add_argument("--recheck",action="store_true",help="Run one real capability recheck if startup probe is blocked")
     parser.add_argument("--client-pdf",type=Path,help="After retention checks, run the production other/fillBlank template worker")
     parser.add_argument("--expected-question-count",type=int,help="Require exact persisted question count from independently counted answer slots")
+    parser.add_argument("--grading-fixtures",type=Path,help="Opt-in real grading of synthetic correct, incorrect and blank PDFs")
     args = parser.parse_args()
     work = args.work.resolve()
     assert work != Path(os.environ.get("ProgramData","C:/ProgramData")).resolve()
@@ -389,7 +457,7 @@ def main():
         print(json.dumps({"phase":"prepare","state":"passed","syntheticFinalizedResults":1,"originalAndReportPdfStored":True}))
     else:
         data = json.loads(state.read_text(encoding="utf-8"))
-        with Host(args.package,work,"new-0.9.16") as host:
+        with Host(args.package,work,"new-0.9.17", semantic=bool(args.grading_fixtures)) as host:
             host.login()
             after = snapshot(host,data["ids"])
             startup_probe = after["connection"].get("lastCapabilityProbe")
@@ -412,7 +480,7 @@ def main():
             profiles = after["profiles"].get("items",[])
             checks["fourProfilesSelectModel"] = len(profiles)==4 and all(p["modelId"]==EXPECTED_MODEL for p in profiles)
             db = sqlite3.connect(f"file:{(work/'data/ooki-grader.db').as_posix()}?mode=ro",uri=True)
-            migration_count = db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_16'").fetchone()[0]
+            migration_count = db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_17'").fetchone()[0]
             db.close()
             checks["migrationRecordedOnce"] = migration_count == 1
             evidence = {"state":"passed" if all(checks.values()) else "failed", "checks":checks,"after":after,
@@ -430,13 +498,16 @@ def main():
                 if args.expected_question_count is not None:
                     assert client_generation["questionCount"] == args.expected_question_count, client_generation
                     assert client_generation["persistedDraftQuestionCount"] == args.expected_question_count, client_generation
+            if args.grading_fixtures:
+                evidence["publishedAiGrading"] = grade_fixtures(host, args.grading_fixtures)
+                write_json(work/"upgrade-result.json",evidence)
         # A second new-binary startup must not repeat the one-time migration.
-        with Host(args.package,work,"new-restart-0.9.16") as host:
+        with Host(args.package,work,"new-restart-0.9.17") as host:
             host.login()
             again = snapshot(host,data["ids"])
             assert again["connection"]["modelId"]==EXPECTED_MODEL
         db=sqlite3.connect(f"file:{(work/'data/ooki-grader.db').as_posix()}?mode=ro",uri=True)
-        count=db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_16'").fetchone()[0]
+        count=db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_17'").fetchone()[0]
         db.close()
         assert count==1
         evidence["checks"]["secondStartupDoesNotRepeatMigration"]=True
@@ -445,7 +516,8 @@ def main():
                           "capabilityProbe":after["connection"].get("lastCapabilityProbe"),
                           "connectionState":after["connection"].get("state"),
                           "activeProfiles":sum(bool(p.get("active")) for p in profiles),"profiles":len(profiles),
-                          "clientTemplateGeneration":evidence.get("clientTemplateGeneration")}))
+                          "clientTemplateGeneration":evidence.get("clientTemplateGeneration"),
+                          "publishedAiGrading": evidence.get("publishedAiGrading")}))
 
 
 if __name__ == "__main__":

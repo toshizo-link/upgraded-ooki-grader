@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
 using OokiGrader.Ai.Abstractions;
 using OokiGrader.Ai.Gemini;
 using OokiGrader.Domain.Templates;
@@ -49,6 +50,7 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
     {
         var key = await ReadCredentialAsync();
         var path = Environment.GetEnvironmentVariable("OOKI_RELEASE_TEST_PDF")!;
+        var routingDirectory = Path.Combine(Path.GetTempPath(), "ooki-live-pdf-routing-" + Guid.NewGuid().ToString("N"));
         try
         {
             await using var source = File.OpenRead(path);
@@ -76,10 +78,17 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
                 requestKey, unitId, profile, rotationsWereApplied: false);
             var connection = new AiConnectionSettings(
                 "release-acceptance", AiProviders.GeminiDirect,
-                AiProviderCatalog.GeminiBaseAddress, "gemini-3.8-flash",
+                AiProviderCatalog.GeminiBaseAddress,
+                Environment.GetEnvironmentVariable("OOKI_RELEASE_MODEL") ?? "gemini-3.8-flash",
                 TimeSpan.FromMinutes(5));
-            using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-            var client = new GeminiDirectClient(http);
+            var injectedFailures = int.TryParse(Environment.GetEnvironmentVariable("OOKI_RELEASE_INJECT_503"),
+                out var injected) ? injected : 0;
+            Assert.InRange(injectedFailures, 0, 3);
+            var injectQuota = Environment.GetEnvironmentVariable("OOKI_RELEASE_INJECT_429") == "1";
+            using var handler = new ServiceUnavailableInjectionHandler(injectedFailures, injectQuota);
+            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            var client = new GeminiTaskRoutingClient(new GeminiDirectClient(http),
+                new GeminiQuotaCooldownStore(routingDirectory, TimeProvider.System));
             IReadOnlyList<AiMediaPart> providerMedia =
                 [new AiMediaPart("application/pdf", media.Bytes, media.Sha256)];
             if (Environment.GetEnvironmentVariable("OOKI_RELEASE_RASTER_PDF") == "1")
@@ -100,7 +109,11 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
                     bundle.ResponseJsonSchema,
                     providerMedia,
                     MaxOutputTokens: 65_536,
-                    ThinkingLevel: "MEDIUM"));
+                    ThinkingLevel: Environment.GetEnvironmentVariable("OOKI_RELEASE_THINKING") ?? "MEDIUM"));
+            AiResponseMetadataValidator.Validate(response, connection.ModelId);
+            // Optional private diagnostic artifact, never part of a release.
+            if (Environment.GetEnvironmentVariable("OOKI_RELEASE_RESPONSE_PATH") is { Length: > 0 } responsePath)
+                await File.WriteAllTextAsync(responsePath, response.StructuredOutput.GetRawText());
             var extraction = OrientationGatedTemplateExtractionValidator.Validate(
                 response.StructuredOutput, requestKey, instruction.Pages,
                 new Dictionary<string, TemplateExtractionSourceEvidence>
@@ -118,18 +131,35 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
             }
             Assert.DoesNotContain(extraction.Extraction.ReviewIssues,
                 issue => issue.Blocking);
+            if (Environment.GetEnvironmentVariable("OOKI_RELEASE_EXPECTED_ANSWERS_PATH") is { Length: > 0 } expectedPath)
+            {
+                var expected = System.Text.Json.JsonSerializer.Deserialize<string[]>(await File.ReadAllTextAsync(expectedPath))!;
+                var actual = extraction.Extraction.Pages.SelectMany(page => page.Questions)
+                    .Select(question => question.ExpectedAnswer).ToArray();
+                Assert.Equal(expected, actual);
+                output.WriteLine($"IndependentlyReviewedModelAnswers={expected.Length}; orderAndScript=passed");
+            }
+            Assert.Equal(injectedFailures, handler.InjectedCount);
+            if (injectedFailures == 3 || injectQuota)
+            {
+                Assert.Equal(AiProviderCatalog.GeminiLightModelId, response.ActualModel);
+                Assert.Equal(injectQuota ? GeminiTaskRoutingClient.QuotaReason : GeminiTaskRoutingClient.ServiceReason,
+                    response.ModelRoutingReason);
+            }
             output.WriteLine($"Model={connection.ModelId}; pages={pageCount}; questions={count}; "
                 + $"finish={response.FinishReason}; totalTokens={response.Usage.TotalTokens}; "
-                + "productionValidation=passed");
+                + $"actualModel={response.ActualModel}; route={response.ModelRoutingReason}; "
+                + $"injected503={handler.InjectedCount}; injected429={handler.QuotaCount}; productionValidation=passed");
             CryptographicOperations.ZeroMemory(media.Bytes);
         }
         catch (AiProviderException exception)
         {
-            Assert.Fail($"Provider failure: {exception.Kind}; {exception.SafeErrorCode}");
+            Assert.Fail($"Provider failure: {exception.Kind}; {exception.SafeErrorCode}; HTTP={exception.HttpStatusCode}");
         }
         finally
         {
             CryptographicOperations.ZeroMemory(key);
+            if (Directory.Exists(routingDirectory)) Directory.Delete(routingDirectory, true);
         }
     }
 
@@ -157,5 +187,27 @@ public sealed class Gemini38ReleaseLiveTests(ITestOutputHelper output)
         using var secret = await store.ReadAsync(new AiSecretReference(
             Environment.GetEnvironmentVariable("OOKI_ROUTING_SECRET_REFERENCE")!));
         return secret.Utf8Bytes.ToArray();
+    }
+
+    private sealed class ServiceUnavailableInjectionHandler(int failureCount, bool injectQuota)
+        : DelegatingHandler(new HttpClientHandler())
+    {
+        public int InjectedCount { get; private set; }
+        public int QuotaCount { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            var primary = request.RequestUri!.AbsolutePath.Contains("/models/gemini-3.8-flash:");
+            if (primary && injectQuota)
+            {
+                QuotaCount++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+            }
+            if (primary && InjectedCount < failureCount)
+            {
+                InjectedCount++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            }
+            return base.SendAsync(request, token);
+        }
     }
 }

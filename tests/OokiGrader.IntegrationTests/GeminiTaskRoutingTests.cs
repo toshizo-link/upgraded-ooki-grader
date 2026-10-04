@@ -83,7 +83,6 @@ public sealed class GeminiTaskRoutingTests : IDisposable
     [InlineData(401)]
     [InlineData(403)]
     [InlineData(404)]
-    [InlineData(503)]
     public async Task OtherFailuresDoNotSendTheWorkAgain(int status)
     {
         await Assert.ThrowsAsync<AiProviderException>(() => Client(_ => new HttpResponseMessage(
@@ -134,7 +133,60 @@ public sealed class GeminiTaskRoutingTests : IDisposable
             var body = await message.Content!.ReadAsStringAsync();
             lock (_sent) _sent.Add((model, body));
             return answer(model);
-        }))), new GeminiQuotaCooldownStore(_directory, _clock));
+        })), (_, _) => Task.CompletedTask), new GeminiQuotaCooldownStore(_directory, _clock));
+
+    [Fact]
+    public async Task ServiceFailureRetriesThenUsesLiteWithoutTreatingItAsQuota()
+    {
+        var client = Client(model => model == AiProviderCatalog.GeminiDefaultModelId
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Success());
+        var response = await client.GenerateAsync(Connection, Credential, Request(AiTaskTypes.InitialGrading));
+        Assert.Equal(4, _sent.Count);
+        Assert.All(_sent.Take(3), item => Assert.Equal(AiProviderCatalog.GeminiDefaultModelId, item.Model));
+        Assert.Equal(AiProviderCatalog.GeminiLightModelId, _sent[3].Model);
+        Assert.Equal(_sent[0].Body, _sent[3].Body);
+        Assert.Equal(GeminiTaskRoutingClient.ServiceReason, response.ModelRoutingReason);
+        Assert.True(AiResponseMetadataValidator.IsAccepted(response));
+        Assert.False(Directory.Exists(_directory));
+        await client.GenerateAsync(Connection, Credential, Request(AiTaskTypes.Adjudication));
+        Assert.Equal(AiProviderCatalog.GeminiDefaultModelId, _sent[4].Model);
+    }
+
+    [Fact]
+    public async Task BothModelsUnavailableFailBoundedlyWithoutAcceptingFabricatedResults()
+    {
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => Client(_ =>
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)).GenerateAsync(Connection,
+                Credential, Request(AiTaskTypes.InitialGrading)));
+        Assert.Equal(503, exception.HttpStatusCode);
+        Assert.Equal(6, _sent.Count);
+        Assert.False(Directory.Exists(_directory));
+    }
+
+    [Fact]
+    public async Task RepeatedServiceFailureCanProbeLiteButLiteMustActuallyPass()
+    {
+        var probe = await Client(model => model == AiProviderCatalog.GeminiDefaultModelId
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Success()).ProbeAsync(Connection, Credential);
+        Assert.Equal("passed", probe.State);
+        Assert.Equal(4, _sent.Count);
+        Assert.False(Directory.Exists(_directory));
+    }
+
+    [Fact]
+    public async Task QuotaFallbackPreservesTemplatePagesAndUsesHigherLiteReasoning()
+    {
+        await Client(model => model == AiProviderCatalog.GeminiDefaultModelId ? Quota("60s") : Success())
+            .GenerateAsync(Connection, Credential, Request(AiTaskTypes.TemplateExtraction));
+        using var before = JsonDocument.Parse(_sent[0].Body);
+        using var after = JsonDocument.Parse(_sent[1].Body);
+        Assert.Equal(before.RootElement.GetProperty("contents").GetRawText(),
+            after.RootElement.GetProperty("contents").GetRawText());
+        Assert.Equal(before.RootElement.GetProperty("generationConfig").GetProperty("responseJsonSchema").GetRawText(),
+            after.RootElement.GetProperty("generationConfig").GetProperty("responseJsonSchema").GetRawText());
+        Assert.Equal("HIGH", after.RootElement.GetProperty("generationConfig")
+            .GetProperty("thinkingConfig").GetProperty("thinkingLevel").GetString());
+    }
 
     [Fact]
     public async Task CapabilityProbeVerifiesLiteAndRemainsUsableDuringPrimaryQuotaCooldown()

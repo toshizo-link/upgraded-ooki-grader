@@ -10,7 +10,9 @@ using OokiGrader.Ai.Abstractions;
 
 namespace OokiGrader.Ai.Gemini;
 
-public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProviderClient
+public sealed partial class GeminiDirectClient(
+    HttpClient httpClient,
+    Func<TimeSpan, CancellationToken, Task>? retryDelay = null) : IAiProviderClient
 {
     private const int MaximumInlineRequestBytes = 18 * 1024 * 1024;
     private const int MaximumResponseBytes = 8 * 1024 * 1024;
@@ -26,6 +28,47 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
     public string Provider => AiProviders.GeminiDirect;
 
     public async Task<AiProviderResponse> GenerateAsync(
+        AiConnectionSettings connection,
+        ReadOnlyMemory<byte> credentialUtf8,
+        AiProviderRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateConnection(connection);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(connection.Timeout);
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    var response = await GenerateOnceAsync(connection, credentialUtf8,
+                        request, deadline.Token).ConfigureAwait(false);
+                    return response with { Latency = Stopwatch.GetElapsedTime(started) };
+                }
+                catch (AiProviderException exception) when (attempt < 2
+                    && exception.Kind == AiFailureKind.TransientProvider
+                    && exception.HttpStatusCode == 503)
+                {
+                    // A completed HTTP 503 is an explicit failed response. A
+                    // timeout/network loss has an unknown outcome and is never
+                    // resent here. Preserve all pages, schema and request key.
+                    var seconds = Math.Clamp(exception.RetryAfter?.TotalSeconds
+                        ?? Math.Pow(2, attempt), 0.1, 5);
+                    var delay = TimeSpan.FromSeconds(seconds + Random.Shared.NextDouble() * 0.25);
+                    await (retryDelay ?? Task.Delay)(delay, deadline.Token).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new AiProviderException(AiFailureKind.Timeout, "gemini_timeout",
+                isTransient: true, innerException: exception);
+        }
+    }
+
+    private async Task<AiProviderResponse> GenerateOnceAsync(
         AiConnectionSettings connection,
         ReadOnlyMemory<byte> credentialUtf8,
         AiProviderRequest request,
@@ -195,7 +238,8 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                 State: "failed",
                 SafeErrorCode: exception.SafeErrorCode,
                 Latency: null,
-                RetryAfter: exception.RetryAfter);
+                RetryAfter: exception.RetryAfter,
+                HttpStatusCode: exception.HttpStatusCode);
         }
     }
 
@@ -490,7 +534,8 @@ public sealed partial class GeminiDirectClient(HttpClient httpClient) : IAiProvi
                     AiFailureKind.TransientProvider,
                     "gemini_provider_unavailable",
                     isTransient: true,
-                    retryAfter),
+                    retryAfter,
+                    httpStatusCode: (int)response.StatusCode),
             _ => Failure(
                 AiFailureKind.RequestRejected,
                 $"gemini_http_{((int)response.StatusCode).ToString(CultureInfo.InvariantCulture)}",

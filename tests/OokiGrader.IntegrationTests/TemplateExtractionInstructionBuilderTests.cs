@@ -10,7 +10,7 @@ public sealed class TemplateExtractionInstructionBuilderTests
     [InlineData(TestType.Step, null, TemplatePromptSystem.Standard, "system-1-standard-v2")]
     [InlineData(TestType.ClassPlacement, null, TemplatePromptSystem.ClassPlacement, "system-2-class-placement-v1")]
     [InlineData(TestType.Other, AnswerStyle.Normal, TemplatePromptSystem.Standard, "system-1-standard-v2")]
-    [InlineData(TestType.Other, AnswerStyle.FillBlank, TemplatePromptSystem.FillBlank, "system-3-fill-blank-v1")]
+    [InlineData(TestType.Other, AnswerStyle.FillBlank, TemplatePromptSystem.FillBlank, "system-3-fill-blank-v2")]
     public void SelectsOnlyServerRoutedPromptFragment(
         TestType testType,
         AnswerStyle? answerStyle,
@@ -26,7 +26,7 @@ public sealed class TemplateExtractionInstructionBuilderTests
             rotationsWereApplied: false);
 
         Assert.Contains("orientation-gate-v1", built.UserInstruction);
-        Assert.Contains("common-extraction-core-v3", built.UserInstruction);
+        Assert.Contains("common-extraction-core-v4", built.UserInstruction);
         Assert.Contains(expectedFragment, built.UserInstruction);
         Assert.Contains("paper-name-and-grade-v1", built.UserInstruction);
         Assert.Contains(

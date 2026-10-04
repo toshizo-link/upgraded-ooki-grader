@@ -207,7 +207,8 @@ public sealed record AiCapabilityProbeResult(
     string State,
     string? SafeErrorCode,
     TimeSpan? Latency,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null,
+    int? HttpStatusCode = null);
 
 public interface IAiProviderClient
 {

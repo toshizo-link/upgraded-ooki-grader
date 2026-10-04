@@ -10,6 +10,85 @@ namespace OokiGrader.ProviderContract.Tests;
 
 public sealed class GeminiDirectClientTests
 {
+    [Fact]
+    public async Task Explicit503IsRetriedWithIdenticalPayloadThenReturnsOnlySuccessfulUsage()
+    {
+        var bodies = new List<string>();
+        var delays = new List<TimeSpan>();
+        var client = new GeminiDirectClient(new HttpClient(new DelegateHandler(async (message, token) =>
+        {
+            bodies.Add(await message.Content!.ReadAsStringAsync(token));
+            return bodies.Count < 3 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : JsonResponse("""{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"ok\":true}"}]}}],"usageMetadata":{"totalTokenCount":321}}""");
+        })), (delay, _) => { delays.Add(delay); return Task.CompletedTask; });
+        var response = await client.GenerateAsync(Connection(), Encoding.UTF8.GetBytes("test-key"), RetryRequest());
+        Assert.Equal(3, bodies.Count);
+        Assert.All(bodies, body => Assert.Equal(bodies[0], body));
+        Assert.Equal(2, delays.Count);
+        Assert.InRange(delays[0].TotalSeconds, 1, 1.25);
+        Assert.InRange(delays[1].TotalSeconds, 2, 2.25);
+        Assert.Equal(321, response.Usage.TotalTokens);
+    }
+
+    [Theory]
+    [InlineData(503, 3)]
+    [InlineData(429, 1)]
+    [InlineData(403, 1)]
+    [InlineData(400, 1)]
+    public async Task RetryCountIsBoundedAndPermanentFailuresAreNotResent(int status, int expectedCalls)
+    {
+        var calls = 0;
+        var client = new GeminiDirectClient(new HttpClient(new DelegateHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage((HttpStatusCode)status));
+        })), (_, _) => Task.CompletedTask);
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => client.GenerateAsync(
+            Connection(), Encoding.UTF8.GetBytes("test-key"), RetryRequest()));
+        Assert.Equal(expectedCalls, calls);
+        if (status == 503) Assert.Equal(503, exception.HttpStatusCode);
+    }
+
+    [Fact]
+    public async Task CancellationDuringRetryDelayPreventsAnotherSend()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var calls = 0;
+        var client = new GeminiDirectClient(new HttpClient(new DelegateHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        })), (_, token) => { cancellation.Cancel(); return Task.FromCanceled(token); });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GenerateAsync(
+            Connection(), Encoding.UTF8.GetBytes("test-key"), RetryRequest(), cancellation.Token));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task NetworkOutcomeUnknownIsNeverResent()
+    {
+        var calls = 0;
+        var client = new GeminiDirectClient(new HttpClient(new DelegateHandler((_, _) =>
+        {
+            calls++;
+            throw new HttpRequestException("synthetic network interruption");
+        })), (_, _) => Task.CompletedTask);
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => client.GenerateAsync(
+            Connection(), Encoding.UTF8.GetBytes("test-key"), RetryRequest()));
+        Assert.Equal("gemini_network_error", exception.SafeErrorCode);
+        Assert.Equal(1, calls);
+    }
+
+    private static AiProviderRequest RetryRequest()
+    {
+        using var schema = JsonDocument.Parse("""{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}""");
+        var bytes = new byte[] { 1, 2, 3 };
+        return new("same-retry-key", AiTaskTypes.TemplateExtraction, "v1", "v1", "system", "all supplied pages",
+            schema.RootElement.Clone(), [new AiMediaPart("image/png", bytes,
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant())],
+            ThinkingLevel: "MEDIUM");
+    }
+
     [Theory]
     [InlineData("gemini-3.8-flash", "MINIMAL", "LOW")]
     [InlineData("gemini-3.8-flash-001", "MINIMAL", "LOW")]
