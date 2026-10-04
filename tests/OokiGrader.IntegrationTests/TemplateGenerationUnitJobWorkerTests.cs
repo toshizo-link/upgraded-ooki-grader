@@ -23,6 +23,26 @@ namespace OokiGrader.IntegrationTests;
 public sealed class TemplateGenerationUnitJobWorkerTests
 {
     [Fact]
+    public void LargeJapaneseReconciliationFeedbackRemainsValidAndWithinProviderInputLimit()
+    {
+        var questions = Enumerable.Range(1, 62).Select(index => new ValidatedTemplateQuestion(
+            $"slot-{index}", "source", 1, $"問{index}", new string('日', 3000), index, 1,
+            false, true, "exact_short_text", new string('答', 600), "provided_model_answer",
+            new TemplateExtractionAnswerSource("source", 1), [], 1000, false, false, false,
+            false, 1, [], [new TemplateExtractionReviewIssue("question.filled_answer_removal_unconfirmed", "確認", true)]))
+            .ToArray();
+        var candidate = new ValidatedTemplateExtraction(
+            new ValidatedTemplateMetadata(null, null, null, null, null, 1, []),
+            [new ValidatedTemplatePage("source", 1, 62, questions)], [], [], 62000);
+        var feedback = TemplateGenerationUnitJobWorker.CreateReconciliationFeedback(candidate, candidate);
+        Assert.True(feedback.Length <= 60000);
+        using var json = JsonDocument.Parse(feedback);
+        Assert.True(json.RootElement.GetProperty("detailed_prior_output_omitted").GetBoolean());
+        Assert.Equal(62, json.RootElement.GetProperty("first")[0].GetProperty("extracted_slots").GetInt32());
+        Assert.Equal(62, json.RootElement.GetProperty("independent")[0].GetProperty("DetectedAnswerSlotCount").GetInt32());
+    }
+
+    [Fact]
     public async Task DenseFillBlankInventoryIsIndependentlyAudited()
     {
         await using var fixture = await WorkerFixture.CreateAsync(ProviderAction.Embedded, ProviderAction.Embedded);
