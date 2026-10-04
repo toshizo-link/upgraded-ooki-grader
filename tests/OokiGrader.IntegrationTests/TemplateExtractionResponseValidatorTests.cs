@@ -10,6 +10,31 @@ public sealed class TemplateExtractionResponseValidatorTests
     private const string MultiBlankText =
         "鏡にあたる前の光を入射光線、［　］したあとの光を［　］光線という。";
 
+    [Theory]
+    [InlineData("（　）")]
+    [InlineData("(  )")]
+    [InlineData("（＿＿）")]
+    public void EmptyAnswerParenthesesNormalizeWithoutChangingFigureReferences(string blank)
+    {
+        var validated = Validate(1, CreateQuestion("slot-1", "1", 1,
+            "（図）の光は" + blank + "する。(1)を参照。", "反射"));
+        var question = Assert.Single(Assert.Single(validated.Pages).Questions);
+        Assert.Equal("（図）の光は［　］する。(1)を参照。", question.QuestionText);
+        Assert.DoesNotContain(question.ReviewIssues, issue => issue.Blocking);
+        Assert.Equal("反射", question.ExpectedAnswer);
+    }
+
+    [Fact]
+    public void FilledProseParenthesesNeverBecomeAnUnambiguousEmptyAnswer()
+    {
+        var validated = Validate(1, CreateQuestion("slot-1", "1", 1,
+            "（図）の光は（反射）する。(1)を参照。", "反射"));
+        var question = Assert.Single(Assert.Single(validated.Pages).Questions);
+        Assert.Equal("（図）の光は（反射）する。(1)を参照。", question.QuestionText);
+        Assert.Contains(question.ReviewIssues, issue => issue.Blocking
+            && issue.Code == "question.fill_blank_placeholder_invalid");
+    }
+
     [Fact]
     public void IdenticalAdjacentQuestionsMapPlaceholderBySlotOrdinal()
     {

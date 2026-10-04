@@ -327,7 +327,7 @@ def snapshot(host: Host, ids):
             "credentialMetadata":credential_metadata}
 
 
-def generate_client_template(host: Host, client_pdf: Path):
+def generate_client_template(host: Host, client_pdf: Path, expected_answers: Path | None = None):
     """Run the production batch/unit worker against the client's supplied PDF."""
     source = host.upload(client_pdf.resolve(), "templateSource")
     batch = host.json("POST", "/api/v1/template-generation-batches", {
@@ -361,6 +361,11 @@ def generate_client_template(host: Host, client_pdf: Path):
         "blockingExtractionReviewIssues":sum(bool(i.get("blocking")) for i in issues),
         "persistedDraftQuestionCount":sum(len(p["questions"]) for d in drafts for p in d["pages"]),
     }
+    if expected_answers:
+        expected = json.loads(expected_answers.read_text(encoding="utf-8"))
+        actual = [q.get("expectedAnswer") for d in drafts for p in d["pages"] for q in p["questions"]]
+        summary["modelAnswersMatchOriginalInOrder"] = actual == expected
+        assert actual == expected, "Persisted model answers differ from the independently reviewed original"
     return summary
 
 
@@ -439,6 +444,7 @@ def main():
     parser.add_argument("--client-pdf",type=Path,help="After retention checks, run the production other/fillBlank template worker")
     parser.add_argument("--expected-question-count",type=int,help="Require exact persisted question count from independently counted answer slots")
     parser.add_argument("--grading-fixtures",type=Path,help="Opt-in real grading of synthetic correct, incorrect and blank PDFs")
+    parser.add_argument("--expected-answers",type=Path,help="Private JSON array of independently reviewed source answers in order")
     args = parser.parse_args()
     work = args.work.resolve()
     assert work != Path(os.environ.get("ProgramData","C:/ProgramData")).resolve()
@@ -490,7 +496,7 @@ def main():
             assert all(checks.values()), checks
             if args.client_pdf:
                 assert after["connection"].get("state") == "active", "Live template generation requires successful capability probe"
-                client_generation = generate_client_template(host,args.client_pdf)
+                client_generation = generate_client_template(host,args.client_pdf,args.expected_answers)
                 evidence["clientTemplateGeneration"] = client_generation
                 write_json(work/"upgrade-result.json",evidence)
                 assert client_generation["allUnitsExtracted"] and client_generation["questionCount"] > 0, client_generation

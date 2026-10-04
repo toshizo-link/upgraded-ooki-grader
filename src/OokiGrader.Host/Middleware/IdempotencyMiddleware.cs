@@ -147,8 +147,14 @@ public sealed class IdempotencyMiddleware(
             }
         }
 
+        // Kestrel forbids even a zero-byte write for a no-content response.
+        // Preserve 204/205 semantics on both first delivery and replay.
+        if (context.Response.StatusCode is StatusCodes.Status204NoContent
+            or StatusCodes.Status205ResetContent or StatusCodes.Status304NotModified)
+            return;
         context.Response.ContentLength = responseBytes.Length;
-        await originalBody.WriteAsync(responseBytes, context.RequestAborted);
+        if (responseBytes.Length > 0)
+            await originalBody.WriteAsync(responseBytes, context.RequestAborted);
     }
 
     private static bool IsEligible(HttpContext context) =>

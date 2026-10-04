@@ -152,6 +152,9 @@ internal static class TemplateExtractionInstructionBuilder
         repeat the same hierarchy path for several slots or put every section
         under the flat-paper fallback label "設問". If the blanks already have
         printed child labels, preserve those labels instead of synthesizing them.
+        In question_text, render only the target blank as the canonical token
+        ［　］. Retain surrounding prose and enough context to locate that target;
+        do not replace other slots in the same context with additional blanks.
         """;
 
     private const string PaperMetadata =

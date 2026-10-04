@@ -1030,7 +1030,7 @@ internal static class TemplateExtractionResponseValidator
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value!.Trim())
             .ToHashSet(StringComparer.Ordinal);
-        var bracketSpans = FindSquareBracketSpans(questionText);
+        var bracketSpans = FindSquareBracketSpans(questionText, declaredFillBlank);
         var inferredFillBlank = declaredFillBlank
             || bracketSpans.Any(span =>
                 IsBlankSlotContent(span.Content)
@@ -1096,7 +1096,8 @@ internal static class TemplateExtractionResponseValidator
             CountOccurrences(normalized, CanonicalBlankToken));
     }
 
-    private static List<SquareBracketSpan> FindSquareBracketSpans(string value)
+    private static List<SquareBracketSpan> FindSquareBracketSpans(
+        string value, bool includeBlankParentheses = false)
     {
         var spans = new List<SquareBracketSpan>();
         for (var index = 0; index < value.Length; index++)
@@ -1106,6 +1107,8 @@ internal static class TemplateExtractionResponseValidator
                 '[' => ']',
                 '［' => '］',
                 '【' => '】',
+                '(' when includeBlankParentheses => ')',
+                '（' when includeBlankParentheses => '）',
                 _ => '\0',
             };
             if (close == '\0')
@@ -1118,6 +1121,13 @@ internal static class TemplateExtractionResponseValidator
             {
                 continue;
             }
+
+            // Only visibly empty answer parentheses are unambiguous. Preserve
+            // prose, figure references, printed numbers and filled parentheses;
+            // never treat those as answers merely because fill-blank is declared.
+            if (value[index] is '(' or '（'
+                && !IsBlankSlotContent(value[(index + 1)..closeIndex]))
+                continue;
 
             spans.Add(
                 new SquareBracketSpan(

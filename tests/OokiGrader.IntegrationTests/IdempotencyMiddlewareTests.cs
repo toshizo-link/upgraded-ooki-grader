@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -22,6 +24,55 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class IdempotencyMiddlewareTests
 {
+    [Fact]
+    public async Task NoContentDoesNotAttemptEvenAZeroByteStreamWrite()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new OokiGraderDbContext(new DbContextOptionsBuilder<OokiGraderDbContext>()
+            .UseSqlite(connection).Options);
+        await db.Database.EnsureCreatedAsync();
+        var context = new DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Path = "/api/v1/no-content";
+        context.Request.Headers["Idempotency-Key"] = Guid.NewGuid().ToString();
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "synthetic-idempotency-actor")], "test"));
+        await using var body = new RejectBodyWritesStream();
+        context.Response.Body = body;
+        var middleware = new IdempotencyMiddleware(c =>
+        {
+            c.Response.StatusCode = StatusCodes.Status204NoContent;
+            return Task.CompletedTask;
+        }, new IdempotencyLockProvider(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<IdempotencyMiddleware>.Instance);
+        await middleware.InvokeAsync(context, db, TimeProvider.System);
+        Assert.Equal(204, context.Response.StatusCode);
+        Assert.Null(context.Response.ContentLength);
+        Assert.Equal(1, await db.IdempotencyRecords.CountAsync());
+    }
+
+    private sealed class RejectBodyWritesStream : MemoryStream
+    {
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("A 204 response forbids all body writes.");
+    }
+
+    [Fact]
+    public async Task NoContentFirstResponseAndReplayWorkOnRealKestrelWithoutBodyWrites()
+    {
+        await using var application = await IdempotencyTestApplication.CreateAsync(useKestrel: true);
+        var key = Guid.NewGuid().ToString();
+        using var first = await application.PostAsync(key, "{}", "/api/v1/no-content");
+        using var replay = await application.PostAsync(key, "{}", "/api/v1/no-content");
+        Assert.Equal(HttpStatusCode.NoContent, first.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, replay.StatusCode);
+        Assert.Empty(await first.Content.ReadAsByteArrayAsync());
+        Assert.Empty(await replay.Content.ReadAsByteArrayAsync());
+        Assert.Equal("true", replay.Headers.GetValues("Idempotency-Replayed").Single());
+        Assert.Equal(1, application.Counter.Value);
+        Assert.Equal(1, await application.CountRecordsAsync());
+    }
     [Fact]
     public async Task SameKeyAndCanonicalJsonReplaysOriginalResponse()
     {
@@ -134,18 +185,22 @@ public sealed class IdempotencyMiddlewareTests
         private IdempotencyTestApplication(
             IHost host,
             SqliteConnection connection,
-            ActionCounter counter)
+            ActionCounter counter, bool useKestrel)
         {
             _host = host;
             _connection = connection;
             Counter = counter;
-            Client = host.GetTestClient();
+            Client = useKestrel ? new HttpClient
+            {
+                BaseAddress = new Uri(host.Services.GetRequiredService<IServer>()
+                    .Features.Get<IServerAddressesFeature>()!.Addresses.Single()),
+            } : host.GetTestClient();
         }
 
         public HttpClient Client { get; }
         public ActionCounter Counter { get; }
 
-        public static async Task<IdempotencyTestApplication> CreateAsync()
+        public static async Task<IdempotencyTestApplication> CreateAsync(bool useKestrel = false)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -154,7 +209,8 @@ public sealed class IdempotencyMiddlewareTests
                 .UseEnvironment(Environments.Development)
                 .ConfigureWebHost(webBuilder =>
                 {
-                    webBuilder.UseTestServer();
+                    if (useKestrel) webBuilder.UseKestrel(options => options.Listen(IPAddress.Loopback, 0));
+                    else webBuilder.UseTestServer();
                     webBuilder.ConfigureServices(services =>
                     {
                         services.AddRouting();
@@ -186,6 +242,11 @@ public sealed class IdempotencyMiddlewareTests
                         application.UseMiddleware<IdempotencyMiddleware>();
                         application.UseEndpoints(endpoints =>
                         {
+                            endpoints.MapPost("/api/v1/no-content", (ActionCounter actionCounter) =>
+                            {
+                                actionCounter.Increment();
+                                return Results.NoContent();
+                            }).RequireIdempotency();
                             endpoints.MapPost(
                                 "/api/v1/widgets",
                                 (HttpContext context, ActionCounter actionCounter) =>
@@ -228,7 +289,7 @@ public sealed class IdempotencyMiddlewareTests
             }
 
             await host.StartAsync();
-            return new IdempotencyTestApplication(host, connection, counter);
+            return new IdempotencyTestApplication(host, connection, counter, useKestrel);
         }
 
         public async Task<HttpResponseMessage> PostAsync(
