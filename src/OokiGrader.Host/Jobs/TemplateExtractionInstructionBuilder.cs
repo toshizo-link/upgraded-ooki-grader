@@ -19,7 +19,7 @@ internal sealed record BuiltTemplateExtractionInstruction(
 internal static class TemplateExtractionInstructionBuilder
 {
     public const string OrientationFragmentVersion = "orientation-gate-v1";
-    public const string CommonFragmentVersion = "common-extraction-core-v4";
+    public const string CommonFragmentVersion = "common-extraction-core-v5";
     public const string StandardFragmentVersion = "system-1-standard-v2";
     public const string ClassPlacementFragmentVersion =
         "system-2-class-placement-v1";
@@ -42,7 +42,7 @@ internal static class TemplateExtractionInstructionBuilder
 
     private const string CommonCore =
         """
-        COMMON EXTRACTION CORE (common-extraction-core-v4)
+        COMMON EXTRACTION CORE (common-extraction-core-v5)
         First inventory every physical curricular answer slot on each supplied
         primary page. Count each separate blank, underline, answer box and table
         answer cell once, including filled slots. Exclude name, student number,
@@ -74,9 +74,17 @@ internal static class TemplateExtractionInstructionBuilder
         put its printed scoring label in minor_question_label. Preserve printed
         grouping and labels instead of forcing a familiar layout.
 
-        A visibly printed model answer may be returned as
-        provided_model_answer with this unit source and page. If no visible model
-        answer exists, an answer may only be an explicitly non-authoritative
+        The supplied unit_test_paper is a teacher's template-authoring source.
+        Visible filled solution text in its answer slots is supplied model-answer
+        evidence, even though the source role is named unit_test_paper rather than
+        contains_model_answers. For each such slot, expected_answer MUST be an
+        exact transcription of the visible solution, marked provided_model_answer
+        with this unit source and page. Do not solve that occupied slot again or
+        replace the writing with a more precise, more familiar or scientifically
+        equivalent answer from your own knowledge. Preserve repeated solution
+        text independently. If the writing is unreadable, report uncertainty
+        rather than supply a guessed solution. Only when no visible model
+        answer exists may an answer be an explicitly non-authoritative
         ai_proposed answer or unavailable. Set
         requires_complete_answer_suggestion true only for a visible explicit
         完答/all-components-required instruction. Set

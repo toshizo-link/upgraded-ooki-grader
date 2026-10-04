@@ -343,6 +343,7 @@ def generate_client_template(host: Host, client_pdf: Path, expected_answers: Pat
     units = final["units"]
     db = sqlite3.connect(f"file:{(host.work/'data/ooki-grader.db').as_posix()}?mode=ro",uri=True)
     rows = db.execute("SELECT extraction_draft_json FROM template_generation_unit WHERE batch_id=? ORDER BY sequence", (batch["id"],)).fetchall()
+    models = db.execute("SELECT DISTINCT a.actual_model FROM ai_request a JOIN template_generation_unit u ON a.entity_id=u.id WHERE u.batch_id=? AND a.state='succeeded'", (batch["id"],)).fetchall()
     db.close()
     drafts = [json.loads(row[0]) for row in rows if row[0]]
     issues = []
@@ -360,12 +361,12 @@ def generate_client_template(host: Host, client_pdf: Path, expected_answers: Pat
         "allUnitsExtracted":bool(units) and all(u["status"] in ("extracted","confirmed") for u in units),
         "blockingExtractionReviewIssues":sum(bool(i.get("blocking")) for i in issues),
         "persistedDraftQuestionCount":sum(len(p["questions"]) for d in drafts for p in d["pages"]),
+        "actualModels": [row[0] for row in models],
     }
     if expected_answers:
         expected = json.loads(expected_answers.read_text(encoding="utf-8"))
         actual = [q.get("expectedAnswer") for d in drafts for p in d["pages"] for q in p["questions"]]
         summary["modelAnswersMatchOriginalInOrder"] = actual == expected
-        assert actual == expected, "Persisted model answers differ from the independently reviewed original"
     return summary
 
 
@@ -499,6 +500,8 @@ def main():
                 client_generation = generate_client_template(host,args.client_pdf,args.expected_answers)
                 evidence["clientTemplateGeneration"] = client_generation
                 write_json(work/"upgrade-result.json",evidence)
+                if args.expected_answers:
+                    assert client_generation["modelAnswersMatchOriginalInOrder"], "Persisted model answers differ from the independently reviewed original"
                 assert client_generation["allUnitsExtracted"] and client_generation["questionCount"] > 0, client_generation
                 assert client_generation["blockingExtractionReviewIssues"] == 0, client_generation
                 if args.expected_question_count is not None:
