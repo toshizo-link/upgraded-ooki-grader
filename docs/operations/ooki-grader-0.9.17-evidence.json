@@ -1,0 +1,89 @@
+{
+  "version": "0.9.17",
+  "date": "2026-10-04",
+  "compiledSourceCommit": "91bbf0620bf0866158a0b4ada6c9d7265c383460",
+  "state": "passed",
+  "retentionChecks": {
+    "syntheticEntitiesUnchanged": true,
+    "originalPdfUnchanged": true,
+    "resultPdfUnchanged": true,
+    "encryptedKeyFilesUnchanged": true,
+    "keyFingerprintUnchanged": true,
+    "credentialReferenceAndRevisionUnchanged": true,
+    "modelAutomaticallySelected": true,
+    "fourProfilesSelectModel": true,
+    "migrationRecordedOnce": true,
+    "secondStartupDoesNotRepeatMigration": true
+  },
+  "clientTemplateGeneration": {
+    "status": "needsFinalCheck",
+    "sourcePdfSha256": "91bb678389d92ce0243b622f04bdf1bcb99599741eebae741560ccb5943d6d6f",
+    "sourcePages": 1,
+    "units": 1,
+    "questionCount": 62,
+    "failedUnits": 0,
+    "lastErrorCode": null,
+    "allUnitsExtracted": true,
+    "blockingExtractionReviewIssues": 0,
+    "persistedDraftQuestionCount": 62,
+    "actualModels": [
+      "gemini-3.5-flash-lite"
+    ],
+    "modelAnswersMatchOriginalInOrder": true
+  },
+  "publishedAiGrading": [
+    {
+      "fixture": "asia-check-test-hanako.pdf",
+      "model": "gemini-3.5-flash-lite",
+      "questionCount": 3,
+      "awardedPointsMilli": [
+        8000,
+        10000,
+        8000
+      ],
+      "state": "passed"
+    },
+    {
+      "fixture": "asia-check-test-yuta.pdf",
+      "model": "gemini-3.5-flash-lite",
+      "questionCount": 3,
+      "awardedPointsMilli": [
+        8000,
+        0,
+        0
+      ],
+      "state": "passed"
+    },
+    {
+      "fixture": "asia-check-test-blank.pdf",
+      "model": "gemini-3.5-flash-lite",
+      "questionCount": 3,
+      "awardedPointsMilli": [
+        0,
+        0,
+        0
+      ],
+      "state": "passed"
+    }
+  ],
+  "regression": {
+    "dotnetPassed": 1156,
+    "dotnetFailed": 0,
+    "externalOptInSkipped": 16,
+    "webPassed": 185,
+    "webFiles": 26,
+    "schoolManagerPassed": 19
+  },
+  "package": {
+    "artifacts": 512,
+    "checksumEntries": 513,
+    "schoolManagerAutomationIncluded": true,
+    "sha256": "8bb14ea57c5de011d06089399c85caf7edc4444ffb786bba37a20f8757d538c2",
+    "bytes": 142668083
+  },
+  "scope": {
+    "liveSchoolManagerMessagesSent": 0,
+    "installedServiceReplaced": false,
+    "publishedHostStartupMigrationTested": true
+  }
+}
