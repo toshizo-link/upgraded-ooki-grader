@@ -1034,6 +1034,13 @@ public sealed partial class TemplateGenerationUnitJobWorker : BackgroundService
                 CreatedAt = now,
             });
             job.ProgressBasisPoints = attemptNumber == 1 ? 4_000 : 7_000;
+            // Each new pass can use the primary timeout and then the fallback
+            // timeout. Renew ownership before dispatch so a bounded audit or
+            // reconciliation cannot outlive the original ten-minute lease.
+            var dispatchLease = claim.Connection.Timeout + claim.Connection.Timeout
+                + TimeSpan.FromMinutes(1);
+            job.LeaseExpiresAt = now.Add(dispatchLease > _options.LeaseDuration
+                ? dispatchLease : _options.LeaseDuration);
             await db.SaveChangesAsync(token).ConfigureAwait(false);
             await transaction.CommitAsync(token).ConfigureAwait(false);
             return new AttemptPreparation(
