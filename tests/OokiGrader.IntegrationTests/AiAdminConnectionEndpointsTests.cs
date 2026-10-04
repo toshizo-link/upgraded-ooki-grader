@@ -34,6 +34,51 @@ public sealed class AiAdminConnectionEndpointsTests
     private const string OpenRouterModel = "google/gemini-3.1-flash-lite";
 
     [Fact]
+    public async Task UsageGroupsFallbackByActualModelAndRetainsLegacyUnknownModelUsage()
+    {
+        await using var application = await AiAdminTestApplication.CreateAsync();
+        var created = await application.PostAsync("/api/v1/admin/ai-connections",
+            ConnectionBody("AIza-usage-only-test-key-1234567890", AiProviders.GeminiDirect,
+                GeminiModel, testAndEnable: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var profile = await db.AiTaskProfiles.FirstAsync();
+            var now = DateTimeOffset.UtcNow;
+            foreach (var actual in new string?[] { "gemini-3.5-flash-lite", null })
+            {
+                var requestId = UlidId.New(now);
+                db.AiRequests.Add(new AiRequestEntity
+                {
+                    Id = requestId, RequestKey = requestId, AiTaskProfileId = profile.Id,
+                    TaskProfileRevision = profile.Revision, Purpose = profile.TaskType,
+                    EntityType = "test", EntityId = requestId, EntityRevision = 1,
+                    InputManifestHash = new string('a', 64), CreatedAt = now, UpdatedAt = now,
+                });
+                db.AiUsage.Add(new AiUsageEntity
+                {
+                    Id = UlidId.New(now), AiRequestId = requestId,
+                    RequestedProvider = AiProviders.GeminiDirect, RequestedModel = GeminiModel,
+                    ActualModel = actual, TotalTokens = 100, EstimatedUsdMicros = 20,
+                    EstimatedJpyMicros = 3000, MeasuredAt = now,
+                });
+            }
+            await db.SaveChangesAsync();
+        });
+        var response = await application.GetAsync("/api/v1/admin/usage");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = await ReadJsonAsync(response);
+        Assert.Equal(2, doc.RootElement.GetProperty("requestCount").GetInt32());
+        Assert.Equal(40, doc.RootElement.GetProperty("estimatedUsdMicros").GetInt64());
+        var groups = doc.RootElement.GetProperty("byModel").EnumerateArray().ToArray();
+        Assert.Equal(2, groups.Length);
+        Assert.Contains(groups, group => group.GetProperty("model").GetString() == "gemini-3.5-flash-lite"
+            && group.GetProperty("requestCount").GetInt32() == 1);
+        Assert.Contains(groups, group => group.GetProperty("model").GetString() == GeminiModel
+            && group.GetProperty("requestCount").GetInt32() == 1);
+    }
+
+    [Fact]
     public async Task GeminiAndOpenRouterCanCoexistButDuplicateProviderIsRejected()
     {
         await using var application = await AiAdminTestApplication.CreateAsync();

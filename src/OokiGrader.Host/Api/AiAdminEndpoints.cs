@@ -1572,12 +1572,12 @@ public static class AiAdminEndpoints
             .GroupBy(item => new
             {
                 item.RequestedProvider,
-                item.RequestedModel,
+                Model = item.ActualModel ?? item.RequestedModel,
             })
             .Select(group => new
             {
                 provider = group.Key.RequestedProvider,
-                model = group.Key.RequestedModel,
+                model = group.Key.Model,
                 requestCount = group.Count(),
                 estimatedUsdMicros = group.Sum(item => item.EstimatedUsdMicros),
                 estimatedJpyMicros = group.Sum(item => item.EstimatedJpyMicros),

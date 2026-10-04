@@ -261,7 +261,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Icon name="lock" size={17} />
             <span>データは学校内ホストで管理されています</span>
           </div>
-          <small>Ooki Grader v0.1</small>
+          <small>Ooki Grader</small>
         </div>
       </aside>
       {menuOpen ? (
