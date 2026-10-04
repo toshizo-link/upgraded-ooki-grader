@@ -16,6 +16,22 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class AiInitialGradingJobWorkerTests
 {
+    [Fact]
+    public void GradingSchemaAllowsOnlyTheSuppliedQuestionIdsWithoutMutatingSharedBundle()
+    {
+        using var source = JsonDocument.Parse("""
+            {"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"question_id":{"type":"string"}}}},"missing_question_ids":{"type":"array","items":{"type":"string"}}}}
+            """);
+        var bound = AiInitialGradingJobWorker.BindQuestionIds(source.RootElement, ["question-a", "question-b", "question-a"]);
+        Assert.Equal(["question-a", "question-b"], bound.GetProperty("properties").GetProperty("results")
+            .GetProperty("items").GetProperty("properties").GetProperty("question_id").GetProperty("enum")
+            .EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal(["question-a", "question-b"], bound.GetProperty("properties").GetProperty("missing_question_ids")
+            .GetProperty("items").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
+        Assert.DoesNotContain("enum", source.RootElement.GetRawText());
+        Assert.Throws<InvalidDataException>(() => AiInitialGradingJobWorker.BindQuestionIds(source.RootElement, []));
+    }
+
     private static readonly string[] KanjiScript = ["kanji"];
 
     [Theory]

@@ -28,6 +28,44 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class DuplicateSubmissionWorkflowTests
 {
+    [Theory]
+    [InlineData("queued")]
+    [InlineData("leased")]
+    [InlineData("failed")]
+    public async Task AssignmentCannotBypassUnfinishedImagePreparation(string jobState)
+    {
+        await using var application = await DuplicateTestApplication.CreateAsync();
+        var graph = await application.SeedAsync();
+        await application.WithDatabaseAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.BackgroundJobs.Add(new BackgroundJobEntity
+            {
+                Id = UlidId.New(now), Type = SubmissionPreprocessingWorker.JobType,
+                SchemaVersion = 1, DeduplicationKey = $"submission:{graph.PendingSubmissionId}:preprocess",
+                PayloadJson = "{}", State = jobState, MaxAttempts = 3,
+                LeaseOwner = jobState == "leased" ? "preprocessing-worker" : null,
+                LeaseExpiresAt = jobState == "leased" ? now.AddMinutes(5) : null,
+                NextAttemptAt = now, CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+        var response = await application.PostAsync(
+            $"/api/v1/submissions/{graph.PendingSubmissionId}:assignStudent",
+            new { studentId = graph.StudentId, sourceRevision = 1, reasonCode = "teacher_confirmed" });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("SUBMISSION_PREPROCESSING_REQUIRED",
+            (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        await application.WithDatabaseAsync(async db =>
+        {
+            var submission = await db.Submissions.SingleAsync(item => item.Id == graph.PendingSubmissionId);
+            Assert.Null(submission.AssignedStudentId);
+            Assert.Null(submission.CurrentGradingRunId);
+            Assert.DoesNotContain(await db.BackgroundJobs.ToArrayAsync(),
+                job => job.Type == AiInitialGradingJobWorker.JobType || job.Type == "provider_free_grade");
+        });
+    }
+
     private static readonly byte[] DuplicatePdfBytes =
         System.Text.Encoding.ASCII.GetBytes(
             "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");

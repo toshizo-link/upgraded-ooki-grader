@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OokiGrader.Ai.Abstractions;
@@ -1483,11 +1484,24 @@ public sealed partial class AiInitialGradingJobWorker : BackgroundService
                 claim.Artifacts,
                 claim.ChunkIndex,
                 claim.Chunks.Count),
-            claim.Bundle.ResponseJsonSchema,
+            BindQuestionIds(claim.Bundle.ResponseJsonSchema, claim.Questions.Select(question => question.Id)),
             media,
             claim.MaxOutputTokens,
             claim.MediaResolution,
             claim.ThinkingLevel);
+    }
+
+    internal static JsonElement BindQuestionIds(JsonElement schema, IEnumerable<string> questionIds)
+    {
+        var ids = questionIds.Distinct(StringComparer.Ordinal).ToArray();
+        if (ids.Length == 0 || ids.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException("ai_question_ids_invalid");
+        var bound = JsonNode.Parse(schema.GetRawText())!;
+        bound["properties"]!["results"]!["items"]!["properties"]!["question_id"]!["enum"] =
+            JsonSerializer.SerializeToNode(ids);
+        bound["properties"]!["missing_question_ids"]!["items"]!["enum"] =
+            JsonSerializer.SerializeToNode(ids);
+        return JsonSerializer.SerializeToElement(bound);
     }
 
     private async Task ApplyStoredResponseAsync(

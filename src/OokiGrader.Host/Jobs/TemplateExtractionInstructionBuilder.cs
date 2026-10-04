@@ -19,7 +19,7 @@ internal sealed record BuiltTemplateExtractionInstruction(
 internal static class TemplateExtractionInstructionBuilder
 {
     public const string OrientationFragmentVersion = "orientation-gate-v1";
-    public const string CommonFragmentVersion = "common-extraction-core-v5";
+    public const string CommonFragmentVersion = "common-extraction-core-v6";
     public const string StandardFragmentVersion = "system-1-standard-v2";
     public const string ClassPlacementFragmentVersion =
         "system-2-class-placement-v1";
@@ -42,7 +42,7 @@ internal static class TemplateExtractionInstructionBuilder
 
     private const string CommonCore =
         """
-        COMMON EXTRACTION CORE (common-extraction-core-v5)
+        COMMON EXTRACTION CORE (common-extraction-core-v6)
         First inventory every physical curricular answer slot on each supplied
         primary page. Count each separate blank, underline, answer box and table
         answer cell once, including filled slots. Exclude name, student number,
@@ -98,6 +98,18 @@ internal static class TemplateExtractionInstructionBuilder
         model answer. Put every other independently complete, equally correct
         model answer in accepted_variants; never put fragments, rubric prose, or
         mere components there. Otherwise set each flag false.
+        The filled_answer_removed flag describes the RETURNED question_text,
+        not whether the physical PDF was edited. Replace the target slot's
+        visible solution with ［　］ in question_text, keep that solution only in
+        expected_answer/accepted_variants, and set filled_answer_removed=true
+        after checking that replacement. If the source target was already empty,
+        true also confirms that no filled target answer remains in question_text.
+        Do not set this flag false merely because the source PDF still contains
+        printed solutions. For an embedded fill-blank row, verify that its
+        question_text contains exactly answer_slot_count canonical ［　］ tokens.
+        Never return the target solution as unbracketed prose instead of a token.
+        Include sufficient preceding context to identify a wrapped sentence's
+        target slot. If the target cannot be isolated, flag uncertainty explicitly.
         Return only strict JSON.
         """;
 
@@ -180,7 +192,8 @@ internal static class TemplateExtractionInstructionBuilder
         string requestKey,
         string unitId,
         TemplateGenerationProfile profile,
-        bool rotationsWereApplied)
+        bool rotationsWereApplied,
+        string? qualityControlInstruction = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requestKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(unitId);
@@ -267,6 +280,7 @@ internal static class TemplateExtractionInstructionBuilder
             CommonCore,
             selectedSystem,
             PaperMetadata,
+            qualityControlInstruction ?? string.Empty,
             "IMMUTABLE GENERATION CONTEXT AND REQUEST CONTRACT",
             requestContract);
         var fingerprintInput = string.Join(

@@ -1058,6 +1058,16 @@ public static partial class SubmissionsEndpoints
                 $"現在の状態は {submission.State} です。");
         }
 
+        if (await ImagePreparationIsIncompleteAsync(db, submission, cancellationToken))
+        {
+            return ApiHelpers.Problem(
+                context,
+                StatusCodes.Status409Conflict,
+                "SUBMISSION_PREPROCESSING_REQUIRED",
+                "答案の画像を準備しています",
+                "画像の準備が完了してから、生徒を割り当ててください。");
+        }
+
         var student = await db.Students
             .AsNoTracking()
             .SingleOrDefaultAsync(
@@ -1380,6 +1390,13 @@ public static partial class SubmissionsEndpoints
                 "最新の生徒名確認状態と選択内容を確認してください。");
         }
 
+        if (await ImagePreparationIsIncompleteAsync(db, submission, cancellationToken))
+        {
+            return ApiHelpers.Problem(context, StatusCodes.Status409Conflict,
+                "SUBMISSION_PREPROCESSING_REQUIRED", "答案の画像を準備しています",
+                "画像の準備が完了してから、答案の扱いを確認してください。");
+        }
+
         var now = timeProvider.GetUtcNow();
         submission.AssignmentMethod = "none";
         submission.AssignmentConfidenceBasisPoints = null;
@@ -1544,6 +1561,13 @@ public static partial class SubmissionsEndpoints
                 $"現在の状態は {submission.State} です。");
         }
 
+        if (await ImagePreparationIsIncompleteAsync(db, submission, cancellationToken))
+        {
+            return ApiHelpers.Problem(context, StatusCodes.Status409Conflict,
+                "SUBMISSION_PREPROCESSING_REQUIRED", "答案の画像を準備しています",
+                "画像の準備が完了してから、採点してください。");
+        }
+
         var version = submission.TestSession.TemplateVersion;
         if (!TemplateVersionUsePolicy.IsImmutablePublishedSnapshot(version.State)
             || version.Questions.Count == 0)
@@ -1600,6 +1624,14 @@ public static partial class SubmissionsEndpoints
                 submission.Revision,
             });
     }
+
+    private static Task<bool> ImagePreparationIsIncompleteAsync(
+        OokiGraderDbContext db, SubmissionEntity submission, CancellationToken cancellationToken) =>
+        submission.PreprocessingManifestHash is not null ? Task.FromResult(false)
+            : db.BackgroundJobs.AsNoTracking().AnyAsync(
+                item => item.Type == SubmissionPreprocessingWorker.JobType
+                    && item.DeduplicationKey == $"submission:{submission.Id}:preprocess",
+                cancellationToken);
 
     private static async Task<GradingJobSelection> PrepareGradingJobAsync(
         OokiGraderDbContext db,

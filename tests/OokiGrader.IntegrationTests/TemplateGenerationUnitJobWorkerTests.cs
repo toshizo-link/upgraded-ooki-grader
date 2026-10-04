@@ -22,6 +22,64 @@ namespace OokiGrader.IntegrationTests;
 
 public sealed class TemplateGenerationUnitJobWorkerTests
 {
+    [Fact]
+    public async Task DenseFillBlankInventoryIsIndependentlyAudited()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(ProviderAction.Embedded, ProviderAction.Embedded);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.Equal(2, fixture.Provider.Requests.Count);
+        Assert.Contains("INDEPENDENT INVENTORY AUDIT", fixture.Provider.Requests[1].UserInstruction);
+        await using var db = await fixture.CreateDbContextAsync();
+        var attempts = await db.AiRequests.OrderBy(item => item.AttemptNumber).Select(item => item.AttemptNumber).ToArrayAsync();
+        Assert.Equal([1, 3], attempts);
+        Assert.All(await db.AiBudgetReservations.ToArrayAsync(), reservation => Assert.Equal("settled", reservation.State));
+    }
+
+    [Fact]
+    public async Task ConflictingInventoryGetsOneBoundedReconciliationWithItsOwnRecordedRequest()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(
+            ProviderAction.Embedded, ProviderAction.EmbeddedOmitted, ProviderAction.Embedded);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.Equal(3, fixture.Provider.Requests.Count);
+        Assert.Contains("BOUNDED SOURCE-GROUNDED RECONCILIATION", fixture.Provider.Requests[2].UserInstruction);
+        await using var db = await fixture.CreateDbContextAsync();
+        var requests = await db.AiRequests.OrderBy(item => item.AttemptNumber).ToArrayAsync();
+        Assert.Equal([1, 3, 4], requests.Select(item => item.AttemptNumber));
+        Assert.Equal(requests[0].Id, requests[1].RetryOfAiRequestId);
+        Assert.Equal(requests[1].Id, requests[2].RetryOfAiRequestId);
+        Assert.All(await db.AiBudgetReservations.ToArrayAsync(), reservation => Assert.Equal("settled", reservation.State));
+        var unit = await db.TemplateGenerationUnits.SingleAsync();
+        Assert.Equal(TemplateGenerationUnitStatus.Extracted, unit.Status);
+        Assert.DoesNotContain("template.slot_inventory_unconfirmed", unit.WarningsJson);
+    }
+
+    [Fact]
+    public async Task UnresolvedAnswerRemovalIsNeverSilentlyApprovedOrRetriedForever()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(
+            ProviderAction.BadRemoval, ProviderAction.BadRemoval, ProviderAction.BadRemoval);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.False(await fixture.Worker.ProcessNextAsync());
+        Assert.Equal(3, fixture.Provider.Requests.Count);
+        await using var db = await fixture.CreateDbContextAsync();
+        var unit = await db.TemplateGenerationUnits.SingleAsync();
+        Assert.Contains("question.filled_answer_removal_unconfirmed", unit.ExtractionDraftJson);
+    }
+
+    [Fact]
+    public async Task ThreeDifferentInventoriesRemainBlockedForTeacherReview()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(
+            ProviderAction.Embedded, ProviderAction.EmbeddedOmitted, ProviderAction.EmbeddedFour);
+        Assert.True(await fixture.Worker.ProcessNextAsync());
+        Assert.False(await fixture.Worker.ProcessNextAsync());
+        Assert.Equal(3, fixture.Provider.Requests.Count);
+        await using var db = await fixture.CreateDbContextAsync();
+        var unit = await db.TemplateGenerationUnits.SingleAsync();
+        Assert.Contains("template.slot_inventory_unconfirmed", unit.ExtractionDraftJson);
+    }
+
     [Theory]
     [InlineData(AiFailureKind.Authentication, "gemini_authentication_failed", "AI_AUTHENTICATION_FAILED")]
     [InlineData(AiFailureKind.RateLimited, "gemini_rate_limited", "AI_RATE_LIMITED")]
@@ -363,6 +421,10 @@ public sealed class TemplateGenerationUnitJobWorkerTests
         Extract,
         Rotate,
         Fail,
+        BadRemoval,
+        Embedded,
+        EmbeddedOmitted,
+        EmbeddedFour,
     }
 
     private static int CountRequestsForRun(
@@ -901,21 +963,20 @@ public sealed class TemplateGenerationUnitJobWorkerTests
                     {
                         source_id = sourceId,
                         page_number = 1,
-                        detected_answer_slot_count = 1,
-                        questions = new[]
-                        {
-                            new
+                        detected_answer_slot_count = action == ProviderAction.EmbeddedFour ? 4 : action == ProviderAction.Embedded ? 3 : action == ProviderAction.EmbeddedOmitted ? 2 : 1,
+                        questions = Enumerable.Range(1, action == ProviderAction.EmbeddedFour ? 4 : action == ProviderAction.Embedded ? 3 : action == ProviderAction.EmbeddedOmitted ? 2 : 1)
+                            .Select(index => new
                             {
-                                source_key = "page-1-slot-1",
-                                display_label = "1",
+                                source_key = $"page-1-slot-{index}",
+                                display_label = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
                                 major_question_label = (string?)null,
                                 middle_question_label = "設問",
-                                minor_question_label = "1",
-                                question_text = "1 + 1 はいくつですか。",
-                                answer_slot_ordinal = 1,
+                                minor_question_label = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                question_text = action is ProviderAction.Embedded or ProviderAction.EmbeddedOmitted or ProviderAction.EmbeddedFour ? "1 + 1 は［　］です。" : "1 + 1 はいくつですか。",
+                                answer_slot_ordinal = index,
                                 answer_slot_count = 1,
-                                filled_answer_removed = true,
-                                is_embedded_fill_blank = false,
+                                filled_answer_removed = action != ProviderAction.BadRemoval,
+                                is_embedded_fill_blank = action is ProviderAction.Embedded or ProviderAction.EmbeddedOmitted or ProviderAction.EmbeddedFour,
                                 question_type = "numeric",
                                 expected_answer = "2",
                                 answer_provenance = "ai_proposed",
@@ -928,8 +989,7 @@ public sealed class TemplateGenerationUnitJobWorkerTests
                                 requires_teacher_answer = false,
                                 confidence = 0.99,
                                 warnings = Array.Empty<string>(),
-                            },
-                        },
+                            }).ToArray(),
                     },
                 ];
             var root = JsonSerializer.SerializeToElement(new

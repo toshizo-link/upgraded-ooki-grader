@@ -75,6 +75,20 @@ def write_json(path: Path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def wait_preprocessed(host, submission_id, timeout=120):
+    # Upload acceptance can already say needs_name_review before the worker has
+    # produced normalized pages. Wait for the committed preprocessing manifest.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        db = sqlite3.connect(f"file:{(host.work/'data/ooki-grader.db').as_posix()}?mode=ro", uri=True)
+        row = db.execute("SELECT preprocessing_manifest_hash FROM submission WHERE id=?", (submission_id,)).fetchone()
+        db.close()
+        if row and row[0] and len(row[0]) == 64:
+            return
+        time.sleep(.5)
+    raise AssertionError("Submission preprocessing did not complete")
+
+
 class Host:
     def __init__(self, package: Path, work: Path, label: str, semantic=False):
         self.package = package.resolve()
@@ -261,7 +275,7 @@ def seed(host: Host, key: str):
         sid = session["id"]
     submission_upload = host.upload(pdf, "completedTest", sid)
     sub_id = submission_upload["submissionId"]
-    wait_json(host, f"/api/v1/submissions/{sub_id}", lambda x:x.get("processingState") != "preprocessing")
+    wait_preprocessed(host, sub_id)
     current = host.api("GET", f"/api/v1/submissions/{sub_id}")
     host.json("POST", f"/api/v1/submissions/{sub_id}:assignStudent", {
         "studentId":student["id"], "sourceRevision":current.json()["revision"],
@@ -410,21 +424,28 @@ def grade_fixtures(host: Host, fixtures: Path):
         ("asia-check-test-yuta.pdf", "S-002", "田中", "悠太", [8000, 0, 0]),
         ("asia-check-test-blank.pdf", "EMPTY-001", "空欄", "検証", [0, 0, 0]),
     ]:
-        student = host.json("POST", "/api/v1/students", {
-            "studentNumber": number, "familyName": family, "givenName": given,
-            "displayName": family + " " + given, "notes": "架空の採点検証。配信しない。",
-        })
+        student = next((s for s in host.json("GET", "/api/v1/students?pageSize=200")["items"]
+                        if s["studentNumber"] == number), None)
+        if student is None:
+            student = host.json("POST", "/api/v1/students", {
+                "studentNumber": number, "familyName": family, "givenName": given,
+                "familyNameKana": "サクライ" if number == "S-001" else "タナカ" if number == "S-002" else "クウラン",
+                "givenNameKana": "ハナコ" if number == "S-001" else "ユウタ" if number == "S-002" else "ケンショウ",
+                "gradeLabel": "中1", "course": "社会", "schoolClass": "検証",
+                "displayName": family + " " + given, "notes": "架空の採点検証。配信しない。",
+            })
         uploaded = host.upload(fixtures / filename, "completedTest", sid)
         sub = uploaded["submissionId"]
-        wait_json(host, f"/api/v1/submissions/{sub}", lambda x: x.get("processingState") != "preprocessing")
+        wait_preprocessed(host, sub)
         current = host.api("GET", f"/api/v1/submissions/{sub}")
         host.json("POST", f"/api/v1/submissions/{sub}:assignStudent", {
             "studentId": student["id"], "sourceRevision": current.json()["revision"],
             "reasonCode": "teacher_confirmed", "note": "架空の検証答案",
         }, extra={"If-Match": current.headers["ETag"]})
         workspace = wait_json(host, f"/api/v1/submissions/{sub}/grading-workspace",
-            lambda x: len(x.get("results", [])) == 3, timeout=430)
+            lambda x: len(x.get("results", [])) == 3 or x.get("submission", {}).get("state") == "needs_attention", timeout=430)
         write_json(host.work / (filename + ".grading.json"), workspace)
+        assert len(workspace.get("results", [])) == 3, "Real grading worker stopped without complete results"
         actual = [r["awardedPointsMilli"] for r in workspace["results"]]
         assert actual == expected, {"fixture": filename, "actual": actual, "expected": expected}
         db = sqlite3.connect(f"file:{(host.work/'data/ooki-grader.db').as_posix()}?mode=ro", uri=True)
@@ -490,7 +511,7 @@ def main():
             migration_count = db.execute("SELECT COUNT(*) FROM audit_event WHERE event_type='ai.upgrade.gemini38.0_9_17'").fetchone()[0]
             db.close()
             checks["migrationRecordedOnce"] = migration_count == 1
-            evidence = {"state":"passed" if all(checks.values()) else "failed", "checks":checks,"after":after,
+            evidence = {"state":"running" if all(checks.values()) else "failed", "checks":checks,"after":after,
                         "startupProbe":startup_probe,"manualRecheck":recheck,
                         "scope":"Published host startup transition; no installed service or elevated updater was used"}
             write_json(work/"upgrade-result.json",evidence)
@@ -520,6 +541,7 @@ def main():
         db.close()
         assert count==1
         evidence["checks"]["secondStartupDoesNotRepeatMigration"]=True
+        evidence["state"] = "passed"
         write_json(work/"upgrade-result.json",evidence)
         print(json.dumps({"phase":"finish","state":"passed","checks":evidence["checks"],
                           "capabilityProbe":after["connection"].get("lastCapabilityProbe"),

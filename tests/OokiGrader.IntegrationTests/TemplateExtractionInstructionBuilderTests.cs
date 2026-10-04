@@ -26,7 +26,7 @@ public sealed class TemplateExtractionInstructionBuilderTests
             rotationsWereApplied: false);
 
         Assert.Contains("orientation-gate-v1", built.UserInstruction);
-        Assert.Contains("common-extraction-core-v5", built.UserInstruction);
+        Assert.Contains("common-extraction-core-v6", built.UserInstruction);
         Assert.Contains(expectedFragment, built.UserInstruction);
         Assert.Contains("paper-name-and-grade-v1", built.UserInstruction);
         Assert.Contains(
