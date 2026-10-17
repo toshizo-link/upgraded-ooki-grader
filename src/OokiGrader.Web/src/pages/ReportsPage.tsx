@@ -1134,6 +1134,7 @@ function PassFailMatrixCard({
           </div>
           <p>
             現在の絞り込みに一致する確定結果を、生徒×テストの表で表示します。
+            テスト実施にミス数の合格基準がある場合はその基準を優先します。未設定のテストは下の得点率で判定します。
           </p>
         </div>
         <div className="pass-fail-matrix-actions">

@@ -24,6 +24,31 @@ public sealed class TemplateGenerationFinalizationServiceTests
         JsonSerializerDefaults.Web);
 
     [Fact]
+    public async Task ConfirmationAcceptsOutOfOrderPagesAndEquivalentAnswerVariants()
+    {
+        await using var fixture = await FinalizationFixture.CreateAsync();
+        var seeded = await fixture.SeedBatchAsync(TestType.Other, unitCount: 1,
+            sourcePageCountOverride: 2, draftFactory: (_, unitId) =>
+            {
+                var draft = CreateCrossPageDraft(unitId);
+                var firstPage = draft.Pages[0];
+                var question = firstPage.Questions[0] with
+                {
+                    ExpectedAnswer = "Ａ",
+                    AcceptedVariants = ["A", "Ｂ", "B", "別解"],
+                };
+                return draft with { Pages = [draft.Pages[1], firstPage with { Questions = [question] }] };
+            });
+        var completed = await fixture.Service.ConfirmAsync(
+            new ConfirmTemplateGenerationBatchCommand(seeded.BatchId, seeded.BatchRowVersion,
+                fixture.StaffId, IsAdministrator: false, OperationId: "ordered-pages",
+                CorrelationId: "ordered-pages"), CancellationToken.None);
+        Assert.Equal(TemplateGenerationBatchStatus.Completed, completed.Status);
+        Assert.Equal(2, (await fixture.Db.TemplateVersions.SingleAsync()).ExpectedSubmissionPageCount);
+        Assert.Equal(3, await fixture.Db.AcceptedAnswers.CountAsync());
+    }
+
+    [Fact]
     public async Task NonStepFinalCheckEditResolvesNameGradeAndBlockingWarnings()
     {
         await using var fixture = await FinalizationFixture.CreateAsync();
@@ -513,6 +538,16 @@ public sealed class TemplateGenerationFinalizationServiceTests
             "入力内容ではなく生成結果の問題です。失敗した項目だけ再試行してください。",
             error.Detail);
         Assert.Empty(await fixture.Db.TestTemplates.AsNoTracking().ToArrayAsync());
+        var failedBatch = await fixture.Db.TemplateGenerationBatches.AsNoTracking().SingleAsync();
+        Assert.Equal(TemplateGenerationBatchStatus.Failed, failedBatch.Status);
+        Assert.Equal(1, failedBatch.FailedUnitCount);
+        Assert.Equal(2, failedBatch.CompletedUnitCount);
+        var retry = await fixture.Service.RetryAsync(new RetryTemplateGenerationBatchCommand(
+            seeded.BatchId, failedBatch.Revision, fixture.StaffId, IsAdministrator: false,
+            OperationId: $"retry-invalid-{mutation}", CorrelationId: "retry-invalid"), CancellationToken.None);
+        Assert.Equal(TemplateGenerationBatchStatus.Generating, retry.Status);
+        Assert.Single(retry.Units, item => item.Status == TemplateGenerationUnitStatus.Queued);
+        Assert.Equal(2, retry.Units.Count(item => item.Status == TemplateGenerationUnitStatus.Extracted));
     }
 
     [Fact]

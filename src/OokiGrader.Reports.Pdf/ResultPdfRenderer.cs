@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using OokiGrader.Domain.Grading;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
@@ -10,7 +11,7 @@ namespace OokiGrader.Reports.Pdf;
 
 public sealed class ResultPdfRenderer : IResultPdfRenderer
 {
-    public const string CurrentRendererVersion = "pdfsharp-6.2.4-layout-2";
+    public const string CurrentRendererVersion = "pdfsharp-6.2.4-layout-3";
     private const double PageWidth = 595.28;
     private const double PageHeight = 841.89;
     private const double MarginLeft = 42;
@@ -223,6 +224,14 @@ public sealed class ResultPdfRenderer : IResultPdfRenderer
             new XSolidBrush(report.IsCorrectedGrade ? XColors.DarkGoldenrod : MutedInk),
             new XPoint(MarginLeft + 258, canvas.Y + 48));
         canvas.Y += summaryHeight + 17;
+        var outcomes = report.Questions.Select(question => question.Outcome).ToArray();
+        var passStatus = MistakePassCriteria.Evaluate(report.MaximumMistakesToPass, outcomes);
+        var criteria = report.MaximumMistakesToPass is { } maximumMistakes
+            ? $"{(passStatus == "pass" ? "合格" : "不合格")}　{MistakePassCriteria.CountMistakes(outcomes)}ミス　（{maximumMistakes}ミスまで合格）"
+            : "合否基準未設定";
+        canvas.Graphics.DrawString(criteria, fonts.Body, new XSolidBrush(Ink),
+            new XPoint(MarginLeft, canvas.Y + 12));
+        canvas.Y += 28;
     }
 
     private static void DrawTableHeader(PageCanvas canvas, ReportFonts fonts)

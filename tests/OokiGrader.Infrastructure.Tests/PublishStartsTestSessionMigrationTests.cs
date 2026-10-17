@@ -218,7 +218,7 @@ public sealed class PublishStartsTestSessionMigrationTests
                 Migration0022,
                 await context.Database.GetAppliedMigrationsAsync());
             Assert.Equal(
-                [Migration0023, Migration0024, Migration0025],
+                [Migration0023, Migration0024, Migration0025, "20261016000000_0026_TestSessionPassCriteria"],
                 await context.Database.GetPendingMigrationsAsync());
             Assert.False(context.Database.HasPendingModelChanges());
         }

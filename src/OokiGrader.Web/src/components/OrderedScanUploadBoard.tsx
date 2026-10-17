@@ -18,12 +18,13 @@ import {
   type OrderedScanGroup,
 } from "../lib/orderedScans";
 import { classNames } from "../lib/format";
+import { maximumScanPages, prepareScanPdfs, type ScanPdfPage } from "../lib/scanPdfs";
 import { Icon } from "./Icon";
 import { Badge, Button, Card, InlineAlert, StatusBadge } from "./ui";
 
 type LocalPageState = "ready" | "uploading" | "staged" | "failed";
 
-interface LocalPage {
+interface LocalPage extends ScanPdfPage {
   id: string;
   file: File;
   progress: number;
@@ -32,18 +33,6 @@ interface LocalPage {
   orderedScanItemId?: string;
   createIdempotencyKey: string;
   finalizeIdempotencyKey: string;
-}
-
-const maximumUploadBytes = 250_000_000;
-function canUploadAsPage(file: File) {
-  const dot = file.name.lastIndexOf(".");
-  const extension = dot >= 0
-    ? file.name.slice(dot).toLocaleLowerCase("en-US")
-    : "";
-  return (
-    file.size <= maximumUploadBytes &&
-    (file.type === "application/pdf" || extension === ".pdf")
-  );
 }
 
 export function OrderedScanUploadBoard({
@@ -61,6 +50,8 @@ export function OrderedScanUploadBoard({
   const [batch, setBatch] = useState<OrderedScanBatchDetail>();
   const [dragging, setDragging] = useState(false);
   const [working, setWorking] = useState(false);
+  const [preparing, setPreparing] = useState<string>();
+  const preparingRef = useRef(false);
   const [actionError, setActionError] = useState<string>();
   const inputRef = useRef<HTMLInputElement>(null);
   const notifiedBatchId = useRef<string | undefined>(undefined);
@@ -195,39 +186,41 @@ export function OrderedScanUploadBoard({
     batch?.status === "failed" ||
     batch?.status === "expired";
 
-  function addFiles(files: File[]) {
-    if (frozen) return;
-    const accepted = files.filter(canUploadAsPage);
-    const rejected = files.filter((file) => !canUploadAsPage(file));
-    setActionError(
-      rejected.length
-        ? `${rejected.map((file) => file.name).join("、")} は追加できません。1ページのPDF（250 MB以下）を選択してください。`
-        : undefined,
-    );
-    setPages((current) =>
-      naturalSortScanItems([
+  async function addFiles(files: File[]) {
+    if (frozen || working || preparingRef.current || !isOpen || !files.length) return;
+    preparingRef.current = true;
+    setPreparing("PDFを読み込んでいます…");
+    setActionError(undefined);
+    try {
+      const prepared = await prepareScanPdfs(files, maximumScanPages - pages.length, setPreparing);
+      setPages((current) => naturalSortScanItems([
         ...current,
-        ...accepted.map((file) => ({
+        ...prepared.map((page) => ({
+          ...page,
           id: crypto.randomUUID(),
-          file,
           progress: 0,
           state: "ready" as const,
           createIdempotencyKey: newIdempotencyKey(),
           finalizeIdempotencyKey: newIdempotencyKey(),
         })),
-      ]),
-    );
+      ]));
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "PDFを読み込めませんでした。");
+    } finally {
+      preparingRef.current = false;
+      setPreparing(undefined);
+    }
   }
 
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
-    addFiles(Array.from(event.target.files || []));
+    void addFiles(Array.from(event.target.files || []));
     event.target.value = "";
   }
 
   function handleDrop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
-    addFiles(Array.from(event.dataTransfer.files));
+    void addFiles(Array.from(event.dataTransfer.files));
   }
 
   async function uploadLocalPages(
@@ -299,6 +292,7 @@ export function OrderedScanUploadBoard({
   async function stagePages() {
     if (
       working ||
+      preparingRef.current ||
       !isOpen ||
       batch ||
       !validExpectedPageCount ||
@@ -380,7 +374,7 @@ export function OrderedScanUploadBoard({
       const failed = await uploadLocalPages(batch.id, pending);
       setBatch(await orderedScanApi.get(batch.id));
       if (failed) {
-        setActionError("再送できなかったページがあります。もう一度お試しください。");
+        setActionError("再送できなかったページがあります。各ページのエラー内容を確認してください。");
       }
     } catch (reason) {
       setActionError(
@@ -477,7 +471,8 @@ export function OrderedScanUploadBoard({
         <div>
           <h2>スキャン順で答案をアップロード</h2>
           <p>
-            1ページずつのファイルを、各生徒の1ページ目から順番に並べます。氏名は各答案の1ページ目から読み取ります。
+            複数ページの答案PDFもそのまま選べます。自動で1ページずつに分割します。氏名は各答案の1ページ目から読み取ります。
+            {validExpectedPageCount && validExpectedPageCount > 1 ? ` 生徒ごとに1〜${validExpectedPageCount}ページの順でスキャンしてください。` : null}
           </p>
         </div>
         {validExpectedPageCount ? (
@@ -490,6 +485,7 @@ export function OrderedScanUploadBoard({
           <p>{actionError}</p>
         </InlineAlert>
       ) : null}
+      {preparing ? <p role="status">{preparing}</p> : null}
 
       {!validExpectedPageCount ? (
         <InlineAlert tone="warning" title="答案のページ数を確認できません">
@@ -518,7 +514,7 @@ export function OrderedScanUploadBoard({
               )}
               onDragOver={(event) => {
                 event.preventDefault();
-                setDragging(true);
+                if (!working && !preparing) setDragging(true);
               }}
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
@@ -529,22 +525,22 @@ export function OrderedScanUploadBoard({
                 accept=".pdf,application/pdf"
                 multiple
                 onChange={handleFileInput}
-                disabled={working}
+                disabled={working || Boolean(preparing)}
               />
               <span className="file-drop-zone__icon">
                 <Icon name="upload" size={28} />
               </span>
-              <strong>1ページずつの答案をここにドロップ</strong>
-              <span>ファイル名の数字を考慮して自然順に並べます</span>
+              <strong>答案PDFをここにドロップ</strong>
+              <span>ファイル名順・PDF内のページ順で並べます</span>
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => inputRef.current?.click()}
-                disabled={working}
+                disabled={working || Boolean(preparing)}
               >
                 ファイルを選択
               </Button>
-              <small>PDF / 各ファイルは必ず1ページ</small>
+              <small>複数ページPDF対応 / 1ファイル250 MB以下 / 合計1,000ページまで</small>
             </div>
           ) : null}
 
@@ -564,6 +560,7 @@ export function OrderedScanUploadBoard({
                   <Button
                     size="small"
                     variant="quiet"
+                    disabled={working || Boolean(preparing)}
                     onClick={() => setPages(naturalSortScanItems(pages))}
                   >
                     ファイル名で並べ直す
@@ -647,7 +644,7 @@ export function OrderedScanUploadBoard({
                                 <button
                                   type="button"
                                   aria-label={`${item.file.name}を1つ前へ移動`}
-                                  disabled={index === 0}
+                                  disabled={index === 0 || working || Boolean(preparing)}
                                   onClick={() =>
                                     setPages((current) =>
                                       moveScanItem(current, index, index - 1),
@@ -659,7 +656,7 @@ export function OrderedScanUploadBoard({
                                 <button
                                   type="button"
                                   aria-label={`${item.file.name}を1つ後へ移動`}
-                                  disabled={index === pages.length - 1}
+                                  disabled={index === pages.length - 1 || working || Boolean(preparing)}
                                   onClick={() =>
                                     setPages((current) =>
                                       moveScanItem(current, index, index + 1),
@@ -671,6 +668,7 @@ export function OrderedScanUploadBoard({
                                 <button
                                   type="button"
                                   aria-label={`${item.file.name}を一覧から削除`}
+                                  disabled={working || Boolean(preparing)}
                                   onClick={() =>
                                     setPages((current) =>
                                       current.filter((page) => page.id !== item.id),
@@ -695,14 +693,14 @@ export function OrderedScanUploadBoard({
                     <Button
                       variant="secondary"
                       onClick={() => inputRef.current?.click()}
-                      disabled={working || !isOpen}
+                      disabled={working || Boolean(preparing) || !isOpen}
                       leadingIcon="plus"
                     >
                       ページを追加
                     </Button>
                     <Button
                       onClick={() => void stagePages()}
-                      disabled={working || !isOpen || hasIncompleteGroup}
+                      disabled={working || Boolean(preparing) || !isOpen || hasIncompleteGroup}
                       leadingIcon="upload"
                     >
                       {working ? "送信中…" : "この順番でページを送信"}

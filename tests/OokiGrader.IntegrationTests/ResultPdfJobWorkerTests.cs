@@ -19,6 +19,41 @@ namespace OokiGrader.IntegrationTests;
 public sealed class ResultPdfJobWorkerTests
 {
     [Fact]
+    public async Task ReportUsesSavedSessionCriterionAndInvalidatesSourceWhenItChanges()
+    {
+        await using var fixture = await ResultPdfWorkerFixture.CreateAsync();
+        var seeded = await fixture.SeedAsync();
+        await using var db = await fixture.CreateDbContextAsync();
+        var submission = await db.Submissions.Include(item => item.TestSession)
+            .SingleAsync(item => item.Id == seeded.SubmissionId);
+        var before = await ResultReportSourceLoader.LoadAsync(db, seeded.SubmissionId,
+            "test-report", DateTimeOffset.UtcNow, false, CancellationToken.None);
+        submission.TestSession.MaximumMistakesToPass = 4;
+        await db.SaveChangesAsync();
+        var after = await ResultReportSourceLoader.LoadAsync(db, seeded.SubmissionId,
+            "test-report", DateTimeOffset.UtcNow, false, CancellationToken.None);
+        Assert.Equal(4, after.Document.MaximumMistakesToPass);
+        Assert.NotEqual(before.SourceHash, after.SourceHash);
+        var counts = await ReportsEndpoints.LoadMistakeCountsAsync(db, [after.GradingRunId], CancellationToken.None);
+        Assert.Equal(0, counts.GetValueOrDefault(after.GradingRunId));
+        var question = await db.QuestionResults.Include(item => item.Revisions)
+            .SingleAsync(item => item.GradingRunId == after.GradingRunId);
+        var correction = new ResultRevisionEntity
+        {
+            Id = UlidId.New(DateTimeOffset.UtcNow), QuestionResultId = question.Id,
+            RevisionNumber = 2, AwardedPointsMilli = 500, Outcome = "partial",
+            Source = "teacher_override", CreatedAt = DateTimeOffset.UtcNow,
+            SupersedesRevisionId = question.CurrentRevisionId,
+        };
+        db.ResultRevisions.Add(correction);
+        await db.SaveChangesAsync();
+        question.CurrentRevisionId = correction.Id;
+        await db.SaveChangesAsync();
+        counts = await ReportsEndpoints.LoadMistakeCountsAsync(db, [after.GradingRunId], CancellationToken.None);
+        Assert.Equal(1, counts[after.GradingRunId]);
+        Assert.Empty(await ReportsEndpoints.LoadMistakeCountsAsync(db, [], CancellationToken.None));
+    }
+    [Fact]
     public async Task LatestExportStateIsAvailableForReportLists()
     {
         await using var fixture = await ResultPdfWorkerFixture.CreateAsync();

@@ -31,11 +31,85 @@ using OokiGrader.Infrastructure.Persistence.Entities;
 using OokiGrader.Infrastructure.Storage;
 using OokiGrader.Preprocessing;
 using SkiaSharp;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
 
 namespace OokiGrader.IntegrationTests;
 
 public sealed class OrderedScanPipelineTests
 {
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task MultiPagePdfReportsActualPageCount(int pageCount)
+    {
+        using var document = new PdfDocument();
+        for (var index = 0; index < pageCount; index++) document.AddPage();
+        using var output = new MemoryStream();
+        document.Save(output, closeStream: false);
+        var bytes = output.ToArray();
+        await using var fixture = await OrderedScanFixture.CreateAsync();
+        var seeded = await fixture.SeedSessionAsync(TestType.Other, 1);
+        var manifest = CreateManifest(expectedPageCount: 1, submissionCount: 1);
+        var batch = await fixture.CreateBatchAsync(seeded.SessionId, manifest);
+        using var created = await fixture.CreateUploadAsync(seeded.SessionId, batch.Id,
+            manifest[0], bytes, OrderedScanFixture.OwnerId);
+        using var createdJson = await ReadJsonAsync(created);
+        var uploadId = createdJson.RootElement.GetProperty("uploadId").GetString()!;
+        await fixture.AppendUploadAsync(uploadId, bytes);
+        using var rejected = await fixture.FinalizeUploadAsync(uploadId);
+        await AssertProblemCodeAsync(rejected, HttpStatusCode.UnprocessableEntity, "ORDERED_SCAN_PAGE_COUNT_INVALID");
+        using var problem = await ReadJsonAsync(rejected);
+        Assert.Contains($"{pageCount}ページ", problem.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [ProvidedPdfFact("OOKI_CUSTOMER_ANSWER_PDF")]
+    public async Task ProvidedFourPageAnswersExplainRejectionAndUploadAfterSplitting()
+    {
+        var bytes = await File.ReadAllBytesAsync(Environment.GetEnvironmentVariable("OOKI_CUSTOMER_ANSWER_PDF")!);
+        using var input = new MemoryStream(bytes, writable: false);
+        var reader = new LocalPdfPageCountReader();
+        // Release 0.9.17 stopped here and reported the generic encrypted-PDF hint.
+        var oldFailure = await Assert.ThrowsAsync<PdfPageCountException>(
+            () => reader.GetPageCountAsync(input, 2));
+        Assert.Equal("PDF_PAGE_COUNT_INVALID", oldFailure.Code);
+        Assert.Equal(4, await reader.GetPageCountAsync(input, 200));
+
+        await using var fixture = await OrderedScanFixture.CreateAsync();
+        var seeded = await fixture.SeedSessionAsync(TestType.Other, 1);
+        var manifest = CreateManifest(expectedPageCount: 1, submissionCount: 4);
+        var batch = await fixture.CreateBatchAsync(seeded.SessionId, manifest);
+        using var created = await fixture.CreateUploadAsync(seeded.SessionId, batch.Id,
+            manifest[0], bytes, OrderedScanFixture.OwnerId);
+        using var createdJson = await ReadJsonAsync(created);
+        var uploadId = createdJson.RootElement.GetProperty("uploadId").GetString()!;
+        await fixture.AppendUploadAsync(uploadId, bytes);
+        using var rejected = await fixture.FinalizeUploadAsync(uploadId);
+        await AssertProblemCodeAsync(rejected, HttpStatusCode.UnprocessableEntity, "ORDERED_SCAN_PAGE_COUNT_INVALID");
+        using var problem = await ReadJsonAsync(rejected);
+        Assert.Contains("4ページ", problem.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+
+        input.Position = 0;
+        using var original = PdfReader.Open(input, PdfDocumentOpenMode.Import);
+        // Optional outputs from the browser's prepareScanPdfs helper let this
+        // regression exercise the exact files sent by automatic splitting.
+        var preparedDirectory = Environment.GetEnvironmentVariable("OOKI_CUSTOMER_SPLIT_PDF_DIRECTORY");
+        for (var index = 0; index < original.PageCount; index++)
+        {
+            using var page = new PdfDocument();
+            page.AddPage(original.Pages[index]);
+            using var output = new MemoryStream();
+            page.Save(output, closeStream: false);
+            var pageBytes = string.IsNullOrWhiteSpace(preparedDirectory)
+                ? output.ToArray()
+                : await File.ReadAllBytesAsync(Path.Combine(preparedDirectory, $"{index + 1}.pdf"));
+            await fixture.UploadPageAsync(seeded.SessionId, batch.Id, manifest[index], pageBytes);
+        }
+        var ready = await fixture.GetBatchAsync(batch.Id);
+        Assert.Equal(4, ready.Items.Length);
+        Assert.All(ready.Items, item => Assert.Equal("uploaded", item.Status));
+    }
+
     [Theory]
     [InlineData(TestType.Hop, 1)]
     [InlineData(TestType.Step, 2)]

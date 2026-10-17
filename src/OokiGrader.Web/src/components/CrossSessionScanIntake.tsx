@@ -16,6 +16,7 @@ import {
   orderedScanApi,
 } from "../lib/orderedScans";
 import { classNames } from "../lib/format";
+import { maximumScanPages, prepareScanPdfs, type ScanPdfPage } from "../lib/scanPdfs";
 import { Icon } from "./Icon";
 import { Badge, Button, Card, InlineAlert } from "./ui";
 
@@ -29,7 +30,7 @@ type IntakeState =
   | "completed"
   | "failed";
 
-interface IntakeItem {
+interface IntakeItem extends ScanPdfPage {
   id: string;
   file: File;
   inputOrdinal: number;
@@ -72,8 +73,6 @@ interface RoutingRun {
   items: IntakeItem[];
 }
 
-const maximumUploadBytes = 250_000_000;
-
 export function CrossSessionScanIntake({
   openSessions,
   onChanged,
@@ -87,6 +86,8 @@ export function CrossSessionScanIntake({
     RoutingResponse["openSessions"]
   >([]);
   const [working, setWorking] = useState(false);
+  const [preparing, setPreparing] = useState<string>();
+  const preparingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -126,49 +127,55 @@ export function CrossSessionScanIntake({
     );
   }
 
-  function addFiles(files: File[]) {
-    if (working) return;
-    const accepted = files.filter(canUseFile);
-    const rejected = files.filter((file) => !canUseFile(file));
-    const next = naturalSortScanItems([
-      ...items,
-      ...accepted.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        inputOrdinal: 0,
+  async function addFiles(files: File[]) {
+    if (working || preparingRef.current || !files.length) return;
+    preparingRef.current = true;
+    setWorking(true);
+    setPreparing("PDFを読み込んでいます…");
+    setError(undefined);
+    try {
+      const prepared = await prepareScanPdfs(files, maximumScanPages - items.length, setPreparing);
+      const next = naturalSortScanItems([
+        ...items,
+        ...prepared.map((page) => ({
+          ...page,
+          id: crypto.randomUUID(),
+          inputOrdinal: 0,
+          state: "queued" as const,
+          progress: 0,
+          createIdempotencyKey: newIdempotencyKey(),
+          finalizeIdempotencyKey: newIdempotencyKey(),
+        })),
+      ]).map((item, index) => ({
+        ...item,
+        inputOrdinal: index + 1,
         state: "queued" as const,
+        destinationSessionId: undefined,
+        expectedPageCount: undefined,
+        detectedTemplatePageNumber: undefined,
+        message: undefined,
         progress: 0,
-        createIdempotencyKey: newIdempotencyKey(),
-        finalizeIdempotencyKey: newIdempotencyKey(),
-      })),
-    ]).map((item, index) => ({
-      ...item,
-      inputOrdinal: index + 1,
-      state: "queued" as const,
-      destinationSessionId: undefined,
-      expectedPageCount: undefined,
-      detectedTemplatePageNumber: undefined,
-      message: undefined,
-      progress: 0,
-    }));
-    setItems(next);
-    setError(
-      rejected.length
-        ? `${rejected.map((file) => file.name).join("、")} は追加できません。1ページPDF（250 MB以下）を選択してください。`
-        : undefined,
-    );
-    if (next.length) void classify(next);
+      }));
+      setPreparing(undefined);
+      await classify(next);
+    } catch (reason) {
+      setError(errorMessage(reason, "PDFを読み込めませんでした。"));
+    } finally {
+      preparingRef.current = false;
+      setPreparing(undefined);
+      setWorking(false);
+    }
   }
 
   function handleInput(event: ChangeEvent<HTMLInputElement>) {
-    addFiles(Array.from(event.target.files || []));
+    void addFiles(Array.from(event.target.files || []));
     event.target.value = "";
   }
 
   function handleDrop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
-    addFiles(Array.from(event.dataTransfer.files));
+    void addFiles(Array.from(event.dataTransfer.files));
   }
 
   async function classify(planned: IntakeItem[]) {
@@ -330,14 +337,14 @@ export function CrossSessionScanIntake({
         <div>
           <h2>受付中テストへ一括仕分け</h2>
           <p>
-            すべての1ページPDFを一か所に入れると、答案の内容を受付中テストの原稿と照合し、1ファイルずつ送信します。
+            複数ページの答案PDFもそのまま選べます。自動で1ページずつに分割し、受付中テストへ仕分けます。
           </p>
         </div>
         <Badge tone="info">受付中のみ</Badge>
       </div>
       <InlineAlert tone="info" title="原稿の並び順を保ちます">
         <p>
-          スキャナーのファイル名を保持して自然順で処理します。原稿との照合が弱い・曖昧なファイルだけ受付先を選んでください。
+          ファイル名順・PDF内のページ順で処理します。各生徒の1ページ目から最後のページまで続けてスキャンしてください。照合が曖昧なページは受付先を選んでください。
         </p>
       </InlineAlert>
       {error ? (
@@ -345,6 +352,7 @@ export function CrossSessionScanIntake({
           <p>{error}</p>
         </InlineAlert>
       ) : null}
+      {preparing ? <p role="status">{preparing}</p> : null}
       <div
         className={classNames(
           "cross-session-drop-zone",
@@ -367,7 +375,7 @@ export function CrossSessionScanIntake({
         />
         <Icon name="upload" size={28} />
         <strong>全テストのスキャンPDFをここにドロップ</strong>
-        <span>PDF / 各ファイル1ページ / 250 MB以下</span>
+        <span>複数ページPDF対応 / 1ファイル250 MB以下 / 合計1,000ページまで</span>
         <Button
           type="button"
           variant="secondary"
@@ -381,8 +389,8 @@ export function CrossSessionScanIntake({
       {items.length ? (
         <div className="cross-session-intake__workspace">
           <div className="cross-session-intake__summary">
-            <strong>{items.length}ファイル</strong>
-            <span>ファイル名順・上から1件ずつ処理</span>
+            <strong>{items.length}ページ</strong>
+            <span>ファイル名順・PDF内のページ順で処理</span>
             <Button
               type="button"
               size="small"
@@ -499,15 +507,6 @@ function IntakeStatus({ item }: { item: IntakeItem }) {
       <Badge tone={tone}>{labels[item.state]}</Badge>
       {item.message ? <small>{item.message}</small> : null}
     </div>
-  );
-}
-
-function canUseFile(file: File) {
-  const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-  return (
-    file.size > 0 &&
-    file.size <= maximumUploadBytes &&
-    (file.type === "application/pdf" || extension === ".pdf")
   );
 }
 

@@ -1,3 +1,5 @@
+using OokiGrader.Domain.Grading;
+
 namespace OokiGrader.Host.Jobs;
 
 internal sealed record CanonicalTemplateGenerationDraft(
@@ -46,6 +48,34 @@ internal sealed record CanonicalTemplateGenerationQuestion(
 
 internal static class TemplateGenerationDraftFactory
 {
+    public static CanonicalTemplateGenerationDraft Normalize(CanonicalTemplateGenerationDraft draft)
+    {
+        if (draft.Pages is null || draft.Pages.Any(page => page is null)) return draft;
+        return draft with
+        {
+            Pages = draft.Pages.OrderBy(page => page.PageNumber).Select(page => page with
+            {
+                Questions = page.Questions is null ? null! : page.Questions.Select(question =>
+                {
+                    if (question is null || question.AcceptedVariants is null) return question!;
+                    var expected = question.ExpectedAnswer is null ? null
+                        : JapaneseTextNormalizer.NormalizeForComparison(question.ExpectedAnswer);
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    return question with
+                    {
+                        AcceptedVariants = question.AcceptedVariants.Where(variant =>
+                        {
+                            // Invalid empty answers remain invalid at validation.
+                            if (string.IsNullOrWhiteSpace(variant)) return true;
+                            var normalized = JapaneseTextNormalizer.NormalizeForComparison(variant);
+                            return normalized != expected && seen.Add(normalized);
+                        }).ToArray(),
+                    };
+                }).ToArray(),
+            }).ToArray(),
+        };
+    }
+
     public static CanonicalTemplateGenerationDraft Create(
         ValidatedTemplateExtraction extraction)
     {

@@ -278,6 +278,7 @@ export interface TemplateValidation {
 }
 
 export interface TestSessionSummary {
+  maximumMistakesToPass?: number | null;
   id: string;
   name?: string | null;
   sessionName?: string | null;
@@ -761,6 +762,9 @@ export interface ResultQuestion {
 }
 
 export interface ResultDetail {
+  maximumMistakesToPass?: number | null;
+  mistakeCount?: number;
+  passFailStatus?: "pass" | "fail" | "unconfigured";
   submissionId: string;
   resultRevision: number;
   student?: Pick<StudentSummary, "id" | "displayName" | "studentNumber"> | null;

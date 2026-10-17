@@ -87,10 +87,18 @@ try {
 
     $csrf = Invoke-RestMethod -Uri "$target/api/v1/auth/csrf" `
         -Method Get -WebSession $session
-    if ([string]::IsNullOrWhiteSpace([string] $csrf.csrfToken)) {
+    foreach ($propertyName in @('token', 'csrfToken')) {
+        if ($null -eq $csrf) { break }
+        $property = $csrf.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and
+            -not [string]::IsNullOrWhiteSpace([string] $property.Value)) {
+            $csrfToken = [string] $property.Value
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($csrfToken)) {
         throw 'Ooki Grader did not return a CSRF token.'
     }
-    $csrfToken = [string] $csrf.csrfToken
 
     $schoolManagerPlaintext = ConvertFrom-OokiSecureString `
         -Value $SchoolManagerPassword

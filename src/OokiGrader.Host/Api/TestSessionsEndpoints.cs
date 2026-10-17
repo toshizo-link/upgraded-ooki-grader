@@ -42,6 +42,8 @@ public static class TestSessionsEndpoints
         group.MapGet("/{sessionId}", GetSession);
         group.MapPatch("/{sessionId}", UpdateSession)
             .RequireAuthorization("teacher");
+        group.MapPut("/{sessionId}/pass-criteria", UpdatePassCriteria)
+            .RequireAuthorization("teacher");
         group.MapGet("/{sessionId}/summary", GetSummary)
             .RequireAuthorization("review");
         group.MapGet("/{sessionId}/upload-status", GetUploadStatus)
@@ -645,6 +647,7 @@ public static class TestSessionsEndpoints
                     ?? item.TemplateVersion.TestTemplate.Category,
                 expectedSubmissionPageCount,
                 item.TestDate,
+                item.MaximumMistakesToPass,
                 item.ClassLabel,
                 item.Course,
                 templateCourse = item.TemplateCourseSnapshot
@@ -676,6 +679,41 @@ public static class TestSessionsEndpoints
         ApiHelpers.SetRevisionEtag(context.Response, session.Revision);
         return Results.Ok(session);
     }
+
+    private static async Task<IResult> UpdatePassCriteria(
+        string sessionId,
+        HttpContext context,
+        ClaimsPrincipal principal,
+        [FromBody] PassCriteriaBody request,
+        OokiGraderDbContext db,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        if (request.MaximumMistakesToPass is < 0 or > 2000)
+        {
+            return ApiHelpers.Problem(context, StatusCodes.Status422UnprocessableEntity,
+                "PASS_CRITERIA_INVALID", "合格基準を確認してください",
+                "合格にする最大ミス数を0〜2000の整数で指定してください。");
+        }
+        var session = await db.TestSessions.SingleOrDefaultAsync(
+            item => item.Id == sessionId, cancellationToken);
+        if (session is null) return Results.NotFound();
+        if (session.State == "archived") return ArchivedReadOnly(context);
+        if (session.Revision != request.Revision)
+        {
+            return ApiHelpers.Problem(context, StatusCodes.Status412PreconditionFailed,
+                "REVISION_STALE", "テスト実施が更新されています",
+                "最新の状態を読み込み直してから変更してください。");
+        }
+        session.MaximumMistakesToPass = request.MaximumMistakesToPass;
+        AddAudit(db, timeProvider.GetUtcNow(), principal, context,
+            "test_session.pass_criteria_updated", session.Id);
+        await db.SaveChangesAsync(cancellationToken);
+        ApiHelpers.SetRevisionEtag(context.Response, session.Revision);
+        return Results.Ok(new { session.Id, session.MaximumMistakesToPass, session.Revision });
+    }
+
+    private sealed record PassCriteriaBody(int? MaximumMistakesToPass, long Revision);
 
     private static async Task<IResult> CreateSession(
         HttpContext context,

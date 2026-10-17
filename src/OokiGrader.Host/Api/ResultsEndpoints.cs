@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Domain.Grading;
 using OokiGrader.Host.Middleware;
 using OokiGrader.Infrastructure.Persistence;
 using OokiGrader.Infrastructure.Persistence.Entities;
@@ -761,6 +762,10 @@ public static partial class ResultsEndpoints
                 ?? submission.TestSession.TemplateVersion.TestTemplate.Subject,
             category = submission.TestSession.TemplateCategorySnapshot
                 ?? submission.TestSession.TemplateVersion.TestTemplate.Category,
+            maximumMistakesToPass = submission.TestSession.MaximumMistakesToPass,
+            mistakeCount = MistakePassCriteria.CountMistakes(questions.Select(item => item.outcome)),
+            passFailStatus = MistakePassCriteria.Evaluate(
+                submission.TestSession.MaximumMistakesToPass, questions.Select(item => item.outcome)),
             gradingRunId = run.Id,
             run.EarnedPointsMilli,
             run.PossiblePointsMilli,

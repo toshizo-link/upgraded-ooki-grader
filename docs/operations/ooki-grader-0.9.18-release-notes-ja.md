@@ -1,0 +1,27 @@
+# Ooki Grader 0.9.18
+
+答案PDFの取り込みと、合否判定・ひな形保存・School Manager設定を改善しました。
+
+## 変更内容
+
+- 複数ページの答案PDFを自動で1ページずつに分割。テストごとのアップロードと一括仕分けの両方で、元のPDF内のページ順を保ちます。
+- テスト実施ごとに「4ミスまで合格」などの基準を設定でき、結果画面・合否表・結果PDFに表示します。
+- ひな形保存時のページ順・重複する別解の整形を改善。下書きが保存できない場合も、失敗した項目の再試行へ進めます。
+- School Manager設定スクリプトが `csrfToken` のプロパティエラーで停止する問題を修正しました。
+- PDF読み取りエラーの案内を具体化し、PDF出力の依存パッケージを修正版へ更新しました。
+
+## 更新
+
+下の **Assets** から `OokiGrader-0.9.18-Windows-Host-Update.zip` をダウンロードしてください。`Source code` は更新用ファイルではありません。
+
+ZIPを展開し、Ooki Graderを設置したPCで `01-Update-OokiGrader-Host.cmd` を管理者として実行します。更新中は採点・取り込みを止めてください。
+
+[詳しい更新手順](https://github.com/toshizo-link/upgraded-ooki-grader/blob/v0.9.18/docs/operations/ooki-grader-0.9.18-update-ja.md)
+
+2ページの答案は、生徒Aの1→2ページ、生徒Bの1→2ページの順でスキャンします。合否基準を変更した場合、既に作成済みの結果PDFは再作成してください。
+
+## 確認範囲
+
+自動テストは本体1,170件・画面196件が成功しました。0.9.17から0.9.18への隔離環境での更新、既存データの保持、合否基準を含むPDFの作成、再起動も確認しています。
+
+実AIによる受領教材の生成から保存まで、School Manager実サービスへの送信、学校PC上の更新操作は今回の検証には含みません。[検証記録](https://github.com/toshizo-link/upgraded-ooki-grader/blob/v0.9.18/docs/operations/ooki-grader-0.9.18-validation-ja.md)

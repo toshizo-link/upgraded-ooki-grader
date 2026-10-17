@@ -36,6 +36,52 @@ public sealed class TemplateWorkflowTests
     private static readonly JsonSerializerOptions WebJsonOptions = new(
         JsonSerializerDefaults.Web);
 
+    [Fact]
+    public async Task SessionPassCriteriaPersistsClearsAndRejectsStaleUnauthorizedAndArchivedChanges()
+    {
+        await using var application = await TemplateTestApplication.CreateAsync();
+        var (_, versionId) = await CreateTemplateAndVersionAsync(application, addBlankSource: false);
+        var sessionId = UlidId.New(DateTimeOffset.UtcNow.AddMinutes(1));
+        await application.WithDatabaseAsync(async db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            db.TestSessions.Add(new TestSessionEntity
+            {
+                Id = sessionId, TemplateVersionId = versionId, TestDate = new DateOnly(2026, 10, 16),
+                State = "open", CreatedByStaffUserId = TestAuthenticationHandler.StaffId,
+                CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        });
+        var url = $"/api/v1/test-sessions/{sessionId}/pass-criteria";
+        var update = new { maximumMistakesToPass = 4, revision = 1 };
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await application.SendAsync(HttpMethod.Put, url, "scanOperator", update)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await application.SendAsync(HttpMethod.Put, url, "teacher",
+                new { maximumMistakesToPass = -1, revision = 1 })).StatusCode);
+        var saved = await application.SendAsync(HttpMethod.Put, url, "teacher", update);
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        var revision = (await ReadJsonAsync(saved)).GetProperty("revision").GetInt64();
+        Assert.Equal(HttpStatusCode.PreconditionFailed,
+            (await application.SendAsync(HttpMethod.Put, url, "teacher", update)).StatusCode);
+        var detail = await ReadJsonAsync(await application.SendAsync(HttpMethod.Get,
+            $"/api/v1/test-sessions/{sessionId}", "teacher"));
+        Assert.Equal(4, detail.GetProperty("maximumMistakesToPass").GetInt32());
+        Assert.Equal(HttpStatusCode.OK,
+            (await application.SendAsync(HttpMethod.Put, url, "teacher",
+                new { maximumMistakesToPass = (int?)null, revision })).StatusCode);
+        await application.WithDatabaseAsync(async db =>
+        {
+            var session = await db.TestSessions.SingleAsync(item => item.Id == sessionId);
+            Assert.Null(session.MaximumMistakesToPass);
+            session.State = "archived";
+            await db.SaveChangesAsync();
+        });
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await application.SendAsync(HttpMethod.Put, url, "teacher", update)).StatusCode);
+    }
+
     [Theory]
     [InlineData("中1社会_問題用紙.pdf", "blank_test", 9_000)]
     [InlineData("中1社会_模範解答.pdf", "separate_answer_key", 9_500)]

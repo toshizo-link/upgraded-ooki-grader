@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OokiGrader.Application.Abstractions;
 using OokiGrader.Application.Identifiers;
+using OokiGrader.Domain.Grading;
 using OokiGrader.Host.Jobs;
 using OokiGrader.Host.Reports;
 using OokiGrader.Infrastructure.Persistence;
@@ -139,6 +140,11 @@ public static class ReportsEndpoints
         var ordered = selection.Candidates
             .Select(item => submissions[item.SubmissionId])
             .ToArray();
+        var configuredRunIds = ordered
+            .Where(item => item.TestSession.MaximumMistakesToPass is not null)
+            .Select(item => item.CurrentGradingRunId!)
+            .ToArray();
+        var mistakeCounts = await LoadMistakeCountsAsync(db, configuredRunIds, cancellationToken);
         var students = ordered
             .GroupBy(item => item.AssignedStudentId!, StringComparer.Ordinal)
             .Select(group => group.First().AssignedStudent!)
@@ -204,7 +210,10 @@ public static class ReportsEndpoints
                     run.EarnedPointsMilli,
                     run.PossiblePointsMilli,
                     percentageBasisPoints = percentage,
-                    status = percentage is null
+                    status = item.TestSession.MaximumMistakesToPass is not null
+                        ? MistakePassCriteria.Evaluate(item.TestSession.MaximumMistakesToPass,
+                            mistakeCounts.GetValueOrDefault(run.Id))
+                        : percentage is null
                         ? "unscored"
                         : percentage >= passMark ? "pass" : "fail",
                 };
@@ -221,6 +230,16 @@ public static class ReportsEndpoints
             results = matrixResults,
         });
     }
+
+    internal static Task<Dictionary<string, int>> LoadMistakeCountsAsync(
+        OokiGraderDbContext db, string[] runIds, CancellationToken cancellationToken) =>
+        db.QuestionResults.AsNoTracking()
+            .Where(item => runIds.Contains(item.GradingRunId)
+                && item.Revisions.Any(revision => revision.Id == item.CurrentRevisionId
+                    && revision.Outcome != "correct"))
+            .GroupBy(item => item.GradingRunId)
+            .Select(group => new { RunId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.RunId, item => item.Count, cancellationToken);
 
     private static async Task<IResult> CreateExport(
         string submissionId,

@@ -58,6 +58,23 @@ afterEach(() => {
 });
 
 describe("TemplateGenerationFinalCheckPage", () => {
+  it("offers a retry route when the server rejects a generated draft", async () => {
+    const batch = makeOtherBatch();
+    batch.finalCheckReady = true;
+    batch.blockingWarnings = [];
+    batch.units[0] = { ...batch.units[0]!, resolvedGrade: "grade5", blockingWarnings: [] };
+    state.data = batch;
+    state.confirmBatch.mockRejectedValueOnce(new ApiError(409, {
+      code: "TEMPLATE_DRAFT_INVALID", title: "生成結果を保存できませんでした",
+    }));
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "テンプレートを作成" }));
+    expect(await screen.findByRole("link", { name: "生成状況で再試行する" }))
+      .toHaveAttribute("href", "/templates/generation/batch-1");
+    expect(state.reload).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "テンプレートを作成" })).toBeDisabled();
+  });
+
   it("requires a grade only when filename and paper evidence are both missing", () => {
     renderPage();
 

@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrderedScanBatchDetail, TestSessionSummary } from "../types";
 import { CrossSessionScanIntake } from "./CrossSessionScanIntake";
+import { createScanPdf, readPdfBytes } from "../test/pdfFixtures";
+import { PDFDocument } from "pdf-lib";
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -74,8 +76,8 @@ describe("CrossSessionScanIntake", () => {
       />,
     );
     const input = container.querySelector<HTMLInputElement>("input[type=file]")!;
-    const scan10 = new File(["pdf-10"], "scan-10.pdf", { type: "application/pdf" });
-    const scan2 = new File(["pdf-2"], "scan-2.pdf", { type: "application/pdf" });
+    const scan10 = await createScanPdf("scan-10.pdf");
+    const scan2 = await createScanPdf("scan-2.pdf");
 
     fireEvent.change(input, { target: { files: [scan10, scan2] } });
 
@@ -133,13 +135,46 @@ describe("CrossSessionScanIntake", () => {
     );
     const input = container.querySelector<HTMLInputElement>("input[type=file]")!;
     fireEvent.change(input, {
-      target: { files: [new File(["pdf"], "0001.pdf", { type: "application/pdf" })] },
+      target: { files: [await createScanPdf("0001.pdf")] },
     });
 
     expect(await screen.findByText("受付先を確認")).toBeVisible();
     const destination = screen.getByLabelText("0001.pdfの受付先");
     fireEvent.change(destination, { target: { value: "session-2" } });
     expect(screen.getByRole("button", { name: "仕分け結果で受付を開始" })).toBeEnabled();
+  });
+
+  it("splits a combined PDF before classifying and uploading its pages", async () => {
+    const { container } = render(
+      <CrossSessionScanIntake openSessions={[openSession()]} onChanged={vi.fn()} />,
+    );
+    fireEvent.change(container.querySelector<HTMLInputElement>("input[type=file]")!, {
+      target: { files: [await createScanPdf("combined.pdf", 4)] },
+    });
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
+    expect(await screen.findAllByText("受付先決定")).toHaveLength(4);
+    expect(mocks.post.mock.calls.map((call) => call[2].query.fileName)).toEqual(
+      [1, 2, 3, 4].map((number) => `combined - ${number}ページ.pdf`),
+    );
+    for (const [, body] of mocks.post.mock.calls) {
+      expect((await PDFDocument.load(await readPdfBytes(body as Blob))).getPageCount()).toBe(1);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "仕分け結果で受付を開始" }));
+    await waitFor(() => expect(mocks.uploadFile).toHaveBeenCalledTimes(4));
+    expect(mocks.uploadFile.mock.calls.map((call) => call[1].inputOrdinal)).toEqual([1, 2, 3, 4]);
+    expect(await screen.findAllByText("受付完了")).toHaveLength(4);
+  });
+
+  it("does not classify a partial selection when one of the PDFs is invalid", async () => {
+    const { container } = render(
+      <CrossSessionScanIntake openSessions={[openSession()]} onChanged={vi.fn()} />,
+    );
+    fireEvent.change(container.querySelector<HTMLInputElement>("input[type=file]")!, {
+      target: { files: [await createScanPdf("good.pdf"), new File(["broken"], "broken.pdf")] },
+    });
+    expect(await screen.findByText(/broken.pdf を読み取れませんでした/)).toBeVisible();
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
   });
 });
 

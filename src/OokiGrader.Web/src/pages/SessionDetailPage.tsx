@@ -3,6 +3,7 @@ import { Link, useParams } from "../router";
 import { useSession } from "../auth/SessionContext";
 import { Icon } from "../components/Icon";
 import { OrderedScanUploadBoard } from "../components/OrderedScanUploadBoard";
+import { PassCriteriaEditor } from "../components/PassCriteriaEditor";
 import {
   Badge,
   Button,
@@ -265,6 +266,8 @@ export function SessionDetailPage() {
           <p>{actionError}</p>
         </InlineAlert>
       ) : null}
+      {canManageSession ? <PassCriteriaEditor key={`${data.id}:${data.revision}`}
+        session={data} readOnly={isArchived} onSaved={session.reload} /> : null}
       {isArchived ? (
         <InlineAlert tone="info" title="このテスト実施はアーカイブされています">
           <p>

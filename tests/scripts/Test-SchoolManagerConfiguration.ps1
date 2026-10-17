@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $configurationScript = Join-Path $PSScriptRoot '..\..\installer\Set-OokiGraderSchoolManager.ps1'
 $configurationRequests = [Collections.Generic.List[object]]::new()
+$tokenResponse = [pscustomobject]@{ token='synthetic-csrf-token' }
 function Invoke-WebRequest {
     param($Uri, $Method, $ContentType, $Headers, $Body, $WebSession,
         [switch]$UseBasicParsing, $ErrorAction)
@@ -13,7 +14,7 @@ function Invoke-WebRequest {
 function Invoke-RestMethod {
     param($Uri, $Method, $ContentType, $Headers, $Body, $WebSession)
     if ($Uri -eq 'https://ooki-grader.test/api/v1/auth/csrf') {
-        return [pscustomobject]@{ csrfToken='synthetic-csrf-token' }
+        return $tokenResponse
     }
     if ($Uri -ne 'https://ooki-grader.test/api/v1/admin/school-manager/' -or $Method -ne 'Put') {
         throw 'Unexpected HTTP operation.'
@@ -54,4 +55,18 @@ if ($keys.Count -ne 3) { throw 'Separate mutations reused an idempotency key.' }
 $before = $configurationRequests.Count
 & $configurationScript @parameters -Enable -WhatIf | Out-Null
 if ($configurationRequests.Count -ne $before) { throw 'WhatIf sent a request.' }
+$tokenResponse = [pscustomobject]@{ csrfToken='synthetic-csrf-token' }
+$legacy = & $configurationScript @parameters -Enable
+if (-not $legacy.enabled) { throw 'Legacy token response failed.' }
+$tokenResponse = [pscustomobject]@{}
+$before = @($configurationRequests | Where-Object Method -eq 'Put').Count
+try {
+    & $configurationScript @parameters -Enable | Out-Null
+    throw 'Missing token was accepted.'
+} catch {
+    if ($_.Exception.Message -ne 'Ooki Grader did not return a CSRF token.') { throw }
+}
+if (@($configurationRequests | Where-Object Method -eq 'Put').Count -ne $before) {
+    throw 'Settings were sent without a token.'
+}
 'PASS: dry-run, live, disable, Origin/CSRF/idempotency headers, logout and WhatIf; no network.'

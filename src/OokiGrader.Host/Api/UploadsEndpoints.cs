@@ -580,7 +580,7 @@ public static partial class UploadsEndpoints
                 source.Position = 0;
                 var pageCount = await pdfPageCountReader.GetPageCountAsync(
                     source,
-                    maximumPages: 2,
+                    maximumPages: 200,
                     cancellationToken);
                 if (pageCount != 1)
                 {
@@ -603,7 +603,7 @@ public static partial class UploadsEndpoints
                     StatusCodes.Status422UnprocessableEntity,
                     exception.Code,
                     "PDFを確認できません",
-                    "暗号化されていない1ページPDFを選択してください。");
+                    $"{exception.UserDetail}（{exception.Code}）");
             }
         }
 

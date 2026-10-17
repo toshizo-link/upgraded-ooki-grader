@@ -60,6 +60,7 @@ export function TemplateGenerationFinalCheckPage() {
   const [confirmedBatch, setConfirmedBatch] = useState<TemplateGenerationBatch>();
   const [rowConflict, setRowConflict] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  const [needsRegeneration, setNeedsRegeneration] = useState(false);
   const draftsRef = useRef<Record<string, UnitDraft>>({});
   const editGenerationRef = useRef(new Map<string, number>());
   const batch = confirmedBatch ?? batchQuery.data;
@@ -211,7 +212,7 @@ export function TemplateGenerationFinalCheckPage() {
   }, [batch, dirtyUnits, drafts, rowConflict, savingKey]);
 
   async function confirmTemplates() {
-    if (!batch || !validation.confirmable || confirming) return;
+    if (!batch || !validation.confirmable || confirming || needsRegeneration) return;
     setConfirming(true);
     setActionError(undefined);
     try {
@@ -228,6 +229,14 @@ export function TemplateGenerationFinalCheckPage() {
   }
 
   function handleMutationError(reason: unknown) {
+    if (reason instanceof ApiError && reason.problem.code === "TEMPLATE_DRAFT_INVALID") {
+      setNeedsRegeneration(true);
+      setRowConflict(false);
+      setConfirmedBatch(undefined);
+      setActionError(mutationErrorMessage(reason));
+      batchQuery.reload();
+      return;
+    }
     if (isRowVersionConflict(reason)) {
       setRowConflict(true);
       setActionError(warningMessage("STALE_ROW_VERSION"));
@@ -294,6 +303,11 @@ export function TemplateGenerationFinalCheckPage() {
               <Button size="small" onClick={reloadAfterConflict}>
                 最新の内容を読み込む
               </Button>
+            ) : needsRegeneration ? (
+              <Link className="button button--secondary button--small"
+                to={`/templates/generation/${encodeURIComponent(batch.batchId)}`}>
+                生成状況で再試行する
+              </Link>
             ) : undefined
           }
         >
@@ -576,7 +590,7 @@ export function TemplateGenerationFinalCheckPage() {
           <Button
             size="large"
             leadingIcon="check"
-            disabled={!validation.confirmable || confirming}
+            disabled={!validation.confirmable || confirming || needsRegeneration}
             onClick={() => void confirmTemplates()}
           >
             {confirming ? "テンプレートを作成しています" : "テンプレートを作成"}

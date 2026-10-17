@@ -311,6 +311,7 @@ public sealed class AcceptedAnswerEntity : IRevisionedEntity, IUpdatedEntity
 
 public sealed class TestSessionEntity : IRevisionedEntity, IUpdatedEntity
 {
+    public int? MaximumMistakesToPass { get; set; }
     public string Id { get; set; } = string.Empty;
     public string TemplateVersionId { get; set; } = string.Empty;
     public string CreationSource { get; set; } = "manual";

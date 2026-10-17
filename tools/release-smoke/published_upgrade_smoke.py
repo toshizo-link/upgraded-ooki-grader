@@ -227,7 +227,7 @@ def fixture_pdf(path: Path):
     pdf.save()
 
 
-def seed(host: Host, key: str):
+def seed(host: Host, key: str | None):
     status = host.json("GET", "/api/v1/bootstrap/status")
     assert not status["completed"], "Prepare requires a fresh isolated data directory"
     host.api("POST", "/api/v1/bootstrap/complete", {
@@ -296,13 +296,13 @@ def seed(host: Host, key: str):
     connection = host.json("POST", "/api/v1/admin/ai-connections", {
         "provider":"geminiDirect", "modelId":"gemini-3.5-flash-lite", "apiKey":key,
         "timeoutSeconds":120, "concurrencyLimit":1, "testAndEnable":False,
-    })
+    }) if key else None
     host.json("PUT", "/api/v1/admin/school-manager", {
         "baseUrl":"https://fsm.flens.jp/", "username":"synthetic-disabled-upgrade-test",
         "password":"Synthetic-Only-Not-A-Real-Credential!", "enabled":False, "dryRun":True,
     })
     return {"studentId":student["id"],"templateId":tid,"versionId":vid,"sessionId":sid,
-            "submissionId":sub_id,"exportId":export["id"],"connectionId":connection["id"],
+            "submissionId":sub_id,"exportId":export["id"],"connectionId":connection["id"] if connection else None,
             "originalFixtureSha256":digest(pdf.read_bytes())}
 
 

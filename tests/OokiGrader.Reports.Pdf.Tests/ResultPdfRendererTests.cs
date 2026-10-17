@@ -10,6 +10,19 @@ namespace OokiGrader.Reports.Pdf.Tests;
 public sealed class ResultPdfRendererTests
 {
     [Fact]
+    public void PassCriteriaChangesReportIdentityAndRendersInSummary()
+    {
+        var report = CreateReport(questionCount: 6, longQuestions: false);
+        var configured = report with { MaximumMistakesToPass = 4 };
+        Assert.NotEqual(ResultReportSourceHasher.Compute(report), ResultReportSourceHasher.Compute(configured));
+        Assert.NotEqual(ResultReportSourceHasher.Compute(configured),
+            ResultReportSourceHasher.Compute(configured with { MaximumMistakesToPass = 3 }));
+        var rendered = new ResultPdfRenderer().Render(configured);
+        WriteDiagnosticPdf("pass-criteria-report.pdf", rendered.PdfBytes);
+        Assert.Equal(1, rendered.PageCount);
+    }
+
+    [Fact]
     public void JapaneseLongReportRendersEmbeddedFontAndMultiplePages()
     {
         var report = CreateReport(questionCount: 45, longQuestions: true);

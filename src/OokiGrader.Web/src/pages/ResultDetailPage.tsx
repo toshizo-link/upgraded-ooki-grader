@@ -325,6 +325,12 @@ export function ResultDetailPage() {
           </strong>
         </div>
         <div className="result-hero__status">
+          <Badge tone={data.passFailStatus === "pass" ? "success" : data.passFailStatus === "fail" ? "danger" : "neutral"}>
+            {data.passFailStatus === "pass" ? "合格" : data.passFailStatus === "fail" ? "不合格" : "合否基準未設定"}
+          </Badge>
+          {data.maximumMistakesToPass != null ? (
+            <small>{data.mistakeCount}ミス：{data.maximumMistakesToPass}ミスまで合格</small>
+          ) : null}
           <StatusBadge status={data.status} />
           <small>確定日時 {formatDateTime(data.finalizedAt)}</small>
         </div>

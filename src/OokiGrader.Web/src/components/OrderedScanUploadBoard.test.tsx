@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { orderedScanApi, orderedScanBatchStorageKey } from "../lib/orderedScans";
 import type { OrderedScanBatchDetail } from "../types";
 import { OrderedScanUploadBoard } from "./OrderedScanUploadBoard";
+import { createScanPdf, readPdfBytes } from "../test/pdfFixtures";
+import { PDFDocument } from "pdf-lib";
+import * as apiModule from "../lib/api";
 
 afterEach(() => {
   cleanup();
@@ -17,7 +20,54 @@ afterEach(() => {
 });
 
 describe("OrderedScanUploadBoard", () => {
-  it("previews four-page Other submissions with explicit boundaries", () => {
+  it("splits a multipage PDF into two submissions and retries only the failed page", async () => {
+    const batch = { ...makeBatch("draft"), expectedPageCount: 2 };
+    vi.spyOn(orderedScanApi, "create").mockResolvedValue(batch);
+    vi.spyOn(orderedScanApi, "get").mockResolvedValue(batch);
+    const upload = vi.spyOn(apiModule, "uploadFile").mockImplementation(async (_file, options) => {
+      if (options.inputOrdinal === 2) throw new Error("connection lost");
+      return { uploadId: "upload", state: "completed" };
+    });
+    render(<OrderedScanUploadBoard sessionId="session-step" expectedPageCount={2} isOpen onBatchChanged={vi.fn()} />);
+    fireEvent.change(document.querySelector('input[type="file"]')!, {
+      target: { files: [await createScanPdf("combined.pdf", 4)] },
+    });
+    expect(await screen.findByText("見込み 2答案・完成 2答案")).toBeVisible();
+    expect(within(screen.getByLabelText("答案 1")).getByText("combined - 2ページ.pdf")).toBeVisible();
+    expect(within(screen.getByLabelText("答案 2")).getByText("combined - 3ページ.pdf")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "この順番でページを送信" }));
+    const retry = await screen.findByRole("button", { name: "失敗した1ページを再送" });
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(upload).toHaveBeenCalledTimes(4);
+    for (const [file] of upload.mock.calls) {
+      expect((await PDFDocument.load(await readPdfBytes(file))).getPageCount()).toBe(1);
+    }
+    const failedCall = upload.mock.calls.find(([, options]) => options.inputOrdinal === 2)!;
+    upload.mockResolvedValue({ uploadId: "upload", state: "completed" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(5));
+    expect(upload.mock.calls[4]?.[0]).toBe(failedCall[0]);
+    expect(upload.mock.calls[4]?.[1]).toMatchObject({
+      inputOrdinal: 2,
+      clientItemId: failedCall[1].clientItemId,
+      createIdempotencyKey: failedCall[1].createIdempotencyKey,
+    });
+  });
+
+  it("keeps an existing plan when a later selection contains an unreadable PDF", async () => {
+    render(<OrderedScanUploadBoard sessionId="session-hop" expectedPageCount={1} isOpen onBatchChanged={vi.fn()} />);
+    const input = document.querySelector('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [await createScanPdf("first.pdf")] } });
+    expect(await screen.findByText("first.pdf")).toBeVisible();
+    fireEvent.change(input, {
+      target: { files: [await createScanPdf("second.pdf"), new File(["broken"], "broken.pdf")] },
+    });
+    expect(await screen.findByText(/broken.pdf を読み取れませんでした/)).toBeVisible();
+    expect(screen.getByText("first.pdf")).toBeVisible();
+    expect(screen.queryByText("second.pdf")).not.toBeInTheDocument();
+  });
+
+  it("previews four-page Other submissions with explicit boundaries", async () => {
     render(
       <OrderedScanUploadBoard
         sessionId="session-other"
@@ -29,19 +79,16 @@ describe("OrderedScanUploadBoard", () => {
 
     const input = document.querySelector('input[type="file"]');
     expect(input).not.toBeNull();
-    const files = [6, 2, 4, 1, 5, 3].map(
-      (number) =>
-        new File([String(number)], `scan-${number}.pdf`, {
-          type: "application/pdf",
-        }),
-    );
+    const files = await Promise.all([6, 2, 4, 1, 5, 3].map(
+      (number) => createScanPdf(`scan-${number}.pdf`),
+    ));
     fireEvent.change(input!, { target: { files } });
 
     expect(screen.getByText("1答案 4ページ")).toBeVisible();
     expect(
       screen.getByText("スキャン順が生徒のまとまりになります"),
     ).toBeVisible();
-    expect(screen.getByText("見込み 2答案・完成 1答案")).toBeVisible();
+    expect(await screen.findByText("見込み 2答案・完成 1答案")).toBeVisible();
     const first = screen.getByLabelText("答案 1");
     const second = screen.getByLabelText("答案 2");
     expect(within(first).getByText("4 / 4ページ")).toBeVisible();
@@ -56,7 +103,7 @@ describe("OrderedScanUploadBoard", () => {
     ).toBeDisabled();
   });
 
-  it("lets the teacher correct order before the batch is frozen", () => {
+  it("lets the teacher correct order before the batch is frozen", async () => {
     render(
       <OrderedScanUploadBoard
         sessionId="session-step"
@@ -65,18 +112,15 @@ describe("OrderedScanUploadBoard", () => {
         onBatchChanged={vi.fn()}
       />,
     );
-    const files = [1, 2, 3, 4].map(
-      (number) =>
-        new File([String(number)], `scan-${number}.pdf`, {
-          type: "application/pdf",
-        }),
-    );
+    const files = await Promise.all([1, 2, 3, 4].map(
+      (number) => createScanPdf(`scan-${number}.pdf`),
+    ));
     fireEvent.change(document.querySelector('input[type="file"]')!, {
       target: { files },
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "scan-3.pdfを1つ前へ移動" }),
+      await screen.findByRole("button", { name: "scan-3.pdfを1つ前へ移動" }),
     );
 
     const first = screen.getByLabelText("答案 1");
@@ -97,17 +141,14 @@ describe("OrderedScanUploadBoard", () => {
         onBatchChanged={vi.fn()}
       />,
     );
-    const files = [1, 2].map(
-      (number) =>
-        new File([String(number)], `scan-${number}.pdf`, {
-          type: "application/pdf",
-        }),
-    );
+    const files = await Promise.all([1, 2].map(
+      (number) => createScanPdf(`scan-${number}.pdf`),
+    ));
     fireEvent.change(document.querySelector('input[type="file"]')!, {
       target: { files },
     });
 
-    const submit = screen.getByRole("button", {
+    const submit = await screen.findByRole("button", {
       name: "この順番でページを送信",
     });
     fireEvent.click(submit);

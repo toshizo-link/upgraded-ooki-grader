@@ -5607,6 +5607,10 @@ namespace OokiGrader.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("OokiGrader.Infrastructure.Persistence.Entities.TestSessionEntity", b =>
                 {
+                    b.Property<int?>("MaximumMistakesToPass")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("maximum_mistakes_to_pass");
+
                     b.Property<string>("Id")
                         .HasMaxLength(26)
                         .HasColumnType("TEXT")

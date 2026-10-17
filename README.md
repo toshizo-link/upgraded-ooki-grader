@@ -25,11 +25,17 @@ UTF-8 manifest CSV.
 The current release also unifies printed `大問` / `中問` / `小問` structure,
 autosaves grading-key edits, and supports multiple complete accepted answers.
 The test-session list has one cross-session drop area that natural-sorts
-one-page scanner PDFs, routes them to open `受付中` boxes, and processes them
+scanner PDFs, automatically splits multipage files, routes the pages to open `受付中` boxes, and processes them
 sequentially. Reviewers can isolate incorrect answers, each result PDF combines
 the retained answer-sheet PDF with a compact transcript, and the report screen
 maintains a live `合否表` that can be saved through the browser print-to-PDF
 dialog.
+
+Each test session can now save an inclusive mistake limit (for example,
+`4ミスまで合格`). Finalized results and newly generated result PDFs use that
+same criterion; partial, blank, and unreadable answers count as one mistake per
+scored question. The live pass/fail table prioritizes the session criterion and
+uses its percentage filter only for sessions without a saved mistake limit.
 
 ## Repository layout
 
@@ -384,7 +390,7 @@ older binary cannot read the newer schema. Do not downgrade the executable over
 a migrated live database, delete batch rows, or reactivate the removed legacy
 creation UI as a shortcut.
 
-### Ordered one-page scan intake
+### Ordered scan intake with automatic PDF splitting
 
 Completed papers use one ordered intake pipeline driven by the published
 template version's expected submission page count. The test-session list
@@ -403,7 +409,18 @@ published page count, from one through the supported maximum of 50 pages. The
 browser records an explicit one-based input ordinal before parallel upload;
 server completion order, timestamps, and filenames never decide ownership.
 
-Every uploaded file must be a one-page PDF. The host classifies it locally
+Both the cross-session intake and the per-session upload board accept multipage
+PDFs. The browser copies each page into a separate PDF before planning or
+uploading, preserving page content, dimensions, rotation, and source-page order.
+Single-page files are retained unchanged. Split filenames include the original
+filename and page number; natural sorting keeps all pages of each source together.
+Each selection is prepared completely before changing the plan, so an unreadable
+or encrypted file cannot silently remove pages from the middle of a submission.
+The input limit is 250 MB per file and 1,000 pages per intake. Teachers still scan
+each student's full paper consecutively and can review the page groups before
+sending. Preparation uses no AI or remote conversion service.
+
+The host receives one-page PDFs and classifies each locally
 against every template page, requires an unambiguous page role, and blocks the
 batch on missing, repeated, foreign, ambiguous, or out-of-order pages. Valid
 groups are materialized as one logical multipage submission with immutable

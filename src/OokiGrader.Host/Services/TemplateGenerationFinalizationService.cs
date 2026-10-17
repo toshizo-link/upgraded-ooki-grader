@@ -703,11 +703,38 @@ public sealed class TemplateGenerationFinalizationService
 
         RequireFinalCheck(batch);
         var orderedUnits = batch.Units.OrderBy(item => item.Sequence).ToArray();
-        var prepared = await ValidateForConfirmationAsync(
+        List<PreparedUnit> prepared;
+        try
+        {
+            prepared = await ValidateForConfirmationAsync(
                 batch,
                 orderedUnits,
                 cancellationToken)
-            .ConfigureAwait(false);
+                .ConfigureAwait(false);
+        }
+        catch (InvalidCanonicalDraftException exception)
+        {
+            // No template graph has been created yet. Persist a recoverable
+            // failure instead of leaving a permanently unconfirmable batch.
+            exception.Unit.Status = TemplateGenerationUnitStatus.Failed;
+            AddWarning(exception.Unit, new GenerationWarning(
+                "TEMPLATE_DRAFT_INVALID", GenerationWarningSeverity.Blocking,
+                "生成結果を保存できませんでした。この項目を再試行してください。"));
+            batch.Status = TemplateGenerationBatchStatus.Failed;
+            batch.LastErrorCode = "TEMPLATE_DRAFT_INVALID";
+            batch.FailedUnitCount = orderedUnits.Count(item => item.Status == TemplateGenerationUnitStatus.Failed);
+            batch.CompletedUnitCount = orderedUnits.Count(item => item.Status == TemplateGenerationUnitStatus.Extracted);
+            AddAudit(command.StaffUserId, "TemplateGenerationDraftRejected", "template_generation_unit",
+                exception.Unit.Id, command.CorrelationId, new { batchId = batch.Id });
+            await SaveAsync(batch.Revision, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            throw new TemplateGenerationBatchServiceException(
+                StatusCodes.Status409Conflict,
+                "TEMPLATE_DRAFT_INVALID",
+                "AIが生成した下書きの形式を確認できませんでした",
+                "入力内容ではなく生成結果の問題です。失敗した項目だけ再試行してください。",
+                batch.Revision);
+        }
         var finalCheckReadyAt = await GetFinalCheckReadyAtAsync(
                 orderedUnits.Select(item => item.Id).ToArray(),
                 batch.UpdatedAt,
@@ -918,14 +945,12 @@ public sealed class TemplateGenerationFinalizationService
             }
             catch (JsonException)
             {
-                throw new TemplateGenerationBatchServiceException(
-                    StatusCodes.Status409Conflict,
-                    "TEMPLATE_DRAFT_INVALID",
-                    "AIが生成した下書きの形式を確認できませんでした",
-                    "入力内容ではなく生成結果の問題です。失敗した項目だけ再試行してください。",
-                    batch.Revision);
+                throw new InvalidCanonicalDraftException(unit);
             }
 
+            // AI response order is not page order. Normalize benign answer
+            // variants from older drafts using the same comparison as grading.
+            draft = TemplateGenerationDraftFactory.Normalize(draft);
             ValidateCanonicalDraft(unit, draft);
 
             prepared.Add(new PreparedUnit(
@@ -1341,11 +1366,13 @@ public sealed class TemplateGenerationFinalizationService
     {
         if (!IsValidCanonicalDraft(unit, draft))
         {
-            throw Invalid(
-                "TEMPLATE_DRAFT_INVALID",
-                "AIが生成した下書きの形式を確認できませんでした",
-                "入力内容ではなく生成結果の問題です。失敗した項目だけ再試行してください。");
+            throw new InvalidCanonicalDraftException(unit);
         }
+    }
+
+    private sealed class InvalidCanonicalDraftException(TemplateGenerationUnitEntity unit) : Exception
+    {
+        public TemplateGenerationUnitEntity Unit { get; } = unit;
     }
 
     private static bool IsValidCanonicalDraft(

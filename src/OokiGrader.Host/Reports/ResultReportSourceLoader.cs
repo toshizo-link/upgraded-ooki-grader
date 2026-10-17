@@ -172,7 +172,8 @@ internal static class ResultReportSourceLoader
                 ?? submission.TestSession.TemplateGradeLabelSnapshot,
             submission.AssignedStudent.SchoolClass
                 ?? submission.TestSession.ClassLabel,
-            originalPdf?.Locator.Sha256);
+            originalPdf?.Locator.Sha256,
+            submission.TestSession.MaximumMistakesToPass);
         return new ResultReportSource(
             document,
             submission.Id,

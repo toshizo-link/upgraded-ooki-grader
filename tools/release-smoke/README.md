@@ -54,3 +54,21 @@ scores per PDF and records the dispatched model. School Manager remains disabled
 This smoke verifies the published application's data migration and production
 worker. It does not exercise the elevated updater, Windows service handoff, or
 School Manager's live sending flow. Those checks require their own evidence.
+
+## Upgrade without provider calls
+
+`offline_upgrade_smoke.py` uses synthetic records and manual grading to check an
+old and new published package without an AI credential. It compares existing
+record values, original/result PDF hashes and encrypted School Manager settings,
+then configures the mistake limit, regenerates a verified result PDF, restarts
+the new host and checks SQLite integrity. School Manager sending remains disabled.
+
+```powershell
+python offline_upgrade_smoke.py `
+  --old-package '<published 0.9.17 folder>' `
+  --new-package '<published 0.9.18 folder>' `
+  --work '<private parent folder>\isolated-upgrade-0.9.18'
+```
+
+Use a fresh work directory. This test covers published host startup and data
+migration; it does not cover the elevated updater or any live AI/send operation.

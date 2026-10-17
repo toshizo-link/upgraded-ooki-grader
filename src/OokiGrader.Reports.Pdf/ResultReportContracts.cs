@@ -17,7 +17,8 @@ public sealed record ResultReportDocument(
     bool IncludeTeacherComments = true,
     string? StudentGradeLabel = null,
     string? StudentClassLabel = null,
-    string? OriginalScanSha256 = null);
+    string? OriginalScanSha256 = null,
+    int? MaximumMistakesToPass = null);
 
 public sealed record ResultReportQuestion(
     string DisplayLabel,

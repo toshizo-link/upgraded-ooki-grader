@@ -2858,6 +2858,45 @@ export type paths = {
         };
         readonly trace?: never;
     };
+    readonly "/api/v1/test-sessions/{sessionId}/pass-criteria": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put: {
+            readonly parameters: {
+                readonly query?: never;
+                readonly header?: never;
+                readonly path: {
+                    readonly sessionId: string;
+                };
+                readonly cookie?: never;
+            };
+            readonly requestBody: {
+                readonly content: {
+                    readonly "application/json": components["schemas"]["PassCriteriaBody"];
+                };
+            };
+            readonly responses: {
+                /** @description OK */
+                readonly 200: {
+                    headers: {
+                        readonly [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/test-sessions/{sessionId}/summary": {
         readonly parameters: {
             readonly query?: never;
@@ -5766,6 +5805,12 @@ export type components = {
             readonly heightMillionths?: number | string;
             /** Format: int32 */
             readonly rotationDegrees?: null | number | string;
+        };
+        readonly PassCriteriaBody: {
+            /** Format: int32 */
+            readonly maximumMistakesToPass: null | number | string;
+            /** Format: int64 */
+            readonly revision: number | string;
         };
         readonly PatchStaffRequest: {
             /** Format: int64 */

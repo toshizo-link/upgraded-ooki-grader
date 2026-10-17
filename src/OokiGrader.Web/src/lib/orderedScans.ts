@@ -20,17 +20,34 @@ export interface OrderedScanGroup<T> {
   complete: boolean;
 }
 
-export function naturalSortScanItems<T extends { file: Pick<File, "name"> }>(
+export function naturalSortScanItems<T extends {
+  file: Pick<File, "name">;
+  sourceFileName?: string;
+  sourceFileId?: string;
+  sourcePageNumber?: number;
+}>(
   items: readonly T[],
 ): T[] {
+  const sourceOrder = new Map<string, number>();
+  items.forEach((item, index) => {
+    if (item.sourceFileId && !sourceOrder.has(item.sourceFileId)) {
+      sourceOrder.set(item.sourceFileId, index);
+    }
+  });
   return items
     .map((item, originalIndex) => ({ item, originalIndex }))
     .sort(
       (left, right) =>
         scannerFileNameCollator.compare(
-          left.item.file.name,
-          right.item.file.name,
-        ) || left.originalIndex - right.originalIndex,
+          left.item.sourceFileName ?? left.item.file.name,
+          right.item.sourceFileName ?? right.item.file.name,
+        )
+        // Keep separate PDFs with the same filename together as well.
+        || (left.item.sourceFileId !== right.item.sourceFileId
+          ? (sourceOrder.get(left.item.sourceFileId!) ?? left.originalIndex)
+            - (sourceOrder.get(right.item.sourceFileId!) ?? right.originalIndex)
+          : (left.item.sourcePageNumber ?? 0) - (right.item.sourcePageNumber ?? 0))
+        || left.originalIndex - right.originalIndex,
     )
     .map(({ item }) => item);
 }
