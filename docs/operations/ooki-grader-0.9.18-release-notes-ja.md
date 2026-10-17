@@ -16,7 +16,7 @@
 
 ZIPを展開し、Ooki Graderを設置したPCで `01-Update-OokiGrader-Host.cmd` を管理者として実行します。更新中は採点・取り込みを止めてください。
 
-[詳しい更新手順](https://github.com/toshizo-link/upgraded-ooki-grader/blob/v0.9.18/docs/operations/ooki-grader-0.9.18-update-ja.md)
+[詳しい更新手順](https://github.com/toshizo-link/upgraded-ooki-grader/blob/main/docs/operations/ooki-grader-0.9.18-update-ja.md)
 
 2ページの答案は、生徒Aの1→2ページ、生徒Bの1→2ページの順でスキャンします。合否基準を変更した場合、既に作成済みの結果PDFは再作成してください。
 
@@ -24,4 +24,8 @@ ZIPを展開し、Ooki Graderを設置したPCで `01-Update-OokiGrader-Host.cmd
 
 自動テストは本体1,170件・画面196件が成功しました。0.9.17から0.9.18への隔離環境での更新、既存データの保持、合否基準を含むPDFの作成、再起動も確認しています。
 
-実AIによる受領教材の生成から保存まで、School Manager実サービスへの送信、学校PC上の更新操作は今回の検証には含みません。[検証記録](https://github.com/toshizo-link/upgraded-ooki-grader/blob/v0.9.18/docs/operations/ooki-grader-0.9.18-validation-ja.md)
+**10月18日追記：** 公開済み0.9.18の実行ファイルと実AIを使い、受領した2ページPDFから41問のひな形を生成し、最終確認画面からの保存・再表示まで確認しました。正解候補の照合による要確認警告は残るため、採点開始前に生成した正解・配点を確認してください。
+
+School Manager実サービスへの送信、学校PC上の更新操作は今回の検証には含みません。[検証記録](https://github.com/toshizo-link/upgraded-ooki-grader/blob/main/docs/operations/ooki-grader-0.9.18-validation-ja.md)
+
+10月18日の追記は文書のみの更新です。更新用ZIP・実行ファイルは変更していません。ZIP同梱文書の未確認範囲については、この追記と上の検証記録を参照してください。
