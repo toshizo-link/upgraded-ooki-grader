@@ -45,6 +45,7 @@ public sealed class AutomaticResultDeliveryPlanner(
                 && delivery.State != "sent"
                 && delivery.State != "canceled"
                 && delivery.State != "sending"
+                && delivery.LastErrorCode != "message_send_outcome_unknown"
                 && delivery.Submission != null
                 && (delivery.Submission.State != "finalized"
                     || delivery.Submission.FinalizedAt == null))

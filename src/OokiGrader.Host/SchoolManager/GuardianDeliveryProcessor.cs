@@ -19,6 +19,34 @@ public sealed class GuardianDeliveryProcessor(
     TimeProvider timeProvider)
 {
     private const int MaximumAttachmentBytes = 25 * 1024 * 1024;
+    private const string UnknownSendDetail =
+        "送信結果を確認できません。自動再送は行いません。School Managerの送信済みメッセージを確認してください。";
+
+    internal Task<bool> RecoverInterruptedSendsAsync(CancellationToken cancellationToken) =>
+        writeCoordinator.ExecuteAsync(async token =>
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(token)
+                .ConfigureAwait(false);
+            var interrupted = await db.GuardianDeliveries.Where(item => item.State == "sending")
+                .ToArrayAsync(token).ConfigureAwait(false);
+            if (interrupted.Length == 0)
+            {
+                return false;
+            }
+
+            var now = timeProvider.GetUtcNow();
+            foreach (var item in interrupted)
+            {
+                item.State = "failed";
+                item.LastErrorCode = "message_send_outcome_unknown";
+                item.SafeErrorDetail = UnknownSendDetail;
+                item.UpdatedAt = now;
+                db.AuditEvents.Add(DeliveryAudit(item, now, "guardian_delivery.failed", item.LastErrorCode));
+            }
+
+            await db.SaveChangesAsync(token).ConfigureAwait(false);
+            return true;
+        }, cancellationToken);
 
     public async Task<bool> ProcessNextAsync(
         CancellationToken cancellationToken = default)
@@ -94,6 +122,7 @@ public sealed class GuardianDeliveryProcessor(
             return true;
         }
 
+        var clientInvoked = false;
         try
         {
             await MarkAttemptStartedAsync(
@@ -107,6 +136,7 @@ public sealed class GuardianDeliveryProcessor(
                     cancellationToken)
                 .ConfigureAwait(false);
             var password = Encoding.UTF8.GetString(secret.Utf8Bytes.Span);
+            clientInvoked = true;
             var result = await schoolManagerClient.DeliverAsync(
                     new SchoolManagerDeliveryRequest(
                         new Uri(settings.BaseUrl, UriKind.Absolute),
@@ -143,15 +173,14 @@ public sealed class GuardianDeliveryProcessor(
                         ? "message_send_outcome_unknown"
                         : exception.Code,
                     exception.OutcomeUnknown
-                        ? "The send outcome is unknown; automatic retry is blocked."
+                        ? UnknownSendDetail
                         : "School Manager delivery stopped before a confirmed send.",
                     cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception exception) when (
-            exception is KeyNotFoundException
-                or ArgumentException
-                or InvalidDataException)
+        catch (Exception exception) when (!clientInvoked && exception is
+            (KeyNotFoundException or ArgumentException or InvalidDataException
+                or IOException or UnauthorizedAccessException or CryptographicException))
         {
             await FailAsync(
                     delivery.Id,
@@ -427,27 +456,24 @@ public sealed class GuardianDeliveryProcessor(
 
             if (auditEvent is not null)
             {
-                db.AuditEvents.Add(new AuditEventEntity
-                {
-                    Id = UlidId.New(now),
-                    OccurredAt = now,
-                    EventType = auditEvent,
-                    ObjectType = "guardian_delivery",
-                    ObjectId = delivery.Id,
-                    Outcome = auditEvent.EndsWith("failed", StringComparison.Ordinal)
-                        ? "failed"
-                        : "succeeded",
-                    ReasonCode = reasonCode,
-                    SafeMetadataJson = JsonSerializer.Serialize(new
-                    {
-                        delivery.Kind,
-                        delivery.AttemptCount,
-                    }),
-                });
+                db.AuditEvents.Add(DeliveryAudit(delivery, now, auditEvent, reasonCode));
             }
 
             await db.SaveChangesAsync(token).ConfigureAwait(false);
         }, cancellationToken);
+
+    private static AuditEventEntity DeliveryAudit(
+        GuardianDeliveryEntity delivery, DateTimeOffset now, string eventType, string? reasonCode) => new()
+        {
+            Id = UlidId.New(now),
+            OccurredAt = now,
+            EventType = eventType,
+            ObjectType = "guardian_delivery",
+            ObjectId = delivery.Id,
+            Outcome = eventType.EndsWith("failed", StringComparison.Ordinal) ? "failed" : "succeeded",
+            ReasonCode = reasonCode,
+            SafeMetadataJson = JsonSerializer.Serialize(new { delivery.Kind, delivery.AttemptCount }),
+        };
 
     private static string BuildTitle(string kind) => kind == "result_pdf"
         ? "採点結果のお知らせ"

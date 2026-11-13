@@ -6,16 +6,28 @@ public sealed partial class SchoolManagerAutomationWorker(
     GuardianDeliveryProcessor deliveryProcessor,
     ILogger<SchoolManagerAutomationWorker> logger) : BackgroundService
 {
+    // This host has a single, serial delivery worker. Only reconcile when there
+    // is no active attempt: on startup, or after the previous cycle unwound.
+    private bool reconcileInterruptedSends = true;
+
     public async Task<bool> ProcessCycleAsync(
         CancellationToken cancellationToken = default)
     {
         var changed = false;
+        if (reconcileInterruptedSends)
+        {
+            changed = await deliveryProcessor.RecoverInterruptedSendsAsync(cancellationToken)
+                .ConfigureAwait(false);
+            reconcileInterruptedSends = false;
+        }
+
         changed |= await resultPlanner.ProcessNextAsync(cancellationToken)
             .ConfigureAwait(false);
         changed |= await passFailImporter.ProcessNextAsync(cancellationToken)
             .ConfigureAwait(false);
-        changed |= await deliveryProcessor.ProcessNextAsync(cancellationToken)
-            .ConfigureAwait(false);
+        reconcileInterruptedSends = true;
+        changed |= await deliveryProcessor.ProcessNextAsync(cancellationToken).ConfigureAwait(false);
+        reconcileInterruptedSends = false;
         return changed;
     }
 

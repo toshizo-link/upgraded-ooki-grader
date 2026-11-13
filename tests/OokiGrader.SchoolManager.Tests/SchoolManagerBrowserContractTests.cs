@@ -8,6 +8,57 @@ namespace OokiGrader.SchoolManager.Tests;
 public sealed class SchoolManagerBrowserContractTests
 {
     [EdgeFact]
+    public Task LoadingTimeoutBeforeSendIsAKnownFailure() => CheckTimeoutAsync(afterSend: false);
+
+    [EdgeFact]
+    public Task LostResponseAfterSendIsUnknownAndDoesNotClickAgain() => CheckTimeoutAsync(afterSend: true);
+
+    private static async Task CheckTimeoutAsync(bool afterSend)
+    {
+        var submitted = 0;
+        var compose = """
+            <ion-fab-button onclick="history.pushState({}, '', '/message-thread-target-users')">+</ion-fab-button>
+            <input type="search">
+            <div class="table-row"><div class="table-data-1"><div>試験 太郎</div></div>
+              <div class="table-data-2">9999</div>
+              <ion-button onclick="history.pushState({}, '', '/message-thread-members-and-title')">選択</ion-button></div>
+            <input type="file" onchange="fetch('/org/message-threads/messages/attached-files', {method:'POST'})">
+            <ion-textarea placeholder="メッセージを入力"><textarea></textarea></ion-textarea>
+            <ion-button class="send-message-button" onclick="fetch('/org/message-threads',{method:'POST'}).catch(()=>{})">送信</ion-button>
+            """ + GuardianForm(false) + """
+            <script>document.querySelector('button').onclick=()=>history.pushState({}, '', '/message-thread-details/0/create')</script>
+            """;
+        var error = await Assert.ThrowsAsync<SchoolManagerClientException>(() =>
+            PlaywrightSchoolManagerClient.DeliverInBrowserAsync(new(
+                new Uri("https://fsm.flens.jp/"), new("unused", "unused"), "9999", "試験 太郎",
+                "試験", "試験", "test.pdf", "%PDF-1.7"u8.ToArray(), false), async browser =>
+            {
+                var context = await browser.NewContextAsync(new() { ServiceWorkers = ServiceWorkerPolicy.Block });
+                await context.RouteAsync("**/*", async route =>
+                {
+                    if (route.Request.Method == "POST" && new Uri(route.Request.Url).AbsolutePath == "/org/message-threads")
+                    {
+                        Interlocked.Increment(ref submitted);
+                        await route.AbortAsync();
+                        return;
+                    }
+
+                    await route.FulfillAsync(new()
+                    {
+                        ContentType = "text/html; charset=utf-8",
+                        Body = afterSend ? compose : "<p>Loading…</p>",
+                    });
+                });
+                return context;
+            }, default));
+
+        Assert.IsType<TimeoutException>(error.InnerException);
+        Assert.Equal(afterSend, error.OutcomeUnknown);
+        Assert.Equal(afterSend ? "message_send_outcome_unknown" : "school_manager_browser_failed", error.Code);
+        Assert.Equal(afterSend ? 1 : 0, submitted);
+    }
+
+    [EdgeFact]
     public async Task StartsFromAddActionBeforeSelectingAnExactStudent()
     {
         using var playwright = await Playwright.CreateAsync();

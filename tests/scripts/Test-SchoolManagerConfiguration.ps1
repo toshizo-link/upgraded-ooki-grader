@@ -1,7 +1,7 @@
 # Runs the real configuration script with in-process HTTP doubles. No network traffic.
+param([string]$ConfigurationScript = (Join-Path $PSScriptRoot '..\..\installer\Set-OokiGraderSchoolManager.ps1'))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$configurationScript = Join-Path $PSScriptRoot '..\..\installer\Set-OokiGraderSchoolManager.ps1'
 $configurationRequests = [Collections.Generic.List[object]]::new()
 $tokenResponse = [pscustomobject]@{ token='synthetic-csrf-token' }
 function Invoke-WebRequest {

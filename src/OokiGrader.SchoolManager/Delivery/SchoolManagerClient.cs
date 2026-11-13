@@ -39,9 +39,20 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
 {
     private const int MaximumAttachmentBytes = 25 * 1024 * 1024;
 
-    public async Task<SchoolManagerDeliveryResult> DeliverAsync(
+    public Task<SchoolManagerDeliveryResult> DeliverAsync(
         SchoolManagerDeliveryRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        DeliverInBrowserAsync(request, browser => browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            AcceptDownloads = false,
+            IgnoreHTTPSErrors = false,
+            Locale = "ja-JP",
+        }), cancellationToken);
+
+    internal static async Task<SchoolManagerDeliveryResult> DeliverInBrowserAsync(
+        SchoolManagerDeliveryRequest request,
+        Func<IBrowser, Task<IBrowserContext>> openContext,
+        CancellationToken cancellationToken)
     {
         ValidateRequest(request);
         cancellationToken.ThrowIfCancellationRequested();
@@ -56,12 +67,7 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
                     Headless = true,
                     Timeout = 30_000,
                 }).ConfigureAwait(false);
-            var context = await browser.NewContextAsync(new BrowserNewContextOptions
-            {
-                AcceptDownloads = false,
-                IgnoreHTTPSErrors = false,
-                Locale = "ja-JP",
-            }).ConfigureAwait(false);
+            var context = await openContext(browser).ConfigureAwait(false);
             var page = await context.NewPageAsync().ConfigureAwait(false);
             await LoginAsync(page, request, cancellationToken).ConfigureAwait(false);
             await SelectExactStudentAsync(page, request, cancellationToken)
@@ -115,6 +121,7 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
             await textareas.FillAsync(request.Body).ConfigureAwait(false);
             // The normal send control is icon-only; the labelled alternative also resolves the thread.
             var send = await GetSendControlAsync(page).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             finalRequestStarted = true;
             var sendResponse = await page.RunAndWaitForResponseAsync(
                     () => send.ClickAsync(new LocatorClickOptions { Timeout = 15_000 }),
@@ -132,6 +139,7 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
             }
 
             var responseJson = await sendResponse.JsonAsync<JsonElement>()
+                .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
                 .ConfigureAwait(false);
             var threadId = responseJson.ValueKind == JsonValueKind.Object
                 && responseJson.TryGetProperty("id", out var id)
@@ -167,7 +175,7 @@ public sealed class PlaywrightSchoolManagerClient : ISchoolManagerClient
                 outcomeUnknown: true,
                 exception);
         }
-        catch (PlaywrightException exception)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             throw new SchoolManagerClientException(
                 finalRequestStarted

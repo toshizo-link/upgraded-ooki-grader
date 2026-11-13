@@ -6,8 +6,8 @@
 
 初回だけ設定します。Ooki GraderとSchool Managerのログイン情報を用意し、両方の名簿の生徒番号・氏名が一致していることを確認してください。School Managerでは対象生徒と保護者を関連付けます。
 
-1. 更新用ZIPを展開します。その中の `OokiGrader-0.9.15-win-x64.zip` も展開します。
-2. `Set-OokiGraderSchoolManager.ps1` があるフォルダーでPowerShellを開きます。
+1. ホストを0.9.18以降に更新します。更新に使用したZIPと、その中の `OokiGrader-<同じバージョン>-win-x64.zip` を展開します。
+2. 今回展開した `Set-OokiGraderSchoolManager.ps1` があるフォルダーでPowerShellを開きます。古いダウンロードフォルダーに残った同名ファイルは使いません。
 3. 次の利用URLとログインIDを実際の値に置き換えて実行します。Ooki Graderの利用URLは `https://` から入力します。先生が普段使う管理者アカウントを使用します。
 
 ```powershell
@@ -20,7 +20,9 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
 ```
 
 4. 設定確認が表示されたら、対象URLと確認用の設定であることを確認して `Y` を入力します。その後、Ooki GraderとSchool Managerのパスワードを順に入力します。入力した文字は画面に表示されません。
-5. 出力が `configured: true`、`enabled: true`、`dryRun: true` であることを確認します。この段階では送信されません。
+5. PowerShellの出力が `state: configured`、`enabled: True`、`dryRun: True`、`credentialsProtectedByService: True` であれば、設定の保存は完了です。この段階では送信されません。
+
+パスワード入力後に「プロパティ 'csrfToken' が見つかりません」と表示された場合は、手順2で開いたフォルダーを確認してください。0.9.17のスクリプトでは、Ooki Graderへのログイン後、School Managerの設定を保存する前にこのエラーで停止します。パスワードの変更は不要です。0.9.18以降のスクリプトで手順3を実行してください。
 
 ## 2. 宛先を確認して自動配信を開始する
 
@@ -53,4 +55,4 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
 
 未送信の候補は取り消されます。送信処理が始まっている候補は、School Managerの送信済みメッセージを確認してください。
 
-配信状況に `message_send_outcome_unknown` が表示された場合も、School Managerの送信済みメッセージを確認してから再送を判断します。
+配信状況が `failed` でエラーが `message_send_outcome_unknown` の場合、実際には届いている可能性があります。自動再送はされません。新たな確定や再送を行う前に、School Managerの送信済みメッセージで宛先・時刻・添付を照合してください。

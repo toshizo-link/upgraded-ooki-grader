@@ -15,10 +15,10 @@ Ooki Graderを設置したWindows PCで、次の手順を行ってください�
    UPDATE WITHOUT BACKUPと入力します。
 6. Ooki Grader host update completed successfully.と表示されたら、
    いつものURLで開き直します。古い画面が残る場合はCtrl+F5を押します。
-7. 名簿と過去の結果を確認し、「管理」→「AI設定」のモデルが
-   gemini-3.8-flashになっていることを確認します。
-8. 「再確認」を1回押します。接続が正常になったら、生成画面の
-   「失敗した項目を再試行」を使います。
+7. 名簿と過去の採点結果が開けることを確認します。
+8. School Managerで以前のテスト分が送信済みか確認してください。
+   「送信結果不明」は自動再送されません。以前の答案は再確定・再送せず、
+   新しい試験用の宛先で確認してください。
 
 【診断ログ】
   C:\OokiGrader-Setup\logs\host-update-<版>-<実行ID>.log

@@ -216,7 +216,27 @@ public sealed class SchoolManagerAutomationTests
     }
 
     [Fact]
-    public async Task InterruptedPassFailSendReservesDailyLimit()
+    public async Task AbortedClientCallIsReconciledOnTheNextCycleWithoutRestartOrRetry()
+    {
+        await using var fixture = await AutomationFixture.CreateAsync();
+        await fixture.SeedStudentAsync("student-a", "10000001", "小6", "A");
+        await fixture.SeedReadyPassFailDeliveryAsync("student-a");
+        await fixture.ConfigureAsync(dryRun: false);
+        fixture.Client.InterruptAttempt = true;
+
+        await Assert.ThrowsAsync<IOException>(() => fixture.Worker.ProcessCycleAsync());
+        Assert.True(await fixture.Worker.ProcessCycleAsync());
+        Assert.False(await fixture.Worker.ProcessCycleAsync());
+        Assert.Single(fixture.Client.Requests);
+        await using var db = await fixture.CreateDbContextAsync();
+        var delivery = await db.GuardianDeliveries.AsNoTracking().SingleAsync();
+        Assert.Equal("failed", delivery.State);
+        Assert.Equal("message_send_outcome_unknown", delivery.LastErrorCode);
+        Assert.Null(delivery.SentAt);
+    }
+
+    [Fact]
+    public async Task RestartRecoversInterruptedSendOnceWithoutResendingAndKeepsDailyLimit()
     {
         await using var fixture = await AutomationFixture.CreateAsync();
         await fixture.SeedStudentAsync("student-a", "10000001", "小6", "A");
@@ -226,6 +246,7 @@ public sealed class SchoolManagerAutomationTests
         {
             var interrupted = await db.GuardianDeliveries.SingleAsync();
             interrupted.State = "sending";
+            interrupted.AttemptCount = 1;
             interrupted.LastAttemptAt = fixture.Now;
             interrupted.SentLocalDate = GuardianDeliverySchedule.TokyoDate(fixture.Now);
             await db.SaveChangesAsync();
@@ -241,13 +262,22 @@ public sealed class SchoolManagerAutomationTests
             ]);
         File.SetLastWriteTimeUtc(workbookPath, fixture.Now.AddSeconds(-10).UtcDateTime);
 
-        Assert.True(await fixture.Importer.ProcessNextAsync());
+        Assert.True(await fixture.Worker.ProcessCycleAsync());
+        Assert.False(await fixture.Worker.ProcessCycleAsync());
+        Assert.Empty(fixture.Client.Requests);
 
         await using var verificationDb = await fixture.CreateDbContextAsync();
         var deliveries = await verificationDb.GuardianDeliveries
             .AsNoTracking()
             .ToArrayAsync();
-        Assert.Single(deliveries, item => item.State == "sending");
+        var recovered = Assert.Single(deliveries, item => item.State == "failed");
+        Assert.Equal("message_send_outcome_unknown", recovered.LastErrorCode);
+        Assert.Null(recovered.SentAt);
+        Assert.Null(recovered.SchoolManagerThreadId);
+        Assert.Equal(1, recovered.AttemptCount);
+        Assert.Equal(GuardianDeliverySchedule.TokyoDate(fixture.Now), recovered.SentLocalDate);
+        Assert.Single(await verificationDb.AuditEvents.Where(item => item.ObjectId == recovered.Id
+            && item.ReasonCode == "message_send_outcome_unknown").ToArrayAsync());
         var next = Assert.Single(deliveries, item => item.State == "ready");
         Assert.Equal(
             GuardianDeliverySchedule.NextPassFailNotBefore(fixture.Now, fixture.Now),
@@ -359,6 +389,7 @@ public sealed class SchoolManagerAutomationTests
         public string InputRoot { get; }
         public PassFailImportProcessor Importer { get; }
         public GuardianDeliveryProcessor DeliveryProcessor { get; }
+        public SchoolManagerAutomationWorker Worker => _services.GetRequiredService<SchoolManagerAutomationWorker>();
         public AutomaticResultDeliveryPlanner ResultPlanner { get; }
         public FakeSchoolManagerClient Client { get; }
 
@@ -395,6 +426,7 @@ public sealed class SchoolManagerAutomationTests
                 provider.GetRequiredService<FakeSchoolManagerClient>());
             services.AddSingleton<PassFailImportProcessor>();
             services.AddSingleton<GuardianDeliveryProcessor>();
+            services.AddSingleton<SchoolManagerAutomationWorker>();
             services.AddSingleton<AutomaticResultDeliveryPlanner>();
             var provider = services.BuildServiceProvider();
             await using var db = await provider
@@ -753,6 +785,7 @@ public sealed class SchoolManagerAutomationTests
     {
         public List<SchoolManagerDeliveryRequest> Requests { get; } = [];
         public bool FailWithUnknownOutcome { get; set; }
+        public bool InterruptAttempt { get; set; }
 
         public Task<SchoolManagerDeliveryResult> DeliverAsync(
             SchoolManagerDeliveryRequest request,
@@ -760,6 +793,11 @@ public sealed class SchoolManagerAutomationTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
+            if (InterruptAttempt)
+            {
+                throw new IOException("Connection interrupted.");
+            }
+
             if (FailWithUnknownOutcome)
             {
                 throw new SchoolManagerClientException(

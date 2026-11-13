@@ -59,7 +59,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
   -Enable
 ```
 
-この時点では `-LiveSending` を付けません。出力と設定APIで `configured: true`、`enabled: true`、`dryRun: true` を確認し、`activationStartedAt` を記録します。保存しただけではSchool Managerへの接続確認は完了していません。
+この時点では `-LiveSending` を付けません。スクリプト出力では `state: configured` と `credentialsProtectedByService: True`、設定APIでは `configured: true` を確認します。どちらも `enabled` と `dryRun` は true です。APIの `activationStartedAt` を記録します。保存しただけではSchool Managerへの接続確認は完了していません。
 
 パスワードはサービスの保管庫に暗号化されます。ブラウザーにログインできていても、自動化は別のブラウザーを起動するため、自動化用の認証情報の設定が必要です。
 

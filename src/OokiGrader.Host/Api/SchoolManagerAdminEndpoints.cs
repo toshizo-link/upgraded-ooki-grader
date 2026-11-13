@@ -125,7 +125,7 @@ public static class SchoolManagerAdminEndpoints
             var unsent = await db.GuardianDeliveries
                 .Where(item => item.State == "pending"
                     || item.State == "ready"
-                    || item.State == "failed")
+                    || (item.State == "failed" && item.LastErrorCode != "message_send_outcome_unknown"))
                 .ToArrayAsync(cancellationToken);
             foreach (var delivery in unsent)
             {
